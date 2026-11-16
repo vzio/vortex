@@ -11,6 +11,8 @@ rust-version.workspace = true
 categories.workspace = true
 repository.workspace = true
 homepage.workspace = true
+# tests/fake_lsp/main.rs is a binary, not a test: the test targets are listed below.
+autotests = false
 
 [package.metadata.deb]
 # generate a .deb in target/debian/ with the command: cargo deb --no-build
@@ -40,6 +42,18 @@ bench = []
 [[bin]]
 name = "vx"
 path = "src/main.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "name_guard"
+path = "tests/name_guard.rs"
+
+[[test]]
+name = "status_line_guard"
+path = "tests/status_line_guard.rs"
 
 # A scripted fake language server for the integration tests (tests/fake_lsp/main.rs).
 [[bin]]

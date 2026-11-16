@@ -2,8 +2,6 @@
 //! `vortex-fake-lsp` (`tests/fake_lsp/main.rs`, whose module doc has the script format), the
 //! [`Log`] of the messages it received, and [`languages_toml`] to make the editor use it.
 
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};

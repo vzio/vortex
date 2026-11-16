@@ -287,18 +287,17 @@ impl Browser {
         }
         chain.reverse();
         let mut path = String::new();
-        let mut after_file = false;
         for (index, node) in chain.iter().enumerate() {
             if index > 0 {
                 let previous = chain[index - 1];
-                path.push_str(match previous.kind {
-                    Kind::Directory if node.provider == Provider::Files => "/",
-                    Kind::Directory => "",
-                    Kind::File if !after_file => ": ",
+                path.push_str(match (previous.kind, previous.provider) {
+                    (Kind::Directory, Provider::Files) => "/",
+                    // A directory of packages ends with its `/`.
+                    (Kind::Directory, _) => "",
+                    (Kind::File, Provider::Files) => ": ",
                     _ => &self.ctx.separator,
                 });
             }
-            after_file |= node.kind == Kind::File;
             path.push_str(&node.name);
         }
         path

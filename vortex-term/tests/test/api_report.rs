@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use vortex_term::api::{Browser, NodeId, State};
 
 use super::debug::harness::Harness;
-use super::helpers::AppBuilder;
+use super::helpers::{test_config, AppBuilder};
 
 async fn settle(harness: &mut Harness, browser: &mut Browser, limit: Duration) {
     let start = Instant::now();
@@ -140,7 +140,24 @@ async fn api_report() -> anyhow::Result<()> {
         .and_then(|docs| docs.parse().ok())
         .unwrap_or(2);
 
-    let mut harness = Harness::new(AppBuilder::new().with_file(&file, None))?;
+    // The editor's workspace (and the server's root) comes from the working directory.
+    let root = vortex_loader::find_workspace_in(std::path::Path::new(&file)).0;
+    std::env::set_current_dir(&root)?;
+    let mut config = test_config();
+    config.editor.lsp.enable = true;
+    // `API_REPORT_POS=line:column` (from 1) places the cursor, for the scope view.
+    let position = std::env::var("API_REPORT_POS").ok().and_then(|pos| {
+        let (line, column) = pos.split_once(':')?;
+        Some(vortex_core::Position::new(
+            line.parse::<usize>().ok()?.saturating_sub(1),
+            column.parse::<usize>().ok()?.saturating_sub(1),
+        ))
+    });
+    let mut harness = Harness::new(
+        AppBuilder::new()
+            .with_config(config)
+            .with_file(&file, position),
+    )?;
     let start = Instant::now();
     loop {
         harness.step(Duration::from_millis(100)).await;

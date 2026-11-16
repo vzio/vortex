@@ -669,6 +669,11 @@ impl HiddenDocuments {
         true
     }
 
+    /// Whether diagnostics came for `uri` since it was opened.
+    pub fn is_parsed(&self, uri: &lsp::Url) -> bool {
+        matches!(self.0.lock().get(uri), Some(HiddenState::Open(_, parsed)) if *parsed.borrow())
+    }
+
     /// Whether `uri` is open without a buffer right now.
     pub fn is_open(&self, uri: &lsp::Url) -> bool {
         matches!(self.0.lock().get(uri), Some(HiddenState::Open(..)))
@@ -720,6 +725,7 @@ mod hidden_tests {
         let parsed = hidden.parsed(&a);
         assert!(hidden.diagnostics_came(&a));
         assert!(!hidden.diagnostics_came(&uri("other.go")));
+        assert!(hidden.is_parsed(&a));
         futures_executor::block_on(parsed);
         // Already parsed: at once.
         futures_executor::block_on(hidden.parsed(&a));

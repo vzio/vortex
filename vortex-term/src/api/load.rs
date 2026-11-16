@@ -383,10 +383,87 @@ impl Ctx {
         })
     }
 
-    /// Waits (a little) for the server to parse a temporary document: some servers (clangd)
-    /// answer from their index until they have.
-    async fn parsed(&self, uri: &lsp::Url) {
+    /// Waits (a little) for the server to parse a temporary document, and says whether it was
+    /// still to be parsed.
+    async fn parsed(&self, uri: &lsp::Url) -> bool {
+        if self.hidden.is_parsed(uri) {
+            return false;
+        }
         let _ = tokio::time::timeout(self.parse_wait, self.hidden.parsed(uri)).await;
+        true
+    }
+
+    /// Completes in a temporary document. Asked at once; when the answer is empty or said to be
+    /// incomplete before the server parsed the document (clangd answers from its index until
+    /// then), asked again once it has (its first diagnostics), or after [`Ctx::parse_wait`].
+    ///
+    /// With `packages`, an answer without a single module, file or folder is not one either
+    /// (clangd's index gives identifiers where `#include <` wants headers).
+    async fn probe_completion(
+        &self,
+        probe: &Probe,
+        packages: bool,
+    ) -> anyhow::Result<(Vec<lsp::CompletionItem>, bool, usize)> {
+        let ask = || {
+            self.completion(
+                lsp::TextDocumentIdentifier {
+                    uri: probe.uri.clone(),
+                },
+                probe.position,
+                self.context(probe.before, true),
+            )
+        };
+        let wrong = |items: &[lsp::CompletionItem]| {
+            packages
+                && !items.iter().any(|item| {
+                    matches!(
+                        item.kind,
+                        Some(
+                            lsp::CompletionItemKind::MODULE
+                                | lsp::CompletionItemKind::FILE
+                                | lsp::CompletionItemKind::FOLDER
+                        )
+                    )
+                })
+        };
+        let parsed_before = self.hidden.is_parsed(&probe.uri);
+        let (mut items, mut incomplete) = ask().await?;
+        let mut requests = 1;
+        for round in 0..3 {
+            let unsure = incomplete && round == 0 && !parsed_before;
+            if !(items.is_empty() || wrong(&items) || unsure) {
+                break;
+            }
+            // An empty or wrong answer right after the document opened can also be a race
+            // (gopls, clangd): asked again in a moment, parsed or not.
+            if !self.parsed(&probe.uri).await {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            (items, incomplete) = ask().await?;
+            requests += 1;
+        }
+        Ok((items, incomplete, requests))
+    }
+
+    /// A definition in a temporary document, asked again once it is parsed when there was none.
+    async fn probe_definition(
+        &self,
+        probe: &Probe,
+    ) -> anyhow::Result<(Option<lsp::Location>, usize)> {
+        let location = self.definition(&probe.uri, probe.position).await?;
+        if location.is_none() && self.parsed(&probe.uri).await {
+            return Ok((self.definition(&probe.uri, probe.position).await?, 2));
+        }
+        Ok((location, 1))
+    }
+
+    /// A hover in a temporary document, asked again once it is parsed when there was none.
+    async fn probe_hover(&self, probe: &Probe) -> anyhow::Result<Option<String>> {
+        let text = self.hover(&probe.uri, probe.position).await?;
+        if text.as_deref().is_none_or(str::is_empty) && self.parsed(&probe.uri).await {
+            return self.hover(&probe.uri, probe.position).await;
+        }
+        Ok(text)
     }
 
     fn template(&self, std: bool) -> Option<&str> {
@@ -570,10 +647,13 @@ async fn detect_path_queries(ctx: &Ctx) -> anyhow::Result<(bool, Option<Vec<Symb
         return Ok((false, None));
     }
     let symbols = ctx.workspace_symbols(&ctx.separator).await?;
-    let works = !symbols.is_empty()
-        && symbols
-            .iter()
-            .all(|symbol| Kind::from_symbol(symbol.kind).is_module());
+    // No answer at all may be a server still loading the workspace: asked again next time.
+    if symbols.is_empty() {
+        return Ok((false, Some(symbols)));
+    }
+    let works = symbols
+        .iter()
+        .all(|symbol| Kind::from_symbol(symbol.kind).is_module());
     let _ = ctx.path_queries.set(works);
     Ok((works, Some(symbols)))
 }
@@ -693,16 +773,7 @@ async fn probe_packages(ctx: &Ctx, prefix: &str) -> anyhow::Result<Loaded> {
         bail!("the server doesn't complete");
     }
     let probe = ctx.open_probe(template, prefix)?;
-    ctx.parsed(&probe.uri).await;
-    let (items, incomplete) = ctx
-        .completion(
-            lsp::TextDocumentIdentifier {
-                uri: probe.uri.clone(),
-            },
-            probe.position,
-            ctx.context(probe.before, true),
-        )
-        .await?;
+    let (items, incomplete, requests) = ctx.probe_completion(&probe, true).await?;
     drop(probe.document);
     let mut nodes: Vec<Node> = items
         .into_iter()
@@ -732,7 +803,7 @@ async fn probe_packages(ctx: &Ctx, prefix: &str) -> anyhow::Result<Loaded> {
     Ok(Loaded {
         nodes,
         incomplete,
-        requests: 1,
+        requests,
     })
 }
 
@@ -744,9 +815,8 @@ async fn members(ctx: &Ctx, module: &str, chain: &[String], std: bool) -> anyhow
         bail!("the language has no api-probe members template");
     };
     let probe = ctx.open_probe(&template, module)?;
-    ctx.parsed(&probe.uri).await;
     if probe.definition {
-        let location = ctx.definition(&probe.uri, probe.position).await?;
+        let (location, asked) = ctx.probe_definition(&probe).await?;
         drop(probe.document);
         let Some(location) = location else {
             bail!("the server found no definition for {module}");
@@ -760,18 +830,10 @@ async fn members(ctx: &Ctx, module: &str, chain: &[String], std: bool) -> anyhow
         return Ok(Loaded {
             nodes: document_symbol_nodes(ctx, &uri, response, Provider::Definition),
             incomplete: false,
-            requests: 2,
+            requests: asked + 1,
         });
     }
-    let (items, incomplete) = ctx
-        .completion(
-            lsp::TextDocumentIdentifier {
-                uri: probe.uri.clone(),
-            },
-            probe.position,
-            ctx.context(probe.before, true),
-        )
-        .await?;
+    let (items, incomplete, requests) = ctx.probe_completion(&probe, false).await?;
     drop(probe.document);
     let mut nodes: Vec<Node> = items
         .into_iter()
@@ -781,7 +843,7 @@ async fn members(ctx: &Ctx, module: &str, chain: &[String], std: bool) -> anyhow
     Ok(Loaded {
         nodes,
         incomplete,
-        requests: 1,
+        requests,
     })
 }
 
@@ -890,8 +952,7 @@ pub(crate) async fn docs(ctx: Arc<Ctx>, node: Node) -> anyhow::Result<Docs> {
             return Ok(Docs::default());
         };
         let probe = ctx.open_probe(&template, module)?;
-        ctx.parsed(&probe.uri).await;
-        let text = ctx.hover(&probe.uri, probe.position).await?;
+        let text = ctx.probe_hover(&probe).await?;
         return Ok(Docs {
             signature,
             text,
@@ -926,8 +987,7 @@ async fn locate(ctx: &Ctx, node: &Node) -> anyhow::Result<Option<Place>> {
         return Ok(None);
     };
     let probe = ctx.open_probe(&template, module)?;
-    ctx.parsed(&probe.uri).await;
-    let location = ctx.definition(&probe.uri, probe.position).await?;
+    let (location, _) = ctx.probe_definition(&probe).await?;
     Ok(location
         .filter(|location| location.uri != probe.uri)
         .map(|location| Place {
