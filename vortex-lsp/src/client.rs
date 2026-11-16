@@ -62,6 +62,9 @@ pub struct Client {
     pub(crate) capabilities: OnceCell<lsp::ServerCapabilities>,
     pub(crate) file_operation_interest: OnceLock<FileOperationsInterest>,
     config: Option<Value>,
+    /// Settings merged over `config` while a feature needs them (the API browser raises result
+    /// limits this way), see [`Client::set_config_overlay`].
+    config_overlay: Mutex<Option<Value>>,
     root_path: std::path::PathBuf,
     root_uri: Option<lsp::Url>,
     workspace_folders: Mutex<Vec<lsp::WorkspaceFolder>>,
@@ -262,6 +265,7 @@ impl Client {
             capabilities: OnceCell::new(),
             file_operation_interest: OnceLock::new(),
             config,
+            config_overlay: Mutex::new(None),
             req_timeout,
             root_path,
             root_uri,
@@ -426,8 +430,35 @@ impl Client {
             .unwrap_or_default()
     }
 
-    pub fn config(&self) -> Option<&Value> {
-        self.config.as_ref()
+    /// The server's settings: its configuration in `languages.toml`, with the overlay of
+    /// [`Client::set_config_overlay`] merged over it.
+    pub fn config(&self) -> Option<Value> {
+        let overlay = self.config_overlay.lock();
+        match (&self.config, overlay.as_ref()) {
+            (config, None) => config.clone(),
+            (None, Some(overlay)) => Some(overlay.clone()),
+            (Some(config), Some(overlay)) => {
+                let mut merged = config.clone();
+                merge_json(&mut merged, overlay);
+                Some(merged)
+            }
+        }
+    }
+
+    /// Merges `overlay` over the server's settings (or takes the overlay away with `None`) and
+    /// tells the server they changed, so that it asks for them again (`workspace/configuration`)
+    /// or reads them from the notification. Nothing is written anywhere: the overlay lives as
+    /// long as the client, or until it is taken away.
+    pub fn set_config_overlay(&self, overlay: Option<Value>) {
+        let changed = {
+            let mut current = self.config_overlay.lock();
+            let changed = *current != overlay;
+            *current = overlay;
+            changed
+        };
+        if changed && self.is_initialized() {
+            self.did_change_configuration(self.config().unwrap_or(Value::Null));
+        }
     }
 
     pub async fn workspace_folders(
@@ -465,6 +496,18 @@ impl Client {
     where
         R::Params: serde::Serialize,
     {
+        self.call_with_id::<R>(params, timeout_secs).1
+    }
+
+    /// Sends the request at once and returns its id with the future of its answer.
+    fn call_with_id<R: lsp::request::Request>(
+        &self,
+        params: &R::Params,
+        timeout_secs: u64,
+    ) -> (jsonrpc::Id, impl Future<Output = Result<R::Result>>)
+    where
+        R::Params: serde::Serialize,
+    {
         let server_tx = self.server_tx.clone();
         let id = self.next_request_id();
 
@@ -489,15 +532,69 @@ impl Client {
                 Ok(rx)
             });
 
-        async move {
+        let timeout_id = id.clone();
+        let future = async move {
             use std::time::Duration;
             use tokio::time::timeout;
             // TODO: delay other calls until initialize success
             timeout(Duration::from_secs(timeout_secs), rx?.recv())
                 .await
-                .map_err(|_| Error::Timeout(id))? // return Timeout
+                .map_err(|_| Error::Timeout(timeout_id))? // return Timeout
                 .ok_or(Error::StreamClosed)?
                 .and_then(|value| serde_json::from_value(value).map_err(Into::into))
+        };
+        (id, future)
+    }
+
+    /// Sends any request, like the typed methods below, but cancellable: when the future is
+    /// dropped before the answer came (its task aborted, say), the server gets a
+    /// `$/cancelRequest` for it. The request is sent at once, whether or not the future is
+    /// polled.
+    pub fn cancellable_call<R: lsp::request::Request>(
+        &self,
+        params: &R::Params,
+    ) -> impl Future<Output = Result<R::Result>> + use<R>
+    where
+        R::Params: serde::Serialize,
+    {
+        struct CancelOnDrop {
+            id: Option<jsonrpc::Id>,
+            server_tx: UnboundedSender<Payload>,
+        }
+        impl Drop for CancelOnDrop {
+            fn drop(&mut self) {
+                let Some(id) = self.id.take() else {
+                    return;
+                };
+                let id = match id {
+                    jsonrpc::Id::Num(num) => lsp::NumberOrString::Number(num as i32),
+                    jsonrpc::Id::Str(text) => lsp::NumberOrString::String(text),
+                    jsonrpc::Id::Null => return,
+                };
+                let Ok(params) = serde_json::to_value(lsp::CancelParams { id }) else {
+                    return;
+                };
+                let _ = self
+                    .server_tx
+                    .send(Payload::Notification(jsonrpc::Notification {
+                        jsonrpc: Some(jsonrpc::Version::V2),
+                        method:
+                            <lsp::notification::Cancel as lsp::notification::Notification>::METHOD
+                                .to_string(),
+                        params: Client::value_into_params(params),
+                    }));
+            }
+        }
+
+        let (id, future) = self.call_with_id::<R>(params, self.req_timeout);
+        let mut guard = CancelOnDrop {
+            id: Some(id),
+            server_tx: self.server_tx.clone(),
+        };
+        async move {
+            let result = future.await;
+            guard.id = None;
+            result
         }
     }
 
@@ -739,7 +836,7 @@ impl Client {
                         symbol_kind: Some(lsp::SymbolKindCapability {
                             value_set: Some(lsp::SymbolKind::all()),
                         }),
-                        hierarchical_document_symbol_support: Some(false),
+                        hierarchical_document_symbol_support: Some(true),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -1812,5 +1909,35 @@ impl Client {
         self.notify::<lsp::notification::DidChangeWatchedFiles>(lsp::DidChangeWatchedFilesParams {
             changes,
         })
+    }
+}
+
+/// Merges `overlay` into `base`: objects key by key, anything else replaced.
+fn merge_json(base: &mut Value, overlay: &Value) {
+    match (base, overlay) {
+        (Value::Object(base), Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(key) {
+                    Some(existing) => merge_json(existing, value),
+                    None => {
+                        base.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay.clone(),
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::merge_json;
+    use serde_json::json;
+
+    #[test]
+    fn an_overlay_merges_objects_key_by_key() {
+        let mut base = json!({"a": {"b": 1, "c": 2}, "d": [1]});
+        merge_json(&mut base, &json!({"a": {"c": 3, "e": 4}, "d": [2]}));
+        assert_eq!(base, json!({"a": {"b": 1, "c": 3, "e": 4}, "d": [2]}));
     }
 }

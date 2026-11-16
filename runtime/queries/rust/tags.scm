@@ -27,3 +27,8 @@
 
 (macro_definition
   name: (identifier) @name) @definition.macro
+
+; The API browser (this fork): names of items with a visibility modifier (`pub`, `pub(crate)`).
+(_
+  (visibility_modifier)
+  name: (_) @public)

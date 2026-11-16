@@ -303,6 +303,12 @@
  :lsp-restart restarts the servers, and :log-open shows what
  went wrong.
 
+ :api-browse (in progress) browses what the server knows, one
+ level at a time: the codebase's files and their symbols, what
+ is in scope at the cursor, the packages, the standard library.
+ l opens an item, h goes back, Enter goes to its definition,
+ and ? lists the keys.
+
 
 
 =================================================================

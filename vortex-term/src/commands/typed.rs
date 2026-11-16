@@ -2847,6 +2847,19 @@ fn worktrees(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> a
     Ok(())
 }
 
+fn api_browse(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    cx.jobs.callback(async move {
+        let call = |editor: &mut Editor, compositor: &mut Compositor| {
+            crate::api::picker::open(editor, compositor);
+        };
+        Ok(Callback::EditorCompositor(Box::new(call)))
+    });
+    Ok(())
+}
+
 fn watch(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -4375,6 +4388,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         aliases: &["wt"],
         doc: "Open the picker of the repository's worktrees. Enter changes the working directory to the selected one, like :cd.",
         fun: worktrees,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "api-browse",
+        aliases: &[],
+        doc: "Browse what the buffer's language server knows: the codebase, what is in scope at the cursor, the packages and the standard library (in progress).",
+        fun: api_browse,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),

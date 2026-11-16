@@ -1,6 +1,6 @@
 mod engine;
 pub mod fake_adapter;
-mod harness;
+pub mod harness;
 mod memory;
 mod mode;
 mod panel;

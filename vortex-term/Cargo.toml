@@ -41,6 +41,12 @@ bench = []
 name = "vx"
 path = "src/main.rs"
 
+# A scripted fake language server for the integration tests (tests/fake_lsp/main.rs).
+[[bin]]
+name = "vortex-fake-lsp"
+path = "tests/fake_lsp/main.rs"
+required-features = ["integration"]
+
 [dependencies]
 vortex-stdx = { path = "../vortex-stdx" }
 vortex-core = { path = "../vortex-core" }

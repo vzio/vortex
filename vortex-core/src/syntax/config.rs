@@ -90,6 +90,20 @@ pub struct LanguageConfiguration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debugger: Option<DebugAdapterConfig>,
 
+    /// The API browser (this fork): the roots of the language's standard library, listed in its
+    /// Std view (`["std", "core", "alloc"]` for Rust).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_roots: Vec<String>,
+    /// The API browser: what joins the segments of an item's path (`::` for Rust, the default
+    /// `.` otherwise). A server that answers workspace symbol queries ending in it with the
+    /// items of that module (`std::collections::`) is browsed with such queries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_separator: Option<String>,
+    /// The API browser: temporary documents whose completions list the packages and a module's
+    /// members, for servers that can't list them otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_probe: Option<ApiProbe>,
+
     /// Automatic insertion of pairs to parentheses, brackets,
     /// etc. Defaults to true. Optionally, this can be a list of 2-tuples
     /// to specify a list of characters to pair. This overrides the
@@ -448,6 +462,34 @@ pub struct LanguageServerConfiguration {
     pub timeout: u64,
     #[serde(default)]
     pub required_root_patterns: Option<GlobSet>,
+    /// The API browser (this fork): settings merged over `config` while the browser is open,
+    /// to raise the server's result limits.
+    #[serde(default, skip_serializing, deserialize_with = "deserialize_lsp_config")]
+    pub api_config: Option<serde_json::Value>,
+    /// The API browser: fields added to its workspace symbol and completion requests, to lift
+    /// a server's result limits per request (clangd's `limit = 0`).
+    #[serde(default, skip_serializing, deserialize_with = "deserialize_lsp_config")]
+    pub api_params: Option<serde_json::Value>,
+}
+
+/// The temporary documents of the API browser (this fork). Each is a template opened on the
+/// language server under a virtual path (never written to disk), asked for completions (or a
+/// definition) at a marker, and closed. In a template, `{module}` is the module's path and the
+/// marker is `{cursor}` (complete there) or `{definition}` (go to the definition there, then list
+/// the document symbols of the file it leads to).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ApiProbe {
+    /// Lists the packages, whose path so far is `{module}` (empty at the top). A completion
+    /// that ends in `/` is a directory of packages, listed with the same template.
+    pub packages: Option<String>,
+    /// Lists the members of the package `{module}`.
+    pub members: Option<String>,
+    /// Lists the members of a root of the standard library (`api-roots`); defaults to `members`.
+    pub std: Option<String>,
+    /// Where the documents go, relative to the workspace root; it doesn't need to exist (a
+    /// directory of its own keeps Go's documents out of the packages around them).
+    pub dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -212,7 +212,7 @@ fn jump_to_location(editor: &mut Editor, location: &Location, action: Action) {
     editor.record_jump(vortex_view::history::Jump::Goto, from);
 }
 
-fn jump_to_position(
+pub(crate) fn jump_to_position(
     editor: &mut Editor,
     path: &Path,
     range: lsp::Range,
