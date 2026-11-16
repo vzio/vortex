@@ -200,8 +200,10 @@ impl ApiPicker {
         let Some(level) = self.level else {
             return format!("{} · {}", self.browser.language, self.browser.server());
         };
-        let path = self.browser.display_path(level);
-        let node = self.browser.node(level);
+        let mut path = self.browser.display_path(level);
+        if path.is_empty() {
+            path = self.browser.node(level).name.clone();
+        }
         match self.browser.children(level) {
             State::NotAsked | State::Loading => format!("{path} · loading"),
             State::Failed(err) => format!("{path} · {err}"),
@@ -209,20 +211,20 @@ impl ApiPicker {
                 let provider = loaded
                     .children
                     .first()
-                    .map(|&id| self.browser.node(id).provider.label())
-                    .unwrap_or_else(|| node.provider.label());
-                let mut info = format!(
-                    "{path} · {} items · {provider} · {} ms",
-                    loaded.children.len(),
-                    loaded.took.as_millis()
-                );
+                    .map(|&id| self.browser.node(id).provider.short())
+                    .unwrap_or_default();
+                let mut facts = vec![path, provider.to_string()];
+                if loaded.requests > 0 {
+                    facts.push(format!("{} ms", loaded.took.as_millis()));
+                }
                 if loaded.incomplete {
-                    info.push_str(" · incomplete");
+                    facts.push("incomplete".to_string());
                 }
                 if loaded.skeleton {
-                    info.push_str(" · symbols loading");
+                    facts.push("symbols loading".to_string());
                 }
-                info
+                facts.retain(|fact| !fact.is_empty());
+                facts.join(" · ")
             }
         }
     }

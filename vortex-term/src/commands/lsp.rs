@@ -395,13 +395,17 @@ fn diag_picker(
 }
 
 pub fn symbol_picker(cx: &mut Context) {
+    // The client asks for nested symbols (the API browser wants them, this fork); the parent's
+    // name fills the container column that flat answers have.
     fn nested_to_flat(
         list: &mut Vec<SymbolInformationItem>,
         file: &lsp::TextDocumentIdentifier,
         uri: &Uri,
         symbol: lsp::DocumentSymbol,
+        container: Option<&str>,
         offset_encoding: OffsetEncoding,
     ) {
+        let name = symbol.name.clone();
         #[allow(deprecated)]
         list.push(SymbolInformationItem {
             symbol: lsp::SymbolInformation {
@@ -410,7 +414,7 @@ pub fn symbol_picker(cx: &mut Context) {
                 tags: symbol.tags,
                 deprecated: symbol.deprecated,
                 location: lsp::Location::new(file.uri.clone(), symbol.selection_range),
-                container_name: None,
+                container_name: container.map(str::to_string),
             },
             location: Location {
                 uri: uri.clone(),
@@ -419,7 +423,7 @@ pub fn symbol_picker(cx: &mut Context) {
             },
         });
         for child in symbol.children.into_iter().flatten() {
-            nested_to_flat(list, file, uri, child, offset_encoding);
+            nested_to_flat(list, file, uri, child, Some(&name), offset_encoding);
         }
     }
     let doc = doc!(cx.editor);
@@ -464,6 +468,7 @@ pub fn symbol_picker(cx: &mut Context) {
                                 &doc_id,
                                 &doc_uri,
                                 symbol,
+                                None,
                                 offset_encoding,
                             )
                         }

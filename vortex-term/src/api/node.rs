@@ -206,6 +206,22 @@ impl Provider {
     }
 }
 
+impl Provider {
+    /// A word or two, for the picker's prompt row.
+    pub fn short(self) -> &'static str {
+        match self {
+            Self::Browser => "",
+            Self::Files => "files",
+            Self::DocumentSymbols => "symbols",
+            Self::Tags => "tags",
+            Self::PathQuery => "path query",
+            Self::Completion => "completion",
+            Self::Probe => "probe",
+            Self::Definition => "definition",
+        }
+    }
+}
+
 /// The four roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Root {
