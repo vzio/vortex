@@ -2618,7 +2618,8 @@ clangd = { command = "clangd", api-params = { limit = 0 } }   # added to its sym
 
 Measured on small projects (see the PR's report for the numbers):
 
-- **rust-analyzer** (1.97): path queries for Packages (every crate of the graph, `::`) and Std
+- **rust-analyzer** (1.97; path queries arrived in rust-analyzer in January 2026, 1.90 has none and
+  its Packages and Std say so): path queries for Packages (every crate of the graph, `::`) and Std
   (`std::`, `std::collections::`); a type's members by definition and document symbols (a re-export
   like `std::collections::HashMap` takes three requests); docs by hover. No temporary documents (a
   file outside the crate's module tree is not analyzed).
