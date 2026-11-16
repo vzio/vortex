@@ -15,6 +15,7 @@ mod test {
         Ok(())
     }
 
+    mod api_browser;
     mod api_report;
     mod auto_pairs;
     mod change_lists;
