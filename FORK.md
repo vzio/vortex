@@ -94,6 +94,7 @@ git blame FILE
 - [Move lines](#move-lines)
 - [Terminal panel](#terminal-panel)
 - [The debugger](#the-debugger)
+- [API browser (in progress)](#api-browser-in-progress)
 - [Hex view](#hex-view)
 - [Dashboard](#dashboard)
 - [Worktrees](#worktrees)
@@ -129,6 +130,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Move lines | `vortex-term/src/commands/move_lines.rs` |
 | Terminal panel | `vortex-terminal/` (the shell: pty, emulator, OSC 133, bash/zsh integration), `vortex-view/src/terminal.rs` (panel state, `[editor.terminal]`), `vortex-term/src/terminal/` (drawing, focus, input encoding, the `vx` shim), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
+| API browser (in progress) | `vortex-term/src/api/` (`mod.rs` the browser: the tree, its tasks and their cancellation; `load.rs` the providers; `node.rs` the nodes; `temp.rs` temporary documents; `tags.rs` the tree-sitter skeleton; `picker.rs` `:api-browse`), `Client::cancellable_call` and `Client::set_config_overlay` in `vortex-lsp/src/client.rs`, `HiddenDocuments` in `vortex-lsp/src/lib.rs`, `vortex-term/tests/fake_lsp/main.rs` (a scripted fake language server), `vortex-term/tests/test/fake_lsp.rs`, `vortex-term/tests/test/api_browser.rs`, `vortex-term/tests/test/api_report.rs` (the measurements against real servers) |
 | Hex view | `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`), `vortex-term/tests/test/hex_view.rs` |
 | Dashboard | `vortex-term/src/dashboard.rs` (when it is up, its keys), `vortex-term/src/dashboard/` (`stats.rs` the background reading, `languages.rs` the line counts, `render.rs` the layout and the panels, `timeline.rs` when things move, `title.rs` the title, `vortex.rs` the vortex, `charset.rs` blocks or ASCII, `wrap.rs` long values on two rows, `snapshots/` the drawings the tests compare with), `vortex-vcs/src/git/summary.rs` (the git summary), `vortex-term/tests/test/dashboard.rs` |
 | Worktrees | `vortex-term/src/commands/worktrees.rs` (the `:worktrees` picker: its rows, columns, background jobs and `Enter`), `vortex-vcs/src/git/summary.rs` (the worktrees, missing ones flagged; `Repo::status`, the last modified time; `Repo::dated_worktrees`; `Worktree::details`), `vortex-stdx/src/time.rs` (`format_ago`), the dashboard's worktree rows and `t` in `vortex-term/src/dashboard/`, `vortex-term/tests/test/worktrees.rs` |
@@ -241,6 +243,18 @@ in `vortex-view/src/editor.rs` and `breakpoint_pauses` in `vortex-view/src/debug
 `DebugState::mode` in `vortex-view/src/debug/mod.rs`; `History::seek` and `nearest` in
 `vortex-view/src/debug/history.rs`; `takes` of `DebugTemplate` in `vortex-core/src/syntax/config.rs`
 and `languages.toml`; the debug mode scopes in `theme.toml` and `matrix_theme.toml`.
+
+The API browser changes core files: `api-roots`, `api-separator`, `api-probe` (`ApiProbe`) of
+`LanguageConfiguration` and `api-config`, `api-params` of `LanguageServerConfiguration` in
+`vortex-core/src/syntax/config.rs`, with their defaults in `languages.toml`; the `@public` captures
+of `runtime/queries/rust/tags.scm` and the definitions added to `runtime/queries/typescript/tags.scm`;
+hierarchical document symbols in the client's capabilities (the `space s` picker fills its container
+column from the parent symbol, in `commands/lsp.rs`), `Client::config` returning the settings
+with the overlay merged, and `Registry::hidden_documents` in `vortex-lsp`; the publishDiagnostics
+handler dropping hidden documents' diagnostics and the configuration answer in
+`application.rs`; `:api-browse` in `typed.rs`; `jump_to_position` made `pub(crate)` in
+`commands/lsp.rs`; `autotests = false` and the test targets listed in `vortex-term/Cargo.toml`, for
+the fake server's binary.
 
 The hex view changes core files: the `hex` field of `Document` and what it changes there
 (`open_hex`, `enter_hex`/`leave_hex`, `apply` refusing transactions, `is_modified`, `save_impl`
@@ -2503,6 +2517,136 @@ The debugger doesn't change text, so it has no `:practice` exercise; debug mode 
   the adapter grows by gigabytes (see [Measured](#measured)). Hidden breakpoints don't follow edits made while
   debugging. js-debug gets the hidden breakpoints in its
   parent session too (it can't be told upfront which session will run the program).
+
+## API browser (in progress)
+
+A browser of everything a language server knows, before you type or hover anything: one
+presentation for every language and package. This first step is the data layer and a plain
+`:api-browse` picker to try it; the browser proper (`space ?`, actions on the items) comes next.
+No key is bound yet.
+
+### Usage
+
+`:api-browse` (also in the command palette) opens a picker on the current buffer's language
+server, one level at a time:
+
+- **Codebase**: the workspace's directories and the files of the server's languages, then each
+  file's symbols (and their children), from its document symbols. The file's `tags.scm` gives an
+  instant skeleton while they load.
+- **Scope**: everything usable at the cursor, from a completion request at its position with
+  nothing typed.
+- **Packages**: the dependencies, their modules, their items, their members.
+- **Std**: the roots of the standard library (`api-roots`), browsed like packages.
+
+In the picker's normal mode `l` opens the selected item, `h` goes back, `Enter` goes to its
+definition (or opens it when it has none), `s` filters the level, `?` lists the keys and `Esc`
+closes. The prompt row says where the level is, how many items it has, which request gave them
+and how long it took; the preview shows the selected item's path, kind, place, signature and docs.
+
+### Providers
+
+Each level is loaded by a provider, chosen by what the server advertises and how it answers,
+never by its name (`vortex-term/src/api/load.rs`):
+
+| Provider | Request | Used for |
+| --- | --- | --- |
+| Files | none (a directory listing, ignore files applied) | Codebase's directories |
+| Document symbols | `textDocument/documentSymbol`, hierarchical (the client now asks for it) | a file's symbols; a type's members |
+| Tree-sitter tags | none (`tags.scm`) | a file's skeleton before its symbols; which items are public (Rust `pub`, TypeScript `export`, from `@public` captures) |
+| Path queries | `workspace/symbol` with `std::collections::` | Packages and Std, when the server answers the query of the separator alone (`::`) with modules |
+| Completion at the cursor | `textDocument/completion`, no edit | Scope |
+| Temporary documents | `didOpen` of a template from `api-probe`, `textDocument/completion` (or `definition`) in it, `didClose` | Packages and Std otherwise |
+| Definition | `textDocument/definition`, then the document symbols of the file it leads to | a type's members (past a re-export), a C header's members, an item's place |
+| Docs | the completion item's own docs, `completionItem/resolve`, or `textDocument/hover` at the item's place (or at its name in a temporary document) | the preview |
+
+A type's members are the children of its document symbol and of the symbols named after it as a
+whole word (`impl Shape for Circle`), or those symbols themselves when they have none (Go's
+`(*Rect).Area`).
+
+Temporary documents are opened under a virtual path in the workspace
+(`vortex_api_probe_<pid>_<n>.<ext>`, in `api-probe.dir` when set), never written to disk, and
+closed as soon as their request is answered. A completion in one is asked at once, and again
+(at most three times) when the answer is empty, has no module, file or folder for a list of
+packages, or is incomplete before the server published diagnostics for it: clangd answers from
+its index until it has parsed a document, and gopls sometimes answers nothing right after it
+opened. The diagnostics servers send for these documents are dropped, never shown
+(`HiddenDocuments` in `vortex-lsp`), and their first arrival is the sign that the server parsed
+the document. Files the browser needs that the editor doesn't have open (a library's source, a C
+header) are opened on the server the same way, with their text on disk; a file the editor has
+open is never opened again, and your buffers are never changed.
+
+The browser is lazy and stateless: a level is one task (one request, mostly) when you open it,
+docs are asked only for the selected item (the previous item's request is cancelled), and
+closing the browser aborts everything in flight: the requests get `$/cancelRequest`
+(`Client::cancellable_call`) and the temporary documents `didClose`. Nothing is kept once it is
+closed, nothing is written anywhere.
+
+### Configuration
+
+All in `languages.toml`, with defaults for Rust, TypeScript and JavaScript, Go, C and Lua:
+
+```toml
+[[language]]
+name = "rust"
+api-roots = ["std", "core", "alloc"]   # the Std view's roots
+api-separator = "::"                    # joins paths, and makes path queries (default ".")
+
+[[language]]
+name = "typescript"
+api-roots = ["globalThis"]
+# temporary documents: {module} is the module's path, {cursor} where completion is asked,
+# {definition} where to ask for a definition (then the document symbols of its file)
+api-probe = { packages = "import * as m from \"{module}{cursor}\";", members = "import * as m from \"{module}\";\nm.{cursor}", std = "{module}.{cursor}" }
+
+[language-server.rust-analyzer]
+api-config.workspace.symbol.search.limit = 100000   # merged over `config` while the browser is open
+
+[language-server]
+clangd = { command = "clangd", api-params = { limit = 0 } }   # added to its symbol and completion requests
+```
+
+- `api-probe.packages` lists the packages under `{module}` (empty at the top); a completion that
+  ends in `/` is a directory of packages (Go's `net/`, C's `sys/`).
+- `api-probe.members` lists a package's members; `api-probe.std` a root of the standard library's
+  (defaults to `members`); `api-probe.dir` puts the documents in a directory of their own, which
+  needn't exist (Go: a package clause must agree with the files around it).
+- `api-config` is an overlay on the server's settings while the browser is open
+  (`Client::set_config_overlay`, which sends `workspace/didChangeConfiguration` and answers
+  `workspace/configuration` with the overlay merged); `api-params` adds fields to the requests.
+
+### What each server gives
+
+Measured on small projects (see the PR's report for the numbers):
+
+- **rust-analyzer** (1.97; path queries arrived in rust-analyzer in January 2026, 1.90 has none and
+  its Packages and Std say so): path queries for Packages (every crate of the graph, `::`) and Std
+  (`std::`, `std::collections::`); a type's members by definition and document symbols (a re-export
+  like `std::collections::HashMap` takes three requests); docs by hover. No temporary documents (a
+  file outside the crate's module tree is not analyzed).
+- **typescript-language-server** (5.x, with TypeScript 5; TypeScript 7 ships no `tsserver`):
+  temporary documents for Packages (the packages with types and Node's modules), a package's
+  members, and Std (`globalThis.`, 950 globals); docs by resolve and hover.
+- **gopls** (0.24): temporary documents for Packages (the import paths as a tree of directories)
+  and a package's members, docs in the completion items (no resolve).
+- **clangd** (18): temporary documents for the headers (as a tree, `limit = 0` lifts its cap of
+  100), a header's members as the document symbols of the file `#include` leads to.
+- **lua-language-server**: configured (`api-roots`, `api-probe`) but not measured: it couldn't be
+  installed where this was built.
+
+### Limitations
+
+- The browser shows one server: the current buffer's first that lists symbols or completes.
+- A path query can't list a type's members (rust-analyzer answers nothing for `std::collections::HashMap::`):
+  they come from the document symbols of its file, named after the type by a whole-word match.
+- Items found by completion have no place until asked (`Enter`, docs): a temporary document with
+  the member written out gives their definition. Scope items have none.
+- TypeScript lists classes declared as variables (`Map`, `Promise`) as variables, without members.
+- gopls marks every completion list incomplete, so the browser can't tell a capped list; its
+  workspace symbols stop at 100 and are fuzzy (`fmt.` matches other packages), so they aren't used.
+- Packages in TypeScript include Node's modules twice (`fs` and `node:fs`); in C, every header of
+  the include path.
+- A crate's or a module's own docs (`//!`) don't show: the hover is asked at the item's name.
+- The paths of Codebase items are the file's path and the symbols' names, not module paths.
 
 ## Hex view
 

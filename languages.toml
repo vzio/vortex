@@ -25,7 +25,8 @@ c3-lsp = { command = "c3-lsp" }
 cairo-language-server = { command = "cairo-language-server", args = [] }
 circom-lsp = { command = "circom-lsp" }
 cl-lsp = { command = "cl-lsp" }
-clangd = { command = "clangd" }
+# The API browser (this fork): clangd stops at 100 results unless a request says otherwise.
+clangd = { command = "clangd", api-params = { limit = 0 } }
 clojure-lsp = { command = "clojure-lsp" }
 cmake-language-server = { command = "cmake-language-server" }
 codeql = { command = "codeql", args = ["execute", "language-server", "--check-errors=ON_CHANGE"] }
@@ -240,6 +241,8 @@ command = ["golangci-lint", "run", "--output.json.path=stdout", "--show-stats=fa
 
 [language-server.rust-analyzer]
 command = "rust-analyzer"
+# The API browser (this fork): no limit on a path query's items while it is open.
+api-config.workspace.symbol.search.limit = 100000
 
 [language-server.rust-analyzer.config]
 inlayHints.bindingModeHints.enable = false
@@ -354,6 +357,10 @@ block-comment-tokens = [
 ]
 language-servers = [ "rust-analyzer" ]
 indent = { tab-width = 4, unit = "    " }
+# The API browser (this fork): the standard library's roots, and `::` for paths (rust-analyzer
+# lists a module's items for a workspace symbol query like `std::collections::`).
+api-roots = ["std", "core", "alloc"]
+api-separator = "::"
 persistent-diagnostic-sources = ["rustc", "clippy"]
 
 [language.auto-pairs]
@@ -717,6 +724,10 @@ file-types = ["c"] # TODO: ["h"]
 comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "clangd" ]
+# The API browser (this fork): the C standard headers, temporary documents that list the headers
+# by completion, and a header's members as the document symbols of the file `#include` leads to.
+api-roots = ["assert.h", "ctype.h", "errno.h", "float.h", "inttypes.h", "limits.h", "locale.h", "math.h", "setjmp.h", "signal.h", "stdarg.h", "stdbool.h", "stddef.h", "stdint.h", "stdio.h", "stdlib.h", "string.h", "threads.h", "time.h", "wchar.h"]
+api-probe = { packages = "#include <{module}{cursor}\n", members = "#include <{definition}{module}>\n" }
 indent = { tab-width = 2, unit = "  " }
 
 [language.debugger]
@@ -936,6 +947,11 @@ auto-format = true
 comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "gopls", "golangci-lint-lsp" ]
+# The API browser (this fork): some of the standard library's packages (the packages view lists
+# them all), and temporary documents in a directory of their own (a package clause must agree
+# with the files around it) that list the import paths and a package's members by completion.
+api-roots = ["fmt", "os", "io", "strings", "strconv", "errors", "time", "context", "sync", "sort", "slices", "maps", "bufio", "bytes", "math", "regexp", "path/filepath", "encoding/json", "net/http", "testing"]
+api-probe = { dir = "vortex_api_probe", packages = "package probe\n\nimport \"{module}{cursor}\"\n", members = "package probe\n\nimport m \"{module}\"\n\nvar _ = m.{cursor}\n" }
 # TODO: gopls needs utf-8 offsets?
 code-actions-on-save = ["source.organizeImports"]
 indent = { tab-width = 4, unit = "\t" }
@@ -1047,6 +1063,10 @@ roots = [ "package.json", "jsconfig.json" ]
 comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "typescript-language-server" ]
+# The API browser (this fork): the globals, and temporary documents that list the packages and
+# a module's members by completion.
+api-roots = ["globalThis"]
+api-probe = { packages = "import * as m from \"{module}{cursor}\";", members = "import * as m from \"{module}\";\nm.{cursor}", std = "{module}.{cursor}" }
 indent = { tab-width = 2, unit = "  " }
 
 [language.debugger]
@@ -1104,6 +1124,10 @@ roots = [ "package.json", "tsconfig.json" ]
 comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "typescript-language-server" ]
+# The API browser (this fork): the globals, and temporary documents that list the packages and
+# a module's members by completion.
+api-roots = ["globalThis"]
+api-probe = { packages = "import * as m from \"{module}{cursor}\";", members = "import * as m from \"{module}\";\nm.{cursor}", std = "{module}.{cursor}" }
 indent = { tab-width = 2, unit = "  " }
 
 [language.debugger]
@@ -1709,6 +1733,10 @@ comment-tokens = ["--", "---"]
 block-comment-tokens = { start = "--[[", end = "--]]" }
 indent = { tab-width = 2, unit = "  " }
 language-servers = [ "lua-language-server" ]
+# The API browser (this fork): the standard library's tables, and temporary documents that list
+# the modules `require` finds and a module's members by completion.
+api-roots = ["_G", "string", "table", "math", "io", "os", "coroutine", "utf8", "debug", "package"]
+api-probe = { packages = "require(\"{module}{cursor}\")\n", members = "local m = require(\"{module}\")\nm.{cursor}\n", std = "{module}.{cursor}\n" }
 
 [[grammar]]
 name = "lua"

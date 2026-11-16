@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate vortex_view;
 
+pub mod api;
 pub mod application;
 pub mod args;
 pub mod commands;

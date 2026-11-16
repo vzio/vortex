@@ -587,6 +587,149 @@ pub struct Registry {
     syn_loader: Arc<ArcSwap<vortex_core::syntax::Loader>>,
     pub incoming: SelectAll<UnboundedReceiverStream<(LanguageServerId, Call)>>,
     pub file_event_handler: file_event::Handler,
+    /// Documents opened on a server without a buffer (the API browser's temporary documents);
+    /// the diagnostics servers send for them are dropped.
+    pub hidden_documents: HiddenDocuments,
+}
+
+/// The documents a feature opened on a language server without a buffer, shared with the tasks
+/// that open and close them. A document stays listed for [`HiddenDocuments::LINGER`] after it was
+/// closed, since servers often send its diagnostics (or an empty list) a little later.
+///
+/// The diagnostics themselves are dropped, but their arrival is noted: it is the sign that the
+/// server has parsed the document ([`HiddenDocuments::parsed`]).
+#[derive(Debug, Clone, Default)]
+pub struct HiddenDocuments(Arc<parking_lot::Mutex<HashMap<lsp::Url, HiddenState>>>);
+
+#[derive(Debug)]
+enum HiddenState {
+    /// Opened this many times and not closed yet; the watch turns true at its first diagnostics.
+    Open(usize, tokio::sync::watch::Sender<bool>),
+    Closed(std::time::Instant),
+}
+
+impl HiddenDocuments {
+    /// How long a closed document stays hidden.
+    pub const LINGER: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Counts an opening of `uri`; true for the first, which opens it on the server.
+    pub fn open(&self, uri: lsp::Url) -> bool {
+        let mut documents = self.0.lock();
+        match documents.get_mut(&uri) {
+            Some(HiddenState::Open(count, _)) => {
+                *count += 1;
+                false
+            }
+            _ => {
+                let (parsed, _) = tokio::sync::watch::channel(false);
+                documents.insert(uri, HiddenState::Open(1, parsed));
+                true
+            }
+        }
+    }
+
+    /// Counts a closing of `uri`; true for the last, which closes it on the server.
+    pub fn close(&self, uri: &lsp::Url) -> bool {
+        let mut documents = self.0.lock();
+        let Some(state) = documents.get_mut(uri) else {
+            return false;
+        };
+        match state {
+            HiddenState::Open(count, _) if *count > 1 => {
+                *count -= 1;
+                false
+            }
+            HiddenState::Open(..) => {
+                *state = HiddenState::Closed(std::time::Instant::now());
+                true
+            }
+            HiddenState::Closed(_) => false,
+        }
+    }
+
+    /// Whether `uri` is open without a buffer, or was closed less than [`Self::LINGER`] ago.
+    pub fn contains(&self, uri: &lsp::Url) -> bool {
+        let mut documents = self.0.lock();
+        documents.retain(|_, state| match state {
+            HiddenState::Open(..) => true,
+            HiddenState::Closed(at) => at.elapsed() < Self::LINGER,
+        });
+        documents.contains_key(uri)
+    }
+
+    /// Notes that diagnostics came for `uri`, and says whether it is hidden (then they are
+    /// dropped).
+    pub fn diagnostics_came(&self, uri: &lsp::Url) -> bool {
+        if !self.contains(uri) {
+            return false;
+        }
+        if let Some(HiddenState::Open(_, parsed)) = self.0.lock().get(uri) {
+            parsed.send_replace(true);
+        }
+        true
+    }
+
+    /// Whether diagnostics came for `uri` since it was opened.
+    pub fn is_parsed(&self, uri: &lsp::Url) -> bool {
+        matches!(self.0.lock().get(uri), Some(HiddenState::Open(_, parsed)) if *parsed.borrow())
+    }
+
+    /// Whether `uri` is open without a buffer right now.
+    pub fn is_open(&self, uri: &lsp::Url) -> bool {
+        matches!(self.0.lock().get(uri), Some(HiddenState::Open(..)))
+    }
+
+    /// Completes when the first diagnostics came for `uri` since it was opened (at once if they
+    /// already came, or if it isn't open).
+    pub fn parsed(&self, uri: &lsp::Url) -> impl std::future::Future<Output = ()> + use<> {
+        let receiver = match self.0.lock().get(uri) {
+            Some(HiddenState::Open(_, parsed)) => Some(parsed.subscribe()),
+            _ => None,
+        };
+        async move {
+            if let Some(mut receiver) = receiver {
+                let _ = receiver.wait_for(|parsed| *parsed).await;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod hidden_tests {
+    use super::*;
+
+    fn uri(name: &str) -> lsp::Url {
+        lsp::Url::parse(&format!("file:///tmp/{name}")).unwrap()
+    }
+
+    #[test]
+    fn a_hidden_document_stays_hidden_a_while_after_it_closed() {
+        let hidden = HiddenDocuments::default();
+        let a = uri("a.ts");
+        assert!(!hidden.contains(&a));
+        assert!(hidden.open(a.clone()), "the first opening opens");
+        assert!(!hidden.open(a.clone()));
+        assert!(!hidden.close(&a));
+        assert!(hidden.is_open(&a), "opened twice, closed once");
+        assert!(hidden.close(&a), "the last closing closes");
+        assert!(!hidden.is_open(&a));
+        assert!(hidden.contains(&a), "lingers after closing");
+        assert!(!hidden.contains(&uri("b.ts")));
+    }
+
+    #[test]
+    fn parsed_completes_when_diagnostics_came() {
+        let hidden = HiddenDocuments::default();
+        let a = uri("a.go");
+        hidden.open(a.clone());
+        let parsed = hidden.parsed(&a);
+        assert!(hidden.diagnostics_came(&a));
+        assert!(!hidden.diagnostics_came(&uri("other.go")));
+        assert!(hidden.is_parsed(&a));
+        futures_executor::block_on(parsed);
+        // Already parsed: at once.
+        futures_executor::block_on(hidden.parsed(&a));
+    }
 }
 
 impl Registry {
@@ -597,6 +740,7 @@ impl Registry {
             syn_loader,
             incoming: SelectAll::new(),
             file_event_handler: file_event::Handler::new(),
+            hidden_documents: HiddenDocuments::default(),
         }
     }
 

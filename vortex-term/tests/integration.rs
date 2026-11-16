@@ -15,6 +15,8 @@ mod test {
         Ok(())
     }
 
+    mod api_browser;
+    mod api_report;
     mod auto_pairs;
     mod change_lists;
     mod change_lists_live;
@@ -24,6 +26,8 @@ mod test {
     mod dashboard;
     mod debug;
     mod explorer;
+    #[allow(dead_code)]
+    mod fake_lsp;
     mod git_log;
     mod hex_view;
     mod history;

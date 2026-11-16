@@ -847,7 +847,7 @@ impl Application {
                         // This might not be required by the spec but Neovim does this as well, so it's
                         // probably a good idea for compatibility.
                         if let Some(config) = language_server.config() {
-                            language_server.did_change_configuration(config.clone());
+                            language_server.did_change_configuration(config);
                         }
 
                         vortex_event::dispatch(vortex_view::events::LanguageServerInitialized {
@@ -856,6 +856,16 @@ impl Application {
                         });
                     }
                     Notification::PublishDiagnostics(params) => {
+                        // The API browser's documents have no buffer: what the server finds in
+                        // them is not the user's business.
+                        if self
+                            .editor
+                            .language_servers
+                            .hidden_documents
+                            .diagnostics_came(&params.uri)
+                        {
+                            return;
+                        }
                         let uri = match vortex_core::Uri::try_from(params.uri) {
                             Ok(uri) => uri,
                             Err(err) => {
@@ -1088,7 +1098,7 @@ impl Application {
                                     // for some reason some lsps send an empty string (observed in 'vscode-eslint-language-server')
                                     if !section.is_empty() {
                                         for part in section.split('.') {
-                                            config = config.get(part)?;
+                                            config = config.get(part)?.clone();
                                         }
                                     }
                                 }
