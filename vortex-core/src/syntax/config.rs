@@ -725,3 +725,150 @@ where
 fn default_timeout() -> u64 {
     20
 }
+
+#[cfg(test)]
+mod api_tests {
+    //! The keys of the API browser (this fork) in `languages.toml`.
+
+    use super::*;
+    use serde_json::json;
+
+    fn language(extra: &str) -> Result<LanguageConfiguration, toml::de::Error> {
+        toml::from_str(&format!(
+            "name = \"demo\"\nscope = \"source.demo\"\nfile-types = [\"demo\"]\n{extra}\n"
+        ))
+    }
+
+    #[test]
+    fn a_language_has_no_api_keys_by_default() {
+        let config = language("").unwrap();
+        assert!(config.api_roots.is_empty());
+        assert_eq!(config.api_separator, None);
+        assert_eq!(config.api_probe, None);
+    }
+
+    #[test]
+    fn api_roots_and_separator_are_parsed() {
+        let config = language("api-roots = [\"std\", \"core\"]\napi-separator = \"::\"").unwrap();
+        assert_eq!(config.api_roots, ["std", "core"]);
+        assert_eq!(config.api_separator.as_deref(), Some("::"));
+    }
+
+    #[test]
+    fn api_probe_templates_are_parsed() {
+        let config = language(
+            "api-probe = { packages = \"use {module}{cursor}\", members = \"use {module}::{cursor}\", \
+             std = \"{module}.{cursor}\", dir = \"probes\" }",
+        )
+        .unwrap();
+        assert_eq!(
+            config.api_probe,
+            Some(ApiProbe {
+                packages: Some("use {module}{cursor}".into()),
+                members: Some("use {module}::{cursor}".into()),
+                std: Some("{module}.{cursor}".into()),
+                dir: Some("probes".into()),
+            })
+        );
+
+        // Every template is optional.
+        let config = language("api-probe = { members = \"m.{cursor}\" }").unwrap();
+        let probe = config.api_probe.unwrap();
+        assert_eq!(probe.members.as_deref(), Some("m.{cursor}"));
+        assert_eq!(probe.packages, None);
+        assert_eq!(probe.std, None);
+        assert_eq!(probe.dir, None);
+
+        // Also as a table of its own.
+        let config = language("[api-probe]\npackages = \"p{cursor}\"").unwrap();
+        assert_eq!(
+            config.api_probe.unwrap().packages.as_deref(),
+            Some("p{cursor}")
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_in_api_probe_is_an_error() {
+        let err = language("api-probe = { packages = \"p{cursor}\", member = \"m\" }")
+            .expect_err("a misspelled template is not ignored");
+        assert!(err.to_string().contains("unknown field `member`"), "{err}");
+    }
+
+    #[test]
+    fn api_config_and_api_params_of_a_language_server_are_parsed_as_json() {
+        let server: LanguageServerConfiguration = toml::from_str(
+            "command = \"demo-ls\"\n\
+             config = { demo = { limit = 10 } }\n\
+             api-config = { demo = { limit = 1000, nested = { on = true } } }\n\
+             api-params = { limit = 0 }\n",
+        )
+        .unwrap();
+        assert_eq!(server.config, Some(json!({"demo": {"limit": 10}})));
+        assert_eq!(
+            server.api_config,
+            Some(json!({"demo": {"limit": 1000, "nested": {"on": true}}}))
+        );
+        assert_eq!(server.api_params, Some(json!({"limit": 0})));
+
+        let server: LanguageServerConfiguration =
+            toml::from_str("command = \"demo-ls\"\n").unwrap();
+        assert_eq!(server.api_config, None);
+        assert_eq!(server.api_params, None);
+
+        // The dotted form of the default `languages.toml`.
+        let server: LanguageServerConfiguration = toml::from_str(
+            "command = \"demo-ls\"\napi-config.workspace.symbol.search.limit = 100000\n",
+        )
+        .unwrap();
+        assert_eq!(
+            server.api_config,
+            Some(json!({"workspace": {"symbol": {"search": {"limit": 100000}}}}))
+        );
+    }
+
+    #[test]
+    fn the_default_languages_have_their_api_keys() {
+        let config: Configuration = vortex_loader::config::default_lang_config()
+            .try_into()
+            .expect("the default languages.toml parses");
+        let language = |name: &str| {
+            config
+                .language
+                .iter()
+                .find(|language| language.language_id == name)
+                .unwrap_or_else(|| panic!("no language {name}"))
+        };
+
+        let rust = language("rust");
+        assert_eq!(rust.api_roots, ["std", "core", "alloc"]);
+        assert_eq!(rust.api_separator.as_deref(), Some("::"));
+
+        for name in ["typescript", "go", "c", "lua"] {
+            let probe = language(name)
+                .api_probe
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} has no api-probe"));
+            assert!(
+                probe.packages.is_some() || probe.members.is_some(),
+                "{name}: {probe:?}"
+            );
+            assert!(
+                !language(name).api_roots.is_empty(),
+                "{name} has no api-roots"
+            );
+        }
+        // Their templates have a marker where completion (or the definition) is asked.
+        for name in ["typescript", "go", "c", "lua"] {
+            let probe = language(name).api_probe.as_ref().unwrap();
+            for template in [&probe.packages, &probe.members, &probe.std]
+                .into_iter()
+                .flatten()
+            {
+                assert!(
+                    template.contains("{cursor}") || template.contains("{definition}"),
+                    "{name}: {template:?}"
+                );
+            }
+        }
+    }
+}

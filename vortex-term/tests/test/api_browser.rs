@@ -24,7 +24,8 @@ use super::helpers::{test_config, test_syntax_loader, AppBuilder};
 // ------------------------------------------------------------------------------------------------
 // The workspace.
 
-const LIB_RS: &str = "pub mod shapes;\n\npub fn answer() -> u32 {\n    let total = 40 + 2;\n    total\n}\n";
+const LIB_RS: &str =
+    "pub mod shapes;\n\npub fn answer() -> u32 {\n    let total = 40 + 2;\n    total\n}\n";
 
 const SHAPES_RS: &str = "pub struct Circle {\n    pub radius: f64,\n}\n\npub trait Shape {\n    fn area(&self) -> f64;\n}\n\nimpl Shape for Circle {\n    fn area(&self) -> f64 {\n        3.14 * self.radius * self.radius\n    }\n}\n\nimpl Square {\n    fn side(&self) -> f64 {\n        1.0\n    }\n}\n";
 
@@ -93,13 +94,11 @@ fn shapes_symbols() -> Value {
 
 /// The document symbols of `src/lib.rs`.
 fn lib_symbols() -> Value {
+    let mut answer = doc_symbol("answer", 12, (2, 5), range(2, 7, 13), vec![]);
+    answer["detail"] = json!("fn() -> u32");
     json!([
         doc_symbol("shapes", 2, (0, 0), range(0, 8, 14), vec![]),
-        {
-            let mut answer = doc_symbol("answer", 12, (2, 5), range(2, 7, 13), vec![]);
-            answer["detail"] = json!("fn() -> u32");
-            answer
-        },
+        answer,
     ])
 }
 
@@ -356,14 +355,21 @@ fn trace(log: &Log, workspace: &Path) -> Vec<String> {
                 "completionItem/resolve" => params["label"].as_str()?.to_string(),
                 _ => params["textDocument"]["uri"].as_str()?.to_string(),
             };
-            Some(format!("{method} {detail}").replace(&prefix, "").replace(&pid, "PID"))
+            Some(
+                format!("{method} {detail}")
+                    .replace(&prefix, "")
+                    .replace(&pid, "PID"),
+            )
         })
         .collect()
 }
 
 /// How many entries of the trace start with `prefix`.
 fn count(trace: &[String], prefix: &str) -> usize {
-    trace.iter().filter(|entry| entry.starts_with(prefix)).count()
+    trace
+        .iter()
+        .filter(|entry| entry.starts_with(prefix))
+        .count()
 }
 
 /// The `query` of each `workspace/symbol` request.
@@ -599,15 +605,16 @@ async fn packages_come_from_path_queries_when_the_server_answers_the_separator_w
         .map(|&id| browser.node(id).name.clone())
         .collect();
     assert_eq!(names_of_roots, ["Codebase", "Scope", "Packages", "Std"]);
-    assert_eq!(browser.path_queries(), None, "not found out before it is asked");
+    assert_eq!(
+        browser.path_queries(),
+        None,
+        "not found out before it is asked"
+    );
 
     let packages = root(&browser, "Packages");
     fx.open(&mut browser, packages).await;
     assert_eq!(names(&browser, packages), ["geo", "serde"]);
-    assert_eq!(
-        kinds(&browser, packages),
-        [Kind::Package, Kind::Package]
-    );
+    assert_eq!(kinds(&browser, packages), [Kind::Package, Kind::Package]);
     assert_eq!(providers(&browser, packages), [Provider::PathQuery]);
     assert_eq!(level(&browser, packages).requests, 1);
     assert_eq!(browser.path_queries(), Some(true));
@@ -630,10 +637,18 @@ async fn packages_come_from_path_queries_when_the_server_answers_the_separator_w
 
     let log = fx.log();
     assert_eq!(queries(&log), ["::", "geo::"]);
-    assert_eq!(log.count("textDocument/completion"), 0, "no probe was needed");
+    assert_eq!(
+        log.count("textDocument/completion"),
+        0,
+        "no probe was needed"
+    );
     assert_eq!(
         fx.ws.trace(),
-        ["textDocument/didOpen src/lib.rs", "workspace/symbol ::", "workspace/symbol geo::"]
+        [
+            "textDocument/didOpen src/lib.rs",
+            "workspace/symbol ::",
+            "workspace/symbol geo::"
+        ]
     );
 
     drop(browser);
@@ -679,7 +694,10 @@ async fn packages_through_the_probe(script: Script, asks_separator: bool) -> any
     assert_eq!(names(&browser, serde), ["de", "to_string"]);
     assert_eq!(providers(&browser, serde), [Provider::Probe]);
     assert_eq!(
-        browser.node(child(&browser, serde, "to_string")).detail.as_deref(),
+        browser
+            .node(child(&browser, serde, "to_string"))
+            .detail
+            .as_deref(),
         Some("fn(&T) -> String")
     );
 
@@ -733,7 +751,11 @@ async fn packages_and_std_fail_with_a_reason_without_path_queries_or_a_probe() -
     let reason = failure(&browser, std);
     assert!(reason.contains("api-probe"), "{reason}");
 
-    assert_eq!(fx.ws.trace(), ["textDocument/didOpen src/lib.rs"], "nothing was asked");
+    assert_eq!(
+        fx.ws.trace(),
+        ["textDocument/didOpen src/lib.rs"],
+        "nothing was asked"
+    );
     drop(browser);
     fx.finish().await
 }
@@ -760,19 +782,16 @@ async fn packages_fail_when_the_separator_query_lists_no_modules_and_there_is_no
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn scope_is_the_completion_at_the_cursor_and_fails_without_completion() -> anyhow::Result<()>
-{
+async fn scope_is_the_completion_at_the_cursor() -> anyhow::Result<()> {
     let ws = Workspace::new();
-    let script = Script::new()
-        .capabilities(capabilities())
-        .completion(
-            "let total = ",
-            json!({"isIncomplete": false, "items": [
-                {"label": "answer", "kind": 3, "detail": "fn() -> u32",
-                 "documentation": "The answer."},
-                {"label": "total", "kind": 6},
-            ]}),
-        );
+    let script = Script::new().capabilities(capabilities()).completion(
+        "let total = ",
+        json!({"isIncomplete": false, "items": [
+            {"label": "answer", "kind": 3, "detail": "fn() -> u32",
+             "documentation": "The answer."},
+            {"label": "total", "kind": 6},
+        ]}),
+    );
     // Line 4, column 17 (1-based): right after `let total = `.
     let options = Options {
         at: Some(Position::new(3, 16)),
@@ -807,9 +826,11 @@ async fn scope_is_the_completion_at_the_cursor_and_fails_without_completion() ->
     assert_eq!(docs.signature.as_deref(), Some("fn() -> u32"));
     assert_eq!(fx.log().count("textDocument/hover"), 0);
     drop(browser);
-    fx.finish().await?;
+    fx.finish().await
+}
 
-    // A server that doesn't complete has no scope.
+#[tokio::test(flavor = "multi_thread")]
+async fn scope_fails_when_the_server_does_not_complete() -> anyhow::Result<()> {
     let ws = Workspace::new();
     let script = Script::new().capabilities(json!({
         "textDocumentSync": 1,
@@ -842,7 +863,10 @@ async fn the_codebase_lists_directories_and_files_and_files_come_from_document_s
     fx.open(&mut browser, codebase).await;
     // Directories of the workspace; the `.git`, the readme and the notes are not code.
     assert_eq!(names(&browser, codebase), ["docs", "src"]);
-    assert_eq!(kinds(&browser, codebase), [Kind::Directory, Kind::Directory]);
+    assert_eq!(
+        kinds(&browser, codebase),
+        [Kind::Directory, Kind::Directory]
+    );
     assert_eq!(providers(&browser, codebase), [Provider::Files]);
     assert_eq!(level(&browser, codebase).requests, 0);
 
@@ -850,7 +874,10 @@ async fn the_codebase_lists_directories_and_files_and_files_come_from_document_s
     fx.open(&mut browser, src).await;
     assert_eq!(names(&browser, src), ["lib.rs", "shapes.rs"]);
     assert_eq!(kinds(&browser, src), [Kind::File, Kind::File]);
-    assert_eq!(browser.display_path(child(&browser, src, "lib.rs")), "src/lib.rs");
+    assert_eq!(
+        browser.display_path(child(&browser, src, "lib.rs")),
+        "src/lib.rs"
+    );
 
     // A file the editor has open: its symbols, from the server's copy of the buffer.
     let lib = child(&browser, src, "lib.rs");
@@ -860,7 +887,10 @@ async fn the_codebase_lists_directories_and_files_and_files_come_from_document_s
     assert!(!level(&browser, lib).skeleton);
     assert_eq!(level(&browser, lib).requests, 1);
     assert_eq!(
-        browser.node(child(&browser, lib, "answer")).detail.as_deref(),
+        browser
+            .node(child(&browser, lib, "answer"))
+            .detail
+            .as_deref(),
         Some("fn() -> u32")
     );
 
@@ -917,13 +947,10 @@ async fn the_codebase_lists_directories_and_files_and_files_come_from_document_s
 // 2. Lazy loading.
 
 #[tokio::test(flavor = "multi_thread")]
-async fn nothing_is_asked_until_a_level_is_opened_and_each_level_asks_once() -> anyhow::Result<()>
-{
+async fn nothing_is_asked_until_a_level_is_opened_and_each_level_asks_once() -> anyhow::Result<()> {
     let ws = Workspace::new();
-    let script = path_query_script(&ws).completion(
-        "let total = ",
-        completion_list(&[("answer", 3)]),
-    );
+    let script =
+        path_query_script(&ws).completion("let total = ", completion_list(&[("answer", 3)]));
     let options = Options {
         at: Some(Position::new(3, 16)),
         ..Options::default()
@@ -1158,7 +1185,10 @@ async fn closing_the_picker_with_escape_cancels_what_is_in_flight() -> anyhow::R
     })
     .await;
     assert_eq!(cancel_notifications(&fx.log()), [id]);
-    assert!(!screen_contains(&fx.harness.app, "Codebase"), "the picker is closed");
+    assert!(
+        !screen_contains(&fx.harness.app, "Codebase"),
+        "the picker is closed"
+    );
     assert_requests_in_open_documents(&fx.log());
     fx.finish().await
 }
@@ -1206,7 +1236,10 @@ async fn a_probe_level_opens_asks_and_closes(dir: Option<&str>) -> anyhow::Resul
     // Nothing of it is on disk.
     assert!(std::fs::read_dir(fx.ws.root())?
         .flatten()
-        .all(|entry| !entry.file_name().to_string_lossy().contains("vortex_api_probe")));
+        .all(|entry| !entry
+            .file_name()
+            .to_string_lossy()
+            .contains("vortex_api_probe")));
     drop(browser);
     fx.finish().await
 }
@@ -1275,7 +1308,13 @@ async fn diagnostics_of_temporary_documents_never_reach_the_editor() -> anyhow::
         .unwrap()
         .to_string();
     let uri = vortex_lsp::lsp::Url::parse(&uri)?;
-    assert!(fx.harness.app.editor.language_servers.hidden_documents.contains(&uri));
+    assert!(fx
+        .harness
+        .app
+        .editor
+        .language_servers
+        .hidden_documents
+        .contains(&uri));
 
     drop(browser);
     fx.finish().await
@@ -1287,7 +1326,8 @@ async fn diagnostics_of_temporary_documents_never_reach_the_editor() -> anyhow::
 #[tokio::test(flavor = "multi_thread")]
 async fn browsing_never_changes_or_reopens_the_buffer() -> anyhow::Result<()> {
     let ws = Workspace::new();
-    let script = path_query_script(&ws).completion("let total = ", completion_list(&[("answer", 3)]));
+    let script =
+        path_query_script(&ws).completion("let total = ", completion_list(&[("answer", 3)]));
     let options = Options {
         at: Some(Position::new(3, 16)),
         ..Options::default()
@@ -1306,8 +1346,12 @@ async fn browsing_never_changes_or_reopens_the_buffer() -> anyhow::Result<()> {
         let id = root(&browser, name);
         fx.open(&mut browser, id).await;
     }
-    let lib = fx.open_path(&mut browser, &["Codebase", "src", "lib.rs"]).await;
-    let shapes = fx.open_path(&mut browser, &["Codebase", "src", "shapes.rs"]).await;
+    let lib = fx
+        .open_path(&mut browser, &["Codebase", "src", "lib.rs"])
+        .await;
+    let shapes = fx
+        .open_path(&mut browser, &["Codebase", "src", "shapes.rs"])
+        .await;
     let circle = child(&browser, shapes, "Circle");
     fx.open(&mut browser, circle).await;
     let geo = fx.open_path(&mut browser, &["Packages", "geo"]).await;
@@ -1342,13 +1386,20 @@ async fn browsing_never_changes_or_reopens_the_buffer() -> anyhow::Result<()> {
         1,
         "only the editor's: {trace:#?}"
     );
-    assert_eq!(count(&trace, "textDocument/didClose src/lib.rs"), 0, "{trace:#?}");
+    assert_eq!(
+        count(&trace, "textDocument/didClose src/lib.rs"),
+        0,
+        "{trace:#?}"
+    );
     // The other file is opened for each of its requests and closed after: its symbols for the
     // Codebase, and again for the members of `geo::Circle`.
     let opened = count(&trace, "textDocument/didOpen src/shapes.rs");
     assert_eq!(opened, 2, "{trace:#?}");
     assert_eq!(opened, count(&trace, "textDocument/didClose src/shapes.rs"));
-    assert_eq!(count(&trace, "textDocument/documentSymbol src/shapes.rs"), 2);
+    assert_eq!(
+        count(&trace, "textDocument/documentSymbol src/shapes.rs"),
+        2
+    );
     assert_eq!(count(&trace, "textDocument/documentSymbol src/lib.rs"), 1);
     assert_requests_in_open_documents(&log);
 
@@ -1363,7 +1414,8 @@ async fn browsing_never_changes_or_reopens_the_buffer() -> anyhow::Result<()> {
 async fn api_params_are_merged_into_workspace_symbol_and_completion_requests() -> anyhow::Result<()>
 {
     let ws = Workspace::new();
-    let script = path_query_script(&ws).completion("let total = ", completion_list(&[("answer", 3)]));
+    let script =
+        path_query_script(&ws).completion("let total = ", completion_list(&[("answer", 3)]));
     let options = Options {
         server: "api-params = { limit = 0 }".into(),
         at: Some(Position::new(3, 16)),
@@ -1373,14 +1425,18 @@ async fn api_params_are_merged_into_workspace_symbol_and_completion_requests() -
     let mut browser = fx.browser();
     fx.open_path(&mut browser, &["Packages", "geo"]).await;
     fx.open_path(&mut browser, &["Scope"]).await;
-    fx.open_path(&mut browser, &["Codebase", "src", "shapes.rs"]).await;
+    fx.open_path(&mut browser, &["Codebase", "src", "shapes.rs"])
+        .await;
 
     let log = fx.log();
     let symbol_requests = log.requests("workspace/symbol");
     assert_eq!(symbol_requests.len(), 2);
     for params in &symbol_requests {
         assert_eq!(params["limit"], 0, "{params}");
-        assert!(params["query"].is_string(), "the request's own fields stay: {params}");
+        assert!(
+            params["query"].is_string(),
+            "the request's own fields stay: {params}"
+        );
     }
     let completion_requests = log.requests("textDocument/completion");
     assert_eq!(completion_requests.len(), 1);
@@ -1459,7 +1515,10 @@ async fn api_config_is_the_servers_configuration_while_the_browser_is_open() -> 
     })
     .await;
     let log = fx.log();
-    assert_eq!(log.count("workspace/didChangeConfiguration"), changes_while_open + 1);
+    assert_eq!(
+        log.count("workspace/didChangeConfiguration"),
+        changes_while_open + 1
+    );
     assert_eq!(
         configuration_answers(&log),
         [
@@ -1521,7 +1580,10 @@ async fn a_type_from_a_path_query_lists_its_fields_and_the_methods_of_its_impl_b
     })
     .await;
     let trace = fx.ws.trace();
-    assert_eq!(count(&trace, "textDocument/documentSymbol src/shapes.rs"), 1);
+    assert_eq!(
+        count(&trace, "textDocument/documentSymbol src/shapes.rs"),
+        1
+    );
     assert_eq!(count(&trace, "textDocument/hover src/shapes.rs"), 1);
     assert_requests_in_open_documents(&fx.log());
     drop(browser);
@@ -1581,11 +1643,14 @@ async fn api_browse_picker_end_to_end() -> anyhow::Result<()> {
             screen_contains(app, "geo") && screen_contains(app, "serde")
         })
         .await;
-    let info = row_with(&fx.harness.app, "2 items").unwrap_or_else(|| {
+    // The prompt row: the level's path, the provider and how long it took; the picker counts
+    // the items.
+    let info = row_with(&fx.harness.app, "Packages · ").unwrap_or_else(|| {
         panic!("no info row: {:#?}", screen_rows(&fx.harness.app));
     });
-    assert!(info.contains("workspace symbols (path query)"), "{info}");
+    assert!(info.contains("Packages · path query · "), "{info}");
     assert!(info.contains(" ms"), "{info}");
+    assert!(info.contains("2/2"), "{info}");
 
     // `j` moves; the preview shows the docs of the selected item (a hover at its place).
     fx.harness.keys("j").await?;
@@ -1646,8 +1711,9 @@ async fn api_browse_picker_end_to_end() -> anyhow::Result<()> {
         })
         .await;
 
-    // `Enter` on a node without a place opens it: Packages, then geo.
-    fx.harness.keys("jj<ret>").await?;
+    // `Enter` on a node without a place opens it. Going back selected Packages, the root we
+    // came from.
+    fx.harness.keys("<ret>").await?;
     fx.harness
         .until("Enter opened Packages", |app| screen_contains(app, "serde"))
         .await;
@@ -1660,7 +1726,10 @@ async fn api_browse_picker_end_to_end() -> anyhow::Result<()> {
                 .is_some_and(|path| path.ends_with("src/shapes.rs"))
         })
         .await;
-    assert!(!screen_contains(&fx.harness.app, "serde"), "the picker is closed");
+    assert!(
+        !screen_contains(&fx.harness.app, "serde"),
+        "the picker is closed"
+    );
     {
         let doc = doc!(fx.harness.app.editor);
         let view = vortex_view::view!(fx.harness.app.editor);
@@ -1676,11 +1745,15 @@ async fn api_browse_picker_end_to_end() -> anyhow::Result<()> {
         .await;
     fx.harness.keys("jjl").await?;
     fx.harness
-        .until("the packages are listed", |app| screen_contains(app, "serde"))
+        .until("the packages are listed", |app| {
+            screen_contains(app, "serde")
+        })
         .await;
     fx.harness.keys("l").await?;
     fx.harness
-        .until("geo's items are listed", |app| screen_contains(app, "Shape"))
+        .until("geo's items are listed", |app| {
+            screen_contains(app, "Shape")
+        })
         .await;
     // `util` (a module of src/lib.rs), `Circle`, `Shape`: the third.
     fx.harness.keys("jj<ret>").await?;
@@ -1690,7 +1763,8 @@ async fn api_browse_picker_end_to_end() -> anyhow::Result<()> {
             let doc = doc!(app.editor);
             let text = doc.text();
             let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
-            doc.path().is_some_and(|path| path.ends_with("src/shapes.rs"))
+            doc.path()
+                .is_some_and(|path| path.ends_with("src/shapes.rs"))
                 && text.char_to_line(cursor) == 4
         })
         .await;
@@ -1701,7 +1775,10 @@ async fn api_browse_picker_end_to_end() -> anyhow::Result<()> {
         let selected: String = range.fragment(doc.text().slice(..)).into();
         assert_eq!(selected, "Shape");
     }
-    assert!(!screen_contains(&fx.harness.app, "Packages"), "the picker is closed");
+    assert!(
+        !screen_contains(&fx.harness.app, "Packages"),
+        "the picker is closed"
+    );
 
     // `Esc` closes the picker.
     fx.harness.keys(":api-browse<ret>").await?;
@@ -1710,31 +1787,39 @@ async fn api_browse_picker_end_to_end() -> anyhow::Result<()> {
         .await;
     fx.harness.keys("<esc>").await?;
     fx.harness
-        .until("the picker is closed", |app| !screen_contains(app, "Codebase"))
+        .until("the picker is closed", |app| {
+            !screen_contains(app, "Codebase")
+        })
         .await;
     fx.finish().await
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn api_browse_says_why_it_cannot_open() -> anyhow::Result<()> {
+async fn api_browse_in_a_scratch_buffer_shows_an_error() -> anyhow::Result<()> {
     // A scratch buffer has no language.
     let mut harness = Harness::new(AppBuilder::new().with_config(test_config()))?;
     harness.keys(":api-browse<ret>").await?;
     harness
         .until("the error is shown", |app| {
-            app.editor.get_status().is_some_and(|(message, _)| {
-                message.to_string().starts_with("API browser:")
-            })
+            app.editor
+                .get_status()
+                .is_some_and(|(message, _)| message.starts_with("API browser:"))
         })
         .await;
     assert!(
-        harness.errors.iter().any(|error| error.starts_with("API browser:")),
+        harness
+            .errors
+            .iter()
+            .any(|error| error.starts_with("API browser:")),
         "{:?}",
         harness.errors
     );
     assert!(!screen_contains(&harness.app, "Codebase"));
-    harness.finish().await?;
+    harness.finish().await
+}
 
+#[tokio::test(flavor = "multi_thread")]
+async fn api_browse_without_a_running_language_server_shows_an_error() -> anyhow::Result<()> {
     // A Rust file whose language server is not running (the tests' default turns them off).
     let ws = Workspace::new();
     let mut harness = Harness::new(
@@ -1745,11 +1830,19 @@ async fn api_browse_says_why_it_cannot_open() -> anyhow::Result<()> {
     harness.keys(":api-browse<ret>").await?;
     harness
         .until("the error is shown", |app| {
-            app.editor.get_status().is_some_and(|(message, _)| {
-                message.to_string().starts_with("API browser: no language server")
-            })
+            app.editor
+                .get_status()
+                .is_some_and(|(message, _)| message.starts_with("API browser: no language server"))
         })
         .await;
+    assert!(
+        harness
+            .errors
+            .iter()
+            .any(|error| error.starts_with("API browser: no language server")),
+        "{:?}",
+        harness.errors
+    );
     assert!(!screen_contains(&harness.app, "Codebase"));
     harness.finish().await
 }
