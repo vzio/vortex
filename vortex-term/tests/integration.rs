@@ -29,6 +29,7 @@ mod test {
     #[allow(dead_code)]
     mod fake_lsp;
     mod git_log;
+    mod goto_word;
     mod hex_view;
     mod history;
     mod hunks;
