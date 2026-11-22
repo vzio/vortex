@@ -116,7 +116,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | The status line rule | `vortex-term/tests/status_line_guard.rs` (the test that keeps key hints out of it) |
 | The mode bar | `vortex-term/src/modes.rs` (which mode is on, leaving it, `restore_editing`, the mode's screen), `vortex-term/tests/test/modes.rs`, `vortex-term/src/ui/modebar.rs` (segments, the layout and its truncation, badges, the mouse), `Layer`, `Keymaps::layer_get` and `layer_reverse_map` in `vortex-term/src/keymap.rs`, `layers()` in `vortex-term/src/keymap/default.rs`, `RawKeys` in `vortex-term/src/config.rs` (`[keys.watch]`, `[keys.debug]`), debug mode's bar in `vortex-term/src/debug/bar.rs` |
 | Menus and key help | the `["group"]` form of `keymap!` in `vortex-term/src/keymap/macros.rs`, `KeyTrieNode::groups` and `grouped_infobox` in `vortex-term/src/keymap.rs`, `Info::grouped` in `vortex-view/src/info.rs`, `vortex-term/src/ui/keyhelp.rs` (the `?` overlay), `with_help`, `key_help`, `without_header` and `with_info` in `vortex-term/src/ui/picker.rs`, `vortex-term/tests/test/menus.rs` |
-| The command palette's recent commands | `Editor::recent_commands` and `remember_command` in `vortex-view/src/editor.rs`, `with_tie_rank` in `vortex-term/src/ui/picker.rs`, `palette_key` and `command_palette` in `vortex-term/src/commands.rs`, `vortex-term/tests/test/palette.rs` |
+| The command palette's recent commands | `Editor::recent_commands` and `remember_command` in `vortex-view/src/editor.rs`, `with_tie_rank` and `with_after_close` in `vortex-term/src/ui/picker.rs`, `palette_key` and `command_palette` in `vortex-term/src/commands.rs`, `vortex-term/tests/test/palette.rs` |
 | Diff view | `vortex-term/src/ui/diff_view.rs`, `vortex-term/src/commands/diff_view.rs` |
 | Hunk actions, `n`/`N` across files | `vortex-term/src/commands/hunks.rs` (stage, unstage, revert), `vortex-vcs/src/staging.rs` (the texts of the index and of the working tree after an action), `vortex-vcs/src/git/stage.rs` (reading and writing one entry of the index), the `Actions` and `FileNav` of the diff view, `base` of `:practice` exercises, `vortex-term/tests/test/hunks.rs` |
 | Commit log | `vortex-term/src/commands/git_log.rs` (also the background reading of a commit's changes), `vortex-vcs/src/commit.rs`, `vortex-vcs/src/git/log.rs`, `range_changes` and `for_each_range_file` in `vortex-vcs/src/git.rs` (the files of a commit or range, read with one repository open) |
@@ -137,7 +137,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Dashboard | `vortex-term/src/dashboard.rs` (when it is up, its keys), `vortex-term/src/dashboard/` (`stats.rs` the background reading, `languages.rs` the line counts, `render.rs` the layout and the panels, `timeline.rs` when things move, `title.rs` the title, `vortex.rs` the vortex, `charset.rs` blocks or ASCII, `wrap.rs` long values on two rows, `snapshots/` the drawings the tests compare with), `vortex-vcs/src/git/summary.rs` (the git summary), `vortex-term/tests/test/dashboard.rs` |
 | Worktrees | `vortex-term/src/commands/worktrees.rs` (the `:worktrees` picker: its rows, columns, background jobs and `Enter`), `vortex-vcs/src/git/summary.rs` (the worktrees, missing ones flagged; `Repo::status`, the last modified time; `Repo::dated_worktrees`; `Worktree::details`), `vortex-stdx/src/time.rs` (`format_ago`), the dashboard's worktree rows and `t` in `vortex-term/src/dashboard/`, `vortex-term/tests/test/worktrees.rs` |
 | Watch mode | `vortex-view/src/watch.rs` (the session: the baseline, the files and hunks numbered in the order they changed, following, `n`/`N`, the new count), `vortex-term/src/watch.rs` (`:watch` and the other commands, the keys of the mode, reading the changed files on the watcher's thread, following, the flash, which commands are held, the mode bar's rows, the statusline element, the `:watch-changes` picker), `RepoWatch::start_tapped` in `vortex-term/src/live.rs`, the session's gutter markers in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/watch.rs` |
-| History and bookmarks | `vortex-view/src/history.rs` (what records a jump, `Editor::record_jump`, the places of a view, walking), `vortex-view/src/bookmarks.rs` (the bookmarks of a buffer, mapped through its changes; the closed files' bookmarks; the ring), `vortex-term/src/history.rs` (`ga`, `gA` and its sticky state, showing a screen again, the bookmark commands and picker), the `bookmarks` gutter in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/history.rs` |
+| History and bookmarks | `vortex-view/src/history.rs` (what records a jump, `Editor::record_jump`, the places of a view, walking), `vortex-view/src/bookmarks.rs` (the bookmarks of a buffer, mapped through its changes; the closed files' bookmarks; the ring), `vortex-term/src/history.rs` (`ga`, the forward step, the history picker, showing a screen again, the bookmark commands and picker), the `bookmarks` gutter in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/history.rs` |
 | The vortex theme | `theme.toml` (the theme), `helix_theme.toml` (upstream's default theme), the built-in themes in `vortex-view/src/theme.rs` |
 | Theme effects | `vortex-view/src/effects.rs` (the `[effects]` table: parsing, validation, inheritance), `vortex-term/src/ui/glitch.rs` (the glitch and its wake-ups), `vortex-term/src/dashboard/charset.rs` (blocks or the measured ASCII ramp), `vortex-term/src/terminal/phosphor.rs` (the phosphor filter), the glitch over error diagnostics in `vortex-term/src/ui/text_decorations/diagnostics.rs` (where the ghost text of errors is) and `glitch_diagnostics` in `vortex-term/src/ui/editor.rs` |
 | The Matrix theme | `matrix_theme.toml` (the theme and its effects), built in by `vortex-view/src/theme.rs`, `vortex-view/src/contrast_tests.rs` (the contrast test) |
@@ -313,16 +313,17 @@ History and bookmarks change core files: the jumplist in `vortex-view/src/view.r
 `View::history` (`View::push_jump` is gone); `Editor::switch` records a buffer switch and the old
 `Editor::jump_forward`/`jump_backward` are gone, `jump_to` shows a history place, `new_document` and
 `close_document` hand a file's bookmarks over (`vortex-view/src/editor.rs`, with the fields
-`screen_cover`, `history_paused`, `history_menu`, `bookmark_state`); `Document::bookmarks`, mapped in
+`screen_cover`, `history_paused`, `bookmark_state`); `Document::bookmarks`, mapped in
 `apply_impl` (`vortex-view/src/document.rs`); the recording calls in `commands.rs` (`jump_from` and
 `record_jump` where `push_jump` was, `n`/`N`), `commands/lsp.rs`, `commands/typed.rs` (`:<line>`),
 `ui/mod.rs` (a search prompt; `regex_prompt` says what its prompt records); `Picker::pick` and
-`without_jumps` (the command palette) in `ui/picker.rs`; the sticky state and the dashboard as a
-screen in `ui/editor.rs`; `ga`/`gA`, leaving and coming back in `ui/diff_view.rs`;
+`without_jumps` (the command palette) in `ui/picker.rs`; the dashboard as a screen in
+`ui/editor.rs`; `ga`/`gA`, leaving and coming back in `ui/diff_view.rs`;
 `Compositor::pop_to_editor`; `ga`/`gA` in the hex view (`commands/hex.rs`); entering the debug panel
 (`debug/panel.rs`) and the debugger's stops not recording (`handlers/dap.rs`); the opening of each
 diff (`commands/diff_view.rs`); the keys in `keymap/default.rs`; `ui.gutter.bookmark` in both
-themes. With watch mode: its command lists (`vortex-term/src/watch.rs`) know the new commands, and
+themes. With watch mode: its command lists (`vortex-term/src/watch.rs`) know the new commands
+(`history_back`, `history_forward`, `history_picker`), and
 its following and `n`/`N` run without recording.
 
 The mode bar changes core files: `EditorView::render` takes its rows from the bottom of the editor's
@@ -3419,22 +3420,32 @@ with `Ctrl-s`. It records so much that `Ctrl-o` can't be trusted. This fork spli
 
 ### History
 
-`ga` goes back to where the last jump left, and pressing it again returns: `ga ga` is where you
-were. `gA` steps one place back and leaves the `g` menu open in a small sticky state (its infobox
-says `A back · a forward · Esc done`):
+`ga` goes one place back each time you press it, and a count goes further (`3ga`): `ga ga ga`
+visits the last three places jumped from, newest to oldest. There is no toggle: to get back where
+you were, go forward again. `gA` opens the history picker.
 
 | Key | Does |
 | --- | --- |
-| `ga` | Back to the last place jumped from; again, back where you were. After a walk with `gA`, back to where the walk started, like `cd -` |
-| `gA` | One place back, then the sticky state |
-| `A` | (sticky) One more place back: `gAAA` is back three |
-| `a` | (sticky) One place forward: `gAAAa` is back three, forward one |
-| `Esc` | (sticky) Closes the state |
-| any other key | Closes the state and does what it always does: `gAAAj` is back three, then down a line |
+| `ga` | One place back in the history; a count goes that many back. At the oldest place it says so |
+| `history_forward` (no key) | One place forward after `ga`; the last step forward is where the walk started. In the command palette (`Space ?`); bind it to a key in `config.toml` if you want one |
+| `gA` | The history picker: the places of this view, newest first |
 
-A count repeats `ga` and `gA` (`3gA`). Walking back records where the walk starts, the present,
-so `a` and `ga` can return to it; making a new jump from somewhere in the middle of a walk drops
-the places ahead, as an edit drops the redo history. Each split has its own history, as each had
+**The history picker** lists the focused view's places, newest first, in three columns: a mark,
+`file:line` (the path relative to the working directory) and the text of the line. A screen is
+listed by name: `the dashboard`, `the vortex`, `a diff`, `the debug panel`. When you are not
+walking, the first row is the present, where you are, marked `●`; when you are, the row where the
+walk is, is marked `●` (the walk's start is the newest row). The preview shows the place's file
+at its line. It is modal like the fork's other lists: it opens in normal mode on the marked row,
+`j`/`k` move, `s` filters, `?` lists the keys. `Enter` goes to the place, `Esc` closes it. `Enter`
+on the present does nothing. Opened over a diff (`gA` there), `Enter` leaves the diff, as `ga`
+does. With no places yet, `gA` says `No jumps yet` and opens nothing. The hex view's `ga` and `gA`
+do the same as the editor's.
+
+Going to a place from the picker moves the history's position there, as walking back to it with
+`ga` would, and records no new jump: `ga` goes on from there, and the forward step returns toward
+the present. Walking back records where the walk starts, the present, so the forward step and
+the picker can return to it; making a new jump from somewhere in the middle of a walk drops the
+places ahead, as an edit drops the redo history. Each split has its own history, as each had
 its own jumplist (a new split of the same buffer starts with a copy): the places in one window
 are what that window went through. A history keeps 30 places, the oldest go first; the place
 of a closed buffer goes with it.
@@ -3475,15 +3486,15 @@ and switching windows. A jump that lands on the line it left records nothing, an
 and line as the last one recorded replaces it rather than adding a second one.
 
 **Screens are places.** `ga` from a file opened from a diff (`Enter`) comes back to the diff, as
-it was (its scroll, its hunk), read again in case the file changed; `ga` or `gA` in the diff
-leaves it for the place before. `ga` from a file opened from the dashboard brings the dashboard
-back (over a new empty buffer; the one left behind is closed). `ga` back to the debug panel
-focuses it, while a session runs. Pickers are not places: the result picked is the jump, and a
-picker, its query and its scroll are never brought back: leaving a diff by history also closes
-the pickers it was opened from.
+it was (its scroll, its hunk), read again in case the file changed; `ga` in the diff leaves it for
+the place before, and so does `Enter` on a place of the picker opened there with `gA`. `ga` from a
+file opened from the dashboard brings the dashboard back (over a new empty buffer; the one left
+behind is closed). `ga` back to the debug panel focuses it, while a session runs. Pickers are not
+places: the result picked is the jump, and a picker, its query and its scroll are never brought
+back: leaving a diff by history also closes the pickers it was opened from.
 
-The hex view takes `ga` and `gA` from its own `g` keys. In the debug panel, which takes its keys
-first, they do nothing: history goes on from wherever `Esc` (or `Ctrl-g`) drops you.
+The hex view takes `ga` and `gA` from its own `g` keys, and they do what the editor's do. In the
+debug panel, which takes its keys first, they do nothing: history goes on from wherever `Esc` (or `Ctrl-g`) drops you.
 
 ### Bookmarks
 
@@ -3536,10 +3547,20 @@ screen" is this: screens are places.
 
 ### Decisions
 
-- **`gA`'s sticky state is the editor's, not the keymap's.** A sticky keymap node (like `Z`)
-  can't take a step as it opens, and an unknown key in it does nothing instead of running as
-  usual. So `A`, `a` and `Esc` are fixed keys while the state is open, taken before anything
-  else (the dashboard, the hex view, a diff on top).
+- **The picker's `Enter` records no jump.** Going to a place of the history is history's own step,
+  like `ga`: it moves the position in the walk (the present is recorded as where the walk
+  started, once) and leaves the places as they are. The picker itself doesn't record the pick as
+  other pickers do (`without_jumps`, as the command palette).
+- **The present is a row of its own** while you are not walking, first and marked, so that the
+  list shows where you are against the places you left; `Enter` on it does nothing, as there is
+  nowhere to go. While walking, the mark is on the walk's row instead and there is no present
+  row: the walk's start is the newest place.
+- **Screens are listed by name** (`the dashboard`, `a diff`...), with no line text and no
+  preview, as they have no line to show.
+- **`history_forward` has no key**: going forward is rare next to `ga` and the picker (which
+  reaches any place). It is a command of the palette, which now runs the callbacks a command
+  leaves for the compositor once it has closed (`Picker::with_after_close`): before, commands
+  that open or step through something did nothing from it.
 - **The recording rule is a kind per call site** (`Jump::Goto`, `Search`, `FileEdge`...), and
   `records` decides which kinds record: the call sites of the old `push_jump` stayed where they
   were, each now says what it is, and the motions that used to record (`]f`, `gw`, `g|`) say so
@@ -3556,9 +3577,9 @@ screen" is this: screens are places.
 - **A bookmark is a line**, stored as the start of the line: text typed at the very start of the
   line, or a line opened above it, leaves it on its line. Of two bookmarks joined onto one line
   (`J`), the older stays.
-- **In watch mode**, `ga`, `gA`, `C-i`, `C-o` and `space j` do nothing until `Esc` leaves watch
-  mode, as opening a file yourself does (also from the keys that bypass the keymap: the sticky
-  state, the hex view, a diff); `C-s` changes nothing.
+- **In watch mode**, `ga`, `gA`, `history_forward`, `C-i`, `C-o` and `space j` do nothing until
+  `Esc` leaves watch mode, as opening a file yourself does (also from the keys that bypass the
+  keymap: the hex view, a diff on top); `C-s` changes nothing.
 - **`Ctrl-x` removes a bookmark** in the picker: no picker or prompt key uses it.
 - **`◆`** marks the bookmarks past the ninth; numbers are drawn in `ui.gutter.bookmark`, bold
   purple in the vortex theme, bold honey in upstream's.

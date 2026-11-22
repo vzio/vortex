@@ -150,18 +150,24 @@
  through the text around the cursor (hjkl w b f } % gt...) never
  counts, so history stays short enough to trust.
 
-  ga             back to where the last jump left, and again to
-                 return: ga ga is where you were
-  gA             one step further back each time; then A goes on
-                 back, a forward, Esc stops, any other key stops
-                 and does what it always does
+  ga             back to where the last jump left; again, one
+                 jump further back each time (3ga goes back
+                 three)
+  gA             the history picker: your jumps in a list, the
+                 newest first, the present marked with a dot
+                 (j and k move, s filters, ? lists the keys);
+                 Enter goes there, Esc closes it
 
- After a walk with gA, ga returns to where the walk started.
- Jumping somewhere new from the middle of a walk forgets the
- steps ahead of it, like an edit after u forgets the redo.
+ Going forward again after ga is the history_forward command: it
+ has no key, find it in the command palette (space ?). The last
+ step forward is where the walk started. Jumping somewhere new
+ from the middle of a walk forgets the steps ahead of it, like
+ an edit after u forgets the redo. Going somewhere from gA is
+ not a new jump: it only moves your place in the history.
 
  Try it: in code with a language server, gd twice into other
- files (or :o two files of your own), then gAAA, a, and ga.
+ files (or :o two files of your own), then ga ga, and gA to
+ pick a place from the list.
 
  Bookmarks are places you set yourself and keep coming back to:
  a working set across files, in the order you set them.

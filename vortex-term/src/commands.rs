@@ -3794,6 +3794,11 @@ pub fn command_palette(cx: &mut Context) {
                 ui::PickerColumn::new("doc", |item: &MappableCommand, _| item.doc().into()),
             ];
 
+            // what the command asks of the compositor (a picker to open, a step through history)
+            // runs once the palette has closed
+            let pending: std::rc::Rc<std::cell::RefCell<Vec<compositor::Callback>>> =
+                Default::default();
+            let queue = pending.clone();
             let picker = Picker::new(columns, 0, commands, keymap, move |cx, command, _action| {
                 let mut ctx = Context {
                     register,
@@ -3807,6 +3812,7 @@ pub fn command_palette(cx: &mut Context) {
 
                 ctx.editor.remember_command(&palette_key(command));
                 command.execute(&mut ctx);
+                queue.borrow_mut().append(&mut ctx.callback);
 
                 if ctx.editor.tree.contains(focus) {
                     let config = ctx.editor.config();
@@ -3823,6 +3829,7 @@ pub fn command_palette(cx: &mut Context) {
             })
             // its commands record their own jumps (this fork: history)
             .without_jumps()
+            .with_after_close(pending)
             .with_tie_rank(move |command| {
                 recent
                     .get(&palette_key(command))

@@ -302,7 +302,10 @@ pub fn open_history_picker(compositor: &mut Compositor, editor: &mut Editor, her
     .without_jumps()
     .with_help(
         "History",
-        vec![("history", vec![("Enter", "go there"), ("ga", "(outside) one back")])],
+        vec![(
+            "history",
+            vec![("Enter", "go there"), ("ga", "(outside) one back")],
+        )],
     )
     .with_initial_cursor(cursor)
     .with_preview(|_editor, row: &HistoryRow| {
@@ -315,7 +318,12 @@ pub fn open_history_picker(compositor: &mut Compositor, editor: &mut Editor, her
 /// Goes to the place at `index` of the focused view's history from `here` (a screen already off
 /// the compositor, `None` for the editor's place), moving the walk's position there, without
 /// recording a jump.
-fn go_to_place(compositor: &mut Compositor, editor: &mut Editor, index: usize, here: Option<Place>) {
+fn go_to_place(
+    compositor: &mut Compositor,
+    editor: &mut Editor,
+    index: usize,
+    here: Option<Place>,
+) {
     let left = here.clone();
     let here = here.unwrap_or_else(|| editor.place());
     match editor.history_go_to(index, here.clone()) {

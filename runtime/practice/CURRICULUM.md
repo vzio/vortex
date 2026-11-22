@@ -118,7 +118,7 @@ How to get somewhere without counting lines or columns:
 - the changes since the last commit (this fork's diff view): `<space>=` shows them, `n` and `N`
   jump between its hunks as between matches, and `r` reverts a hunk, as an edit `u` undoes.
 
-The rest of history (`gA`), bookmarks (`<C-s>`, `<C-i>`, `<C-o>`, the `<space>j` picker), `12G`
+The history picker (`gA`), bookmarks (`<C-s>`, `<C-i>`, `<C-o>`, the `<space>j` picker), `12G`
 for line 12 and `g.` for the last change are explained in `:tutor`, with the rest of moving
 around files.
 
