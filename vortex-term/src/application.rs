@@ -310,6 +310,17 @@ impl Application {
 
         // TODO: need to recalculate view tree if necessary
 
+        // the focused buffer's language's theme (this fork), but the screens keep the main one
+        let screen = self
+            .compositor
+            .find_id::<crate::ui::diff_view::DiffView>(crate::ui::diff_view::ID)
+            .is_some()
+            || self
+                .compositor
+                .find::<crate::ui::EditorView>()
+                .is_some_and(|view| view.has_dashboard(cx.editor));
+        cx.editor.sync_language_theme(screen);
+
         let surface = self.terminal.current_buffer_mut();
 
         self.compositor.render(area, surface, &mut cx);

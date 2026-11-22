@@ -226,6 +226,11 @@ impl EditorView {
     }
 
     /// The dashboard, if it is still up; it is dropped as soon as it isn't.
+    /// Whether the dashboard is up (this fork): a screen, which keeps the main theme.
+    pub fn has_dashboard(&mut self, editor: &Editor) -> bool {
+        self.live_dashboard(editor).is_some()
+    }
+
     fn live_dashboard(&mut self, editor: &Editor) -> Option<&crate::dashboard::Dashboard> {
         if self
             .dashboard

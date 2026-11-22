@@ -1135,6 +1135,25 @@ fn force_cquit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
     quit_all_impl(cx, true)
 }
 
+/// `:language-themes` (this fork): the languages' themes back on after an explicit `:theme`, or
+/// off.
+fn language_themes(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let on = cx.editor.toggle_language_themes();
+    cx.editor.set_status(if on {
+        "Language themes on"
+    } else {
+        "Language themes off"
+    });
+    Ok(())
+}
+
 fn theme(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     let true_color = cx.editor.config.load().true_color || crate::true_color();
     match event {
@@ -1149,6 +1168,10 @@ fn theme(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
                 if let Ok(theme) = cx.editor.theme_loader.load(theme_name) {
                     if !(true_color || theme.is_16_color()) {
                         bail!("Unsupported theme: theme requires true color support");
+                    }
+                    // a preview starts from the main theme, not a language's (this fork)
+                    if cx.editor.last_theme.is_none() {
+                        cx.editor.restore_main_theme();
                     }
                     cx.editor.set_theme_preview(theme)?;
                 };
@@ -1165,6 +1188,9 @@ fn theme(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
                     bail!("Unsupported theme: theme requires true color support");
                 }
                 cx.editor.set_theme(theme)?;
+                // an explicit theme overrides the languages' themes (this fork) until
+                // `:language-themes` or quitting
+                cx.editor.language_themes.overridden = true;
             } else {
                 let name = cx.editor.theme.name().to_string();
 
@@ -3674,9 +3700,20 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
+        name: "language-themes",
+        aliases: &[],
+        doc: "Turn the languages' themes (`theme` in languages.toml) back on after a :theme, or off.",
+        fun: language_themes,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
         name: "theme",
         aliases: &[],
-        doc: "Change the editor theme (show current theme if no name specified).",
+        doc: "Change the editor theme (show current theme if no name specified). It overrides the languages' themes until :language-themes.",
         fun: theme,
         completer: CommandCompleter::positional(&[completers::theme]),
         signature: Signature {

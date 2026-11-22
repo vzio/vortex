@@ -1693,6 +1693,8 @@ pub struct Editor {
     /// The currently applied editor theme. While previewing a theme, the previewed theme
     /// is set here.
     pub theme: Theme,
+    /// The languages' themes (this fork): the main theme while one is shown, the themes loaded.
+    pub language_themes: crate::language_theme::LanguageThemes,
 
     /// The primary Selection prior to starting a goto_line_number preview. This is
     /// restored when the preview is aborted, or added to the jumplist when it is
@@ -1846,6 +1848,7 @@ impl Editor {
             syn_loader,
             theme_loader,
             last_theme: None,
+            language_themes: Default::default(),
             last_selection: None,
             screen_cover: None,
             history_paused: false,
@@ -2021,6 +2024,8 @@ impl Editor {
             ThemeAction::Set => {
                 self.last_theme = None;
                 self.theme = theme;
+                // the main theme now (this fork): a language's theme goes on top of it again
+                self.language_themes.main_set();
             }
         }
 
@@ -2028,6 +2033,15 @@ impl Editor {
         self.config_events.0.send(ConfigEvent::ThemeChanged)?;
 
         Ok(())
+    }
+
+    /// The theme was swapped for a language's, or back (this fork): the same updates as
+    /// [`Editor::set_theme`], without touching the main theme.
+    pub(crate) fn theme_swapped(&mut self) {
+        let scopes = self.theme.scopes();
+        (*self.syn_loader).load().set_scopes(scopes.to_vec());
+        self._refresh();
+        let _ = self.config_events.0.send(ConfigEvent::ThemeChanged);
     }
 
     #[inline]
