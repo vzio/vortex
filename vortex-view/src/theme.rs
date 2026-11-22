@@ -1096,7 +1096,10 @@ mod tests {
         assert_eq!(effects.dashboard_logo, DashboardLogo::Classic);
         assert!(effects.glitch_logo > effects.glitch_background);
         assert!(effects.glitch_background > 0.0);
-        assert_eq!(effects.glitch_diagnostics, 0.01);
+        // the title glitches a tenth as often as it first did (0.6), the diagnostics twice
+        assert_eq!(effects.glitch_logo, 0.06);
+        assert_eq!(effects.glitch_background, 0.004);
+        assert_eq!(effects.glitch_diagnostics, 0.02);
         assert!(effects.terminal_phosphor.is_some());
         assert!(theme.try_get_exact("effects").is_none());
     }
