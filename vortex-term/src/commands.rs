@@ -572,7 +572,7 @@ impl MappableCommand {
         watch_next_change, "Watch mode: the next change (the newest follows again)",
         watch_prev_change, "Watch mode: the previous change",
         watch_changes, "Watch mode: the picker of the session's changes",
-        watch_leave, "Leave watch mode, to edit where you are",
+        watch_leave, "Leave watch mode, to edit where you are (the session goes on recording)",
         rotate_view, "Goto next window",
         rotate_view_reverse, "Goto previous window",
         hsplit, "Horizontal bottom split",

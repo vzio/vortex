@@ -12,9 +12,11 @@
 //!   cursor, drawn as in select mode, moves and searches freely while new changes are only
 //!   counted; `v` again (or `n` up to the newest change) follows again.
 //! - Keys that would edit or open something else wait: the bar says that `Esc` leaves watch mode
-//!   first. A typed command other than the watch commands and `:goto` leaves it. The session's
-//!   changes stay (gutter markers, `n`/`N`, `:watch-changes`) until the next watch or
-//!   `:watch-clear`.
+//!   first. A typed command other than the watch commands and `:goto` leaves it.
+//! - Leaving watch mode (`Esc`, `:watch`, a typed command, debug mode) keeps the session: it goes
+//!   on recording the changes (markers) without following them, and `:watch` enters it again
+//!   where it was, following or looking around. `:watch-stop` stops it for good; its changes stay
+//!   (gutter markers, `n`/`N`, `:watch-changes`) until the next watch or `:watch-clear`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -33,7 +35,7 @@ use vortex_view::{
     editor::{Action, ChangesConfig},
     events::DocumentDidOpen,
     graphics::{Color, Modifier, Style},
-    watch::{Baseline, FileKind, FileUpdate, Flash, HunkLines, Quiet, Session, Target, Wrapped},
+    watch::{Baseline, FileKind, FileUpdate, Flash, HunkLines, Quiet, Session, Step, Target},
     Editor, Theme,
 };
 
@@ -66,13 +68,42 @@ fn display(path: &Path) -> String {
     vortex_stdx::path::fold_home_dir(path).display().to_string()
 }
 
-/// `:watch`: starts watch mode, or ends it when it is on.
+/// `:watch` (and the dashboard's `w`): enters watch mode, resuming the session left with `Esc`
+/// if there is one, else starting one; leaves it when it is on (the session goes on recording).
 pub fn toggle(editor: &mut Editor) -> anyhow::Result<()> {
-    if let Some(count) = end(editor) {
-        editor.set_status(ended_message(count));
+    if editor.watch.is_active() {
+        leave_mode(editor);
+        Ok(())
+    } else if editor.watch.live().is_some() {
+        resume(editor);
         Ok(())
     } else {
         start(editor)
+    }
+}
+
+/// Enters watch mode again in the session left with `Esc`: where you were, following or looking
+/// around as you were; the changes made meanwhile are counted as new.
+fn resume(editor: &mut Editor) {
+    // one mode at a time
+    crate::debug::mode::leave(editor);
+    let Some(session) = editor.watch.live() else {
+        return;
+    };
+    session.resume();
+    let new = session.new_count();
+    session.activity = Some(match new {
+        0 => "back: nothing changed meanwhile".to_string(),
+        new => format!("back: {new} new change{} meanwhile", plural(new)),
+    });
+}
+
+/// Leaves watch mode, if it is on: the session goes on recording changes, without following
+/// them, until watch mode is entered again or the session is stopped.
+pub fn leave_mode(editor: &mut Editor) {
+    if let Some(session) = editor.watch.active() {
+        session.leave();
+        session.flash = None;
     }
 }
 
@@ -155,15 +186,16 @@ fn plural(count: usize) -> &'static str {
     }
 }
 
-/// Ends watch mode: the working tree is no longer watched. The changes stay. Returns the number
-/// of changes of the session, `None` when watch mode wasn't on.
-pub fn end(editor: &mut Editor) -> Option<usize> {
-    let session = editor.watch.active()?;
-    session.end();
+/// Stops the session for good (`:watch-stop`), watch mode on or left: the working tree is no
+/// longer watched. The changes stay. Returns the number of changes of the session, `None` when
+/// no session was watching.
+pub fn stop(editor: &mut Editor) -> Option<usize> {
+    let session = editor.watch.live()?;
+    session.stop();
     Some(session.change_count())
 }
 
-/// The result of `:watch-stop` (and `:watch` ending it) for the status line: short.
+/// The result of `:watch-stop` for the status line: short.
 pub fn ended_message(count: usize) -> String {
     format!("Watch ended: {count} change{}", plural(count))
 }
@@ -269,12 +301,13 @@ fn read_updates(baseline: &Baseline, config: &ChangesConfig, paths: &[PathBuf]) 
 /// Takes in a batch of the session `id`, on the main thread, after the open buffers of the
 /// changed files were reloaded: marks their buffers, and follows the newest change.
 fn apply(editor: &mut Editor, id: u64, updates: Vec<FileUpdate>) {
-    let Some(session) = editor.watch.active().filter(|session| session.id == id) else {
+    let Some(session) = editor.watch.live().filter(|session| session.id == id) else {
         return;
     };
     let applied = session.apply(updates);
     let baseline = session.baseline.clone();
-    let following = session.following;
+    // out of watch mode (left with `Esc`) the changes are recorded, not followed
+    let following = session.active && session.following;
     for path in &applied.changed {
         if let Some(doc) = editor.document_by_path_mut(path) {
             if doc.watch_diff().is_none() {
@@ -423,29 +456,29 @@ pub(crate) fn jump(editor: &mut Editor, forward: bool) -> bool {
         let line = doc.selection(view.id).primary().cursor_line(text) as u32;
         (path, line)
     });
-    let Some((target, wrapped)) = session.step(cursor, forward) else {
-        if session.active {
-            editor.watch.session.as_mut().unwrap().activity =
-                Some("no changes yet this session".into());
+    let active = session.active;
+    let target = match session.step(cursor, forward) {
+        Some(Step::To(target)) => target,
+        // the notes are the bar's (out of watch mode, nothing moves and nothing is said)
+        step => {
+            let note = match step {
+                None if !active => return false,
+                None => "no changes yet this session",
+                Some(Step::AtNewest) => "at the newest change",
+                _ => "at the oldest change",
+            };
+            if active {
+                editor.watch.session.as_mut().unwrap().activity = Some(note.into());
+            }
             return true;
         }
-        return false;
     };
     go_to(editor, &target, Action::Replace);
     let Some(session) = editor.watch.session.as_mut() else {
         return true;
     };
-    // the notes are the bar's: once watch mode ended, the jump shows itself
     if session.went_to(&target) {
         session.activity = Some("at the newest change: following again".into());
-    } else {
-        match wrapped {
-            Wrapped::ToFirst => {
-                session.activity = Some("wrapped around to the first change".into())
-            }
-            Wrapped::ToLast => session.activity = Some("wrapped around to the last change".into()),
-            Wrapped::No => {}
-        }
     }
     true
 }
@@ -482,12 +515,14 @@ pub(crate) fn looking(editor: &Editor) -> bool {
         .is_some_and(|session| session.active && !session.following)
 }
 
-/// `Esc` in watch mode: leaves it, to edit where you are. Nothing is printed: the bar going away
-/// says it.
+/// `Esc` in watch mode: leaves it, to edit where you are; the session goes on recording, and
+/// `:watch` comes back to it. Nothing is printed: the bar going away says it.
 pub(crate) fn leave(editor: &mut Editor) {
-    if end(editor).is_none() {
+    if !editor.watch.is_active() {
         editor.set_error("watch mode is off");
+        return;
     }
+    leave_mode(editor);
 }
 
 /// What a command is to watch mode (and, through [`effect_of`], to debug mode).
@@ -697,9 +732,7 @@ pub(crate) fn before_typed(editor: &mut Editor, name: &str) {
     match name {
         "watch" | "watch-stop" | "watch-clear" | "watch-changes" => {}
         "goto" => session.pause(),
-        _ => {
-            end(editor);
-        }
+        _ => leave_mode(editor),
     }
 }
 
@@ -763,8 +796,9 @@ pub(crate) fn bar(editor: &Editor, keys: &ReverseKeymap) -> Option<modebar::Bar>
     if files > 0 {
         middle.push(format!("{files} file{}", plural(files)));
     }
+    // the changes not seen yet: while looking around, or made while watch mode was left
     let new = session.new_count();
-    if !session.following && new > 0 {
+    if new > 0 {
         middle.push(format!("{new} new"));
     }
     let activity = session.activity.clone().unwrap_or_default();

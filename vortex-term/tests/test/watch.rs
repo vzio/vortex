@@ -784,16 +784,19 @@ async fn n_and_n_go_through_the_changes_in_the_order_they_happened() {
     let mut session = Session::new();
     session.three_changes().await;
 
-    // n from the newest wraps around to the oldest and looks
+    // n at the newest change stays there (no wrap around), following goes on
     session.keys("n").await;
-    assert_eq!(focus(&session.app), at("a.txt", 1));
-    assert_eq!(session.activity(), "wrapped around to the first change");
-    assert!(!session.following());
+    assert_eq!(focus(&session.app), at("c.txt", 7));
+    assert_eq!(session.activity(), "at the newest change");
+    assert!(session.following());
     assert!(session.watching());
     session.assert_quiet("after n");
-    // the newest changes are counted as new again? no: they were seen when followed
     assert_eq!(session.new_count(), 0);
 
+    // N goes back to the oldest, looking
+    session.keys("NN").await;
+    assert_eq!(focus(&session.app), at("a.txt", 1));
+    assert!(!session.following());
     session.keys("n").await;
     assert_eq!(focus(&session.app), at("b.txt", 4));
     assert!(!session.following());
@@ -811,8 +814,13 @@ async fn n_and_n_go_through_the_changes_in_the_order_they_happened() {
     assert!(!session.following());
     session.keys("N").await;
     assert_eq!(focus(&session.app), at("a.txt", 1));
-    // N from the oldest wraps to the newest, which follows again
+    // N at the oldest change stays there
     session.keys("N").await;
+    assert_eq!(focus(&session.app), at("a.txt", 1));
+    assert_eq!(session.activity(), "at the oldest change");
+    assert!(!session.following());
+    session.assert_quiet("after N at the oldest change");
+    session.keys("nn").await;
     assert_eq!(focus(&session.app), at("c.txt", 7));
     assert!(session.following());
 

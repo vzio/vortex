@@ -340,8 +340,8 @@ before the count.
 
 The status line rule changes the fork's messages in the files that print them (the commit log,
 line history, the lists of changes, hunks, the diff view, the file tree, the hex view, the
-worktrees, bookmarks, files changed on disk, the debugger, practice); `:watch-stop` and `:watch`
-ending watch mode print `Watch ended: N changes`.
+worktrees, bookmarks, files changed on disk, the debugger, practice); `:watch-stop` prints
+`Watch ended: N changes`.
 
 The dashboard's startup changes core files: `dashboard` is a `DashboardStartup` (`"auto"`, `true`,
 `false`) in `vortex-view/src/editor.rs`, read by `Application::new` with `Args::plain` (`--plain`,
@@ -1723,8 +1723,9 @@ forward or back, jump to the next breakpoint, click on the timeline to seek.
 | `vx --debug [program] [-- args]` | Start in debug mode and launch the program (see [`vx --debug`](#vx---debug)) |
 | `Esc` | Leave debug mode. The session keeps running, paused or playing, and the panel stays as it is |
 
-One mode at a time: entering debug mode ends [watch mode](#watch-mode) (the changes it recorded
-stay), and `:watch` or `vx --watch` leaves debug mode. Without a session debug mode starts in view
+One mode at a time: entering debug mode leaves [watch mode](#watch-mode) as its `Esc` does (its
+session goes on recording, `:watch` comes back to it), and `:watch` or `vx --watch` leaves debug
+mode. Without a session debug mode starts in view
 mode (there is nothing to follow): set breakpoints, then `s` launches. When a session starts, the
 mode follows it.
 
@@ -3210,8 +3211,8 @@ while it is on, its keys come first, and its state and keys are on the [mode bar
 
 | Key or command | What it does |
 | --- | --- |
-| `:watch`, `vx --watch [folder]` | Start watch mode in the repository of the working directory (with a folder, in it). `:watch` again ends it. `:watch` is in the command palette (`space ?`), and `w` on the [dashboard](#dashboard) starts it |
-| `:watch-stop` | End watch mode. The session's changes stay: their markers, `n`/`N`, `:watch-changes` |
+| `:watch`, `vx --watch [folder]` | Start watch mode in the repository of the working directory (with a folder, in it). After `Esc`, `:watch` enters it again in the same session, where you were; while it is on, `:watch` leaves it like `Esc`. `:watch` is in the command palette (`space ?`), and `w` on the [dashboard](#dashboard) does the same |
+| `:watch-stop` | Stop the session for good, watch mode on or left: the working tree is no longer watched. The session's changes stay: their markers, `n`/`N`, `:watch-changes`; the next `:watch` starts a new session |
 | `:watch-clear` | Forget the session: the markers go, `n`/`N` search again |
 | `:watch-changes` | The picker of the session's changes (below) |
 
@@ -3220,9 +3221,9 @@ While watch mode is on, these keys come first (`[keys.watch]`, below):
 | Key | What it does |
 | --- | --- |
 | `v` | Look around: your own cursor, drawn as in select mode (`ui.cursor.select`), moves and searches freely while new changes are only counted. `v` again follows again, from the newest change |
-| `n`, `N` | The next, previous change of the session, across files, in the order they happened (newest last), around at the ends. Reaching the newest with `n` follows again; going to an older one looks around |
+| `n`, `N` | The next, previous change of the session, across files, in the order they happened (newest last). They stop at the newest and the oldest (the bar says `at the newest change`, `at the oldest change`; nothing wraps around). Reaching the newest with `n` follows again; going to an older one looks around |
 | `c` | The picker of the session's changes (`:watch-changes`) |
-| `Esc` | Leave watch mode, to edit where you are. The changes stay |
+| `Esc` | Leave watch mode, to edit where you are. The session goes on recording; `:watch` comes back to it |
 
 **Following.** When a file changes on disk (changes are merged until 200ms pass without one, at
 most a second, like the [live views](#uncommitted-changes-live)), its buffer is opened, or shown:
@@ -3240,16 +3241,23 @@ nothing in either state: the bar says that `Esc` leaves watch mode first. The co
 the palette, the [terminal panel](#terminal-panel) (`C-t`: an agent can run in the panel while
 its changes are followed above it) and setting a bookmark (`C-s`) work in both. A typed command
 is meant: `:goto` looks around, the watch commands keep watch mode, any other command (`:w`,
-`:open`, ...) leaves it first. Scrolling or clicking with the mouse looks around. The `space` and
+`:open`, ...) leaves it first (as `Esc` does: the session goes on). Scrolling or clicking with the mouse looks around. The `space` and
 other menus still open; a command picked in them is held like its key.
 
-**Other modes.** One mode at a time. Starting watch mode (`:watch`, `vx --watch`) leaves
-[debug mode](#debug-mode), and entering debug mode (`space G`) ends watch mode: the session's changes
-stay, as after `Esc`. A [debugger](#the-debugger) session keeps running either way.
+**Other modes.** One mode at a time. Starting or entering watch mode (`:watch`, `vx --watch`)
+leaves [debug mode](#debug-mode), and entering debug mode (`space G`) leaves watch mode as `Esc`
+does: the session goes on recording. A [debugger](#the-debugger) session keeps running either way.
 
-**Leaving.** `Esc` (or `:watch-stop`, `:watch`) leaves watch mode. The session's markers, `n`/`N`
-and `:watch-changes` stay until the next `:watch` or `:watch-clear`; the working tree is no longer
-watched, so they show the changes up to then.
+**Leaving and coming back.** `Esc` (or `:watch` while it is on, a typed command, debug mode)
+leaves watch mode: its keys and its bar go, and you edit where you are. The session goes on: the
+working tree is still watched and its changes recorded (their markers appear, `n`/`N` and
+`:watch-changes` reach them), but nothing is followed. `:watch` (or `w` on the dashboard) enters
+it again as it was: the change you were at, following or looking around as you were. The changes
+made meanwhile are new: the bar counts them (`· 3 new`, and `back: 3 new changes meanwhile` on the
+right) and `n` goes to them, from where you were; while following, the next change is followed as
+usual. `:watch-stop` stops the session for good: the working tree is no longer watched, and the
+markers, `n`/`N` and `:watch-changes` show the changes up to then, until the next `:watch` (a new
+session) or `:watch-clear`.
 
 **History and bookmarks.** Following and `n`/`N` through the session's changes are not
 [history](#history-and-bookmarks)'s jumps: the session has its own order and its picker, and
@@ -3286,9 +3294,11 @@ Watch mode's [mode bar](#the-mode-bar) has two rows:
 - row 1: the state on the left, `WATCH ● following` (`ui.modebar.state.following`) or `WATCH ◌
   looking` (`ui.modebar.state.looking`, both falling back to `ui.modebar.state`); in the middle the
   current change, its number and the count (`src/main.rs · 3/12 changes · 2 files`, and `· 3 new`
-  while looking around); on the right the latest activity: what was just followed, a file skipped
+  for the changes not seen yet: while looking around, or made while watch mode was left); on the
+  right the latest activity: what was just followed, a file skipped
   for its unsaved edits, a lockfile or binary file that changed (not followed), a held key, where
-  watch mode started and how many files were already uncommitted. Nothing of this goes to the
+  watch mode started and how many files were already uncommitted, an end reached by `n`/`N`, and
+  how many changes came while it was left. Nothing of this goes to the
   status line.
 - row 2: the key badges, from `[keys.watch]`, clickable: `v look` (`v follow` while looking around),
   `n next`, `N previous`, `c changes`, `Esc leave`.
@@ -3326,7 +3336,7 @@ session.
 **Hunks are numbered as they appear.** A hunk that is still there with the same lines keeps its
 place in the order when its file changes elsewhere; a new hunk, or one that grew, comes last. `n`
 goes on from the hunk under the cursor, or else from the one followed or gone to last; with neither,
-`n` goes to the oldest and `N` to the newest.
+`n` goes to the oldest and `N` to the newest. From the newest, `n` stays; from the oldest, `N` stays.
 
 ### Markers
 
@@ -3380,6 +3390,8 @@ that file; the others are still followed. Its markers compare the buffer with th
 - A rename is a deleted file and a created one.
 - Watch mode and the commit log's live views each have a watcher on the working tree when both are
   on.
+- A session left with `Esc` keeps its watcher until `:watch-stop`, `:watch-clear` or quitting;
+  nothing shows it is recording while watch mode is off but the markers that appear.
 - Following shows changes one batch at a time: in a burst over several files, only the newest is
   jumped to (the others are marked, and `n`/`N` reach them).
 

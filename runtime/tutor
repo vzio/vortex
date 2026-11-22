@@ -359,8 +359,11 @@
                  Keys don't stop it by accident: v looks around
                  with your own cursor (v again follows), n N go
                  through the changes in the order they happened
-                 (n to the newest follows again), c lists them,
-                 Esc leaves it to edit where you are
+                 (n to the newest follows again; they stop at
+                 both ends), c lists them, Esc leaves it to edit
+                 where you are. The session goes on recording:
+                 :watch again comes back where you were, and
+                 :watch-stop ends it for good
   space i        yank the diagnostic under the cursor; with
                  none, and blame on, the line's commit hash
 
