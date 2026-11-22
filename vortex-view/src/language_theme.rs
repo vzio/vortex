@@ -54,7 +54,8 @@ impl Editor {
             None
         } else {
             let doc = crate::doc!(self);
-            doc.language_config().and_then(|config| config.theme.clone())
+            doc.language_config()
+                .and_then(|config| config.theme.clone())
         };
         if wanted.as_deref() == self.language_themes.shown() {
             return;
@@ -67,10 +68,12 @@ impl Editor {
                     self.language_themes.main = Some(main);
                 }
                 self.language_themes.shown = wanted;
+                self.theme_swapped();
             }
+            // (a theme that failed to load: the main theme, which refreshes only if it was
+            // swapped out, not on every frame)
             None => self.restore_main_theme(),
         }
-        self.theme_swapped();
     }
 
     /// Shows the main theme again, if a language's is shown (a `:theme` preview starts from it).
