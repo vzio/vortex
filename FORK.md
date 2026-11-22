@@ -92,6 +92,7 @@ git blame FILE
 - [Inline git blame](#inline-git-blame)
 - [`x` on an empty line](#x-on-an-empty-line)
 - [Move lines](#move-lines)
+- [Soft wrap for Markdown](#soft-wrap-for-markdown)
 - [Terminal panel](#terminal-panel)
 - [The debugger](#the-debugger)
 - [API browser (in progress)](#api-browser-in-progress)
@@ -128,6 +129,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Inline blame | `vortex-vcs/src/git/blame.rs`, `vortex-vcs/src/git/blame/ignore_revs.rs`, `vortex-vcs/src/blame_stub.rs`, `vortex-vcs/benches/blame.rs`, `vortex-stdx/src/time.rs`, `vortex-view/src/blame.rs`, `vortex-term/src/handlers/blame.rs`, `vortex-term/src/commands/blame.rs`, `vortex-term/src/ui/text_decorations/blame.rs` |
 | `x` on an empty line | `vortex-term/src/handlers/line_select.rs` |
 | Move lines | `vortex-term/src/commands/move_lines.rs` |
+| Soft wrap for Markdown | the markdown entry of `languages.toml`, `vortex-term/tests/test/soft_wrap.rs` |
 | Terminal panel | `vortex-terminal/` (the shell: pty, emulator, OSC 133, bash/zsh integration), `vortex-view/src/terminal.rs` (panel state, `[editor.terminal]`), `vortex-term/src/terminal/` (drawing, focus, input encoding, the `vx` shim), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
 | API browser (in progress) | `vortex-term/src/api/` (`mod.rs` the browser: the tree, its tasks and their cancellation; `load.rs` the providers; `node.rs` the nodes; `temp.rs` temporary documents; `tags.rs` the tree-sitter skeleton; `picker.rs` `:api-browse`), `Client::cancellable_call` and `Client::set_config_overlay` in `vortex-lsp/src/client.rs`, `HiddenDocuments` in `vortex-lsp/src/lib.rs`, `vortex-term/tests/fake_lsp/main.rs` (a scripted fake language server), `vortex-term/tests/test/fake_lsp.rs`, `vortex-term/tests/test/api_browser.rs`, `vortex-term/tests/test/api_report.rs` (the measurements against real servers) |
@@ -1428,6 +1430,22 @@ They are also in the command palette, and as the typable commands `:move-lines-d
 - The indentation is not changed to fit the new place of a line.
 - If the file has no final line ending, a selection that ends with the line ending of the line that
   becomes the last one is shortened by it, as that line ending is gone.
+
+## Soft wrap for Markdown
+
+Markdown buffers wrap long lines by default: the markdown entry of `languages.toml` has
+`soft-wrap = { enable = true }` (prose has long lines; code doesn't). The language's setting wins over
+the editor's `[editor.soft-wrap]`, as for any language, so a `config.toml` without `soft-wrap` changes
+nothing, and `:set soft-wrap.enable false` doesn't unwrap a Markdown buffer. To turn it off, set it in
+your own `languages.toml`:
+
+```toml
+[[language]]
+name = "markdown"
+soft-wrap = { enable = false }
+```
+
+Tested in `vortex-term/tests/test/soft_wrap.rs`.
 
 ## Terminal panel
 

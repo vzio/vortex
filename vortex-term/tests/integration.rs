@@ -42,6 +42,7 @@ mod test {
     mod practice;
     mod practice_panel;
     mod repo_gen;
+    mod soft_wrap;
     mod splits;
     mod stale_buffers;
     mod terminal;
