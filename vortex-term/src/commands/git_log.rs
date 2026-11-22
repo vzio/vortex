@@ -30,7 +30,7 @@ use crate::ui::{
     picker::PickerMode,
     Picker, PickerColumn,
 };
-use crate::{alt, key, shift};
+use crate::{alt, ctrl, key, shift};
 
 pub(crate) fn trust_full(editor: &Editor, cwd: &Path) -> bool {
     editor
@@ -450,6 +450,7 @@ impl CommitLog {
                 if lines.is_some() {
                     keys[0] = ("Enter", "the diff of the file at the lines");
                     keys.push(("o", "all the changes of the commit"));
+                    keys.push(("C-y", "yank file:lines"));
                 }
                 vec![("commits", keys)]
             },
@@ -478,7 +479,13 @@ impl CommitLog {
             }
         });
         let picker = if lines.is_some() {
-            picker.with_drawn_preview(super::line_history::draw_preview)
+            picker
+                .with_drawn_preview(super::line_history::draw_preview)
+                .with_stacked_key_handler(ctrl!('y'), |cx, row: &LogRow| {
+                    if let Some(line) = row.line() {
+                        crate::yank_place::yank(cx.editor, line.places());
+                    }
+                })
         } else {
             picker
         };

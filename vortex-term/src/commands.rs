@@ -511,6 +511,9 @@ impl MappableCommand {
         commit_undo_checkpoint, "Commit changes to new checkpoint",
         yank, "Yank selection",
         yank_to_clipboard, "Yank selections to clipboard",
+        yank_place, "Yank the file and lines of the selections to the clipboard (src/main.rs:12-14)",
+        yank_place_absolute, "Yank the absolute path and lines of the selections to the clipboard",
+        yank_place_column, "Yank the file, line and column of the cursors to the clipboard (src/main.rs:42:7)",
         yank_to_primary_clipboard, "Yank selections to primary clipboard",
         yank_joined, "Join and yank selections",
         yank_joined_to_clipboard, "Join and yank selections to clipboard",
@@ -5030,6 +5033,22 @@ fn yank(cx: &mut Context) {
 
 fn yank_to_clipboard(cx: &mut Context) {
     yank_impl(cx.editor, '+');
+    exit_select_mode(cx);
+}
+
+// `file:lines` (this fork): see `crate::yank_place`
+fn yank_place(cx: &mut Context) {
+    crate::yank_place::yank_selections(cx.editor, crate::yank_place::Form::Lines);
+    exit_select_mode(cx);
+}
+
+fn yank_place_absolute(cx: &mut Context) {
+    crate::yank_place::yank_selections(cx.editor, crate::yank_place::Form::Absolute);
+    exit_select_mode(cx);
+}
+
+fn yank_place_column(cx: &mut Context) {
+    crate::yank_place::yank_selections(cx.editor, crate::yank_place::Form::Column);
     exit_select_mode(cx);
 }
 

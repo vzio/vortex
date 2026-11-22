@@ -269,6 +269,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             ["clipboard"]
             "y" => yank_to_clipboard,
             "Y" => yank_main_selection_to_clipboard,
+            ":" => yank_place,
             "p" => paste_clipboard_after,
             "P" => paste_clipboard_before,
             "R" => replace_selections_with_clipboard,

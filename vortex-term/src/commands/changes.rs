@@ -826,11 +826,24 @@ pub(crate) fn picker(
                 vec![
                     ("Enter C-g", "the diff, at the hunk"),
                     ("C-s C-v", "open the file in a split"),
+                    ("C-y", "yank file:lines"),
                 ],
             )],
         )
         .with_stacked_key_handler(key!(Enter), enter.clone())
         .with_stacked_key_handler(ctrl!('g'), enter)
+        .with_stacked_key_handler(ctrl!('y'), |cx, row: &ChangeRow| {
+            crate::yank_place::yank(cx.editor, vec![yank_place(row)]);
+        })
+}
+
+/// What `C-y` yanks for a row: `src/main.rs:12-14` for a hunk, the file for its divider.
+pub(crate) fn yank_place(row: &ChangeRow) -> String {
+    let path = crate::yank_place::shown_path(row.change.path(), false);
+    match &row.what {
+        What::Hunk(hunk) => place(&path, &hunk.lines),
+        What::File(_) => path,
+    }
 }
 
 #[cfg(test)]
