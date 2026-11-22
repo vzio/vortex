@@ -200,7 +200,12 @@
   12g|           column 12 of this line
   g.             the last change
   gw             a two-letter label on every word: type a label
-                 to jump there, Esc to cancel
+                 to jump there, Esc to cancel. The case of the
+                 label says more (fork): ab selects the word,
+                 cursor at its end; Ab with the cursor at its
+                 start; aB selects the WORD around it (all up
+                 to spaces: foo.bar); AB the WORD, cursor at
+                 its start. In select mode the same, extending
   gt  gc  gb     the top, the middle, the bottom of the screen
   gf             the file whose path is under the cursor
   gj  gk         down and up a line of the file, when long lines
