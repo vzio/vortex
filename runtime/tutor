@@ -442,6 +442,9 @@
   :theme NAME          try a theme (Tab lists them)
   :theme matrix        phosphor green on black, with effects:
                        try :dashboard and :sh after it
+  :language-themes     back to the languages' own themes
+                       (theme = "..." on a language in
+                       languages.toml) after a :theme
   :config-open         open your config.toml
   :config-reload       apply it without restarting
   :set-language LANG   highlight as another language
