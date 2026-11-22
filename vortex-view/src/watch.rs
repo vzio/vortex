@@ -725,7 +725,10 @@ mod tests {
         assert!(session.following);
         session.resume();
         assert!(session.active && session.following);
-        assert_eq!(session.at.as_ref().map(|(path, _)| path), Some(&PathBuf::from("/repo/b")));
+        assert_eq!(
+            session.at.as_ref().map(|(path, _)| path),
+            Some(&PathBuf::from("/repo/b"))
+        );
 
         // looking around is kept the same way
         session.pause();
