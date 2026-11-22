@@ -86,15 +86,14 @@ impl Editor {
     /// overrides them or they are off, else off. Returns whether they are on now.
     pub fn toggle_language_themes(&mut self) -> bool {
         let themes = &mut self.language_themes;
-        let on = if themes.overridden || themes.off {
+        if themes.overridden || themes.off {
             themes.overridden = false;
             themes.off = false;
             true
         } else {
             themes.off = true;
             false
-        };
-        on
+        }
     }
 
     /// The theme `name`, loaded once per run.
