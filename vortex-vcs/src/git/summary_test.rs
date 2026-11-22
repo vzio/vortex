@@ -174,13 +174,20 @@ fn upstream_and_ahead() {
         dir,
         &["remote", "add", "origin", remote.path().to_str().unwrap()],
     );
-    assert_eq!(open(dir).upstream().unwrap(), None);
+    // main has no upstream and no base branch (itself is none): all its commits are unpushed
+    assert_eq!(
+        open(dir).upstream().unwrap(),
+        Some(Upstream {
+            name: None,
+            ahead: 1
+        })
+    );
 
     git(dir, &["push", "-u", "origin", "main"]);
     assert_eq!(
         open(dir).upstream().unwrap(),
         Some(Upstream {
-            name: "origin/main".into(),
+            name: Some("origin/main".into()),
             ahead: 0
         })
     );
@@ -191,14 +198,77 @@ fn upstream_and_ahead() {
     }
     assert_eq!(open(dir).upstream().unwrap().unwrap().ahead, 3);
 
-    // a branch without upstream
+    // a branch without upstream: the commits not on the base branch (`origin/main`, 1 commit)
     git(dir, &["checkout", "-b", "local"]);
-    assert_eq!(open(dir).upstream().unwrap(), None);
+    let none_ahead = |ahead| Some(Upstream { name: None, ahead });
+    assert_eq!(open(dir).upstream().unwrap(), none_ahead(3));
+    write(dir, "a.txt", "local\n");
+    create_commit_with_message(dir, true, "local 1");
+    write(dir, "a.txt", "local 2\n");
+    create_commit_with_message(dir, true, "local 2");
+    assert_eq!(open(dir).upstream().unwrap(), none_ahead(5));
 
-    // an upstream whose ref doesn't exist locally
+    // an upstream whose ref doesn't exist locally is no upstream
     git(dir, &["config", "branch.local.remote", "origin"]);
     git(dir, &["config", "branch.local.merge", "refs/heads/nothing"]);
+    assert_eq!(open(dir).upstream().unwrap(), none_ahead(5));
+
+    // detached: no branch at all
+    git(dir, &["checkout", "--detach"]);
     assert_eq!(open(dir).upstream().unwrap(), None);
+}
+
+/// A new branch off a pushed `main`: only its own commits count.
+#[test]
+fn branch_without_upstream_counts_the_commits_not_on_the_base() {
+    let tmp = repo_with_commit();
+    let dir = tmp.path();
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "--bare"]);
+    git(
+        dir,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(dir, &["push", "-u", "origin", "main"]);
+    git(dir, &["checkout", "-b", "feature"]);
+    assert_eq!(
+        open(dir).upstream().unwrap(),
+        Some(Upstream {
+            name: None,
+            ahead: 0
+        })
+    );
+    for n in 0..2 {
+        write(dir, "a.txt", &format!("f{n}\n"));
+        create_commit_with_message(dir, true, &format!("f{n}"));
+    }
+    assert_eq!(
+        open(dir).upstream().unwrap(),
+        Some(Upstream {
+            name: None,
+            ahead: 2
+        })
+    );
+}
+
+/// Without any other branch to be the base, every commit is unpushed.
+#[test]
+fn branch_without_upstream_and_base_counts_every_commit() {
+    let tmp = repo_with_commit();
+    let dir = tmp.path();
+    git(dir, &["checkout", "-b", "feature"]);
+    write(dir, "a.txt", "f\n");
+    create_commit_with_message(dir, true, "f");
+    assert_eq!(
+        open(dir).upstream().unwrap(),
+        Some(Upstream {
+            name: None,
+            ahead: 1
+        })
+    );
+    // with the local main as the base, only the feature's commit
+    git(dir, &["branch", "-f", "main", "HEAD~1"]);
+    assert_eq!(open(dir).upstream().unwrap().unwrap().ahead, 1);
 }
 
 #[test]
@@ -442,7 +512,7 @@ fn reduced_trust_still_reports_the_upstream_and_ahead() {
     assert_eq!(
         open_reduced(dir).upstream().unwrap(),
         Some(Upstream {
-            name: "origin/main".into(),
+            name: Some("origin/main".into()),
             ahead: 0
         })
     );
@@ -454,18 +524,22 @@ fn reduced_trust_still_reports_the_upstream_and_ahead() {
     assert_eq!(
         repo.upstream().unwrap(),
         Some(Upstream {
-            name: "origin/main".into(),
+            name: Some("origin/main".into()),
             ahead: 3
         })
     );
     assert_eq!(repo.remote().unwrap().unwrap().name, "origin");
 
-    // no upstream configured, and one whose ref doesn't exist
+    // no upstream configured, and one whose ref doesn't exist: the commits not on `origin/main`
     git(dir, &["checkout", "-b", "local"]);
-    assert_eq!(open_reduced(dir).upstream().unwrap(), None);
+    let none_ahead = Some(Upstream {
+        name: None,
+        ahead: 3,
+    });
+    assert_eq!(open_reduced(dir).upstream().unwrap(), none_ahead);
     git(dir, &["config", "branch.local.remote", "origin"]);
     git(dir, &["config", "branch.local.merge", "refs/heads/nothing"]);
-    assert_eq!(open_reduced(dir).upstream().unwrap(), None);
+    assert_eq!(open_reduced(dir).upstream().unwrap(), none_ahead);
 }
 
 /// The dashboard reads local git only: the `gix` features must not include a transport.
@@ -854,8 +928,14 @@ fn details_of_each_worktree() {
             untracked: 1
         }
     );
-    // `dirty` was branched from `main` without an upstream of its own
-    assert_eq!(dirty.upstream, None);
+    // `dirty` was branched from `main` without an upstream of its own: all it has is on `origin/main`
+    assert_eq!(
+        dirty.upstream,
+        Some(Upstream {
+            name: None,
+            ahead: 0
+        })
+    );
     assert_eq!(dirty.modified, Some(fleet.ago(10)));
 
     let ahead = details_of(&fleet.ahead).unwrap();

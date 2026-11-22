@@ -57,12 +57,15 @@ pub struct Remote {
     pub url: String,
 }
 
-/// The upstream branch of the current branch.
+/// The upstream branch of the current branch, and what it hasn't got.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upstream {
-    /// Its short name, like `origin/main`.
-    pub name: String,
-    /// The number of commits HEAD has that the upstream doesn't.
+    /// Its short name, like `origin/main`; `None` when the branch has no upstream (none is
+    /// configured, or the configured one doesn't exist): then nothing of the branch is pushed.
+    pub name: Option<String>,
+    /// The commits of HEAD that aren't pushed: those the upstream doesn't have, or without an
+    /// upstream those not on the base branch (as the commit log's first section counts them),
+    /// all of them when there's no base branch either.
     pub ahead: usize,
 }
 
@@ -312,14 +315,42 @@ impl Repo {
         gix::config::File::from_path_no_includes(path, gix::config::Source::Local).ok()
     }
 
-    /// The upstream of the current branch and how many commits HEAD has that it doesn't. `None`
-    /// when HEAD is detached or unborn, the branch has no upstream configured, or the upstream
-    /// doesn't exist locally.
+    /// The upstream of the current branch and how many commits of HEAD aren't pushed, see
+    /// [`Upstream`]. `None` when HEAD is detached or unborn.
     pub fn upstream(&self) -> Result<Option<Upstream>> {
         let repo = self.local();
         let Some(branch) = repo.head_name()? else {
             return Ok(None);
         };
+        let Ok(head_id) = repo.head_id() else {
+            return Ok(None);
+        };
+        let head_id = head_id.detach();
+        let ahead_of = |hidden: Vec<gix::ObjectId>| -> Result<usize> {
+            Ok(repo.rev_walk([head_id]).with_hidden(hidden).all()?.count())
+        };
+        if let Some((name, upstream_id)) = self.tracking(&repo, &branch)? {
+            return Ok(Some(Upstream {
+                name: Some(name),
+                ahead: ahead_of(vec![upstream_id])?,
+            }));
+        }
+        // No upstream: what isn't on the base branch is unpushed, as in the commit log
+        let current = branch.as_bstr().to_string();
+        let base = super::log::base_branch(&repo, "origin", Some(&current));
+        Ok(Some(Upstream {
+            name: None,
+            ahead: ahead_of(base.into_iter().map(|(_, id)| id).collect())?,
+        }))
+    }
+
+    /// The short name of the upstream of `branch` and the commit it points to, if one is
+    /// configured and exists.
+    fn tracking(
+        &self,
+        repo: &gix::Repository,
+        branch: &gix::refs::FullName,
+    ) -> Result<Option<(String, gix::ObjectId)>> {
         let tracking = match repo.branch_remote_tracking_ref_name(branch.as_ref(), Direction::Fetch)
         {
             Some(Ok(tracking)) => tracking.into_owned(),
@@ -328,8 +359,8 @@ impl Repo {
                 let local = self.local_config();
                 let short = branch.shorten().to_str_lossy().into_owned();
                 let (Some(remote), Some(merge)) = (
-                    branch_value(&repo, local.as_ref(), &short, "remote"),
-                    branch_value(&repo, local.as_ref(), &short, "merge"),
+                    branch_value(repo, local.as_ref(), &short, "remote"),
+                    branch_value(repo, local.as_ref(), &short, "merge"),
                 ) else {
                     return Ok(None);
                 };
@@ -348,19 +379,8 @@ impl Repo {
         let Ok(mut reference) = repo.find_reference(tracking.as_ref()) else {
             return Ok(None);
         };
-        let upstream_id = reference.peel_to_id()?.detach();
-        let Ok(head_id) = repo.head_id() else {
-            return Ok(None);
-        };
-        let ahead = repo
-            .rev_walk([head_id.detach()])
-            .with_hidden([upstream_id])
-            .all()?
-            .count();
-        Ok(Some(Upstream {
-            name: tracking.shorten().to_str_lossy().into_owned(),
-            ahead,
-        }))
+        let id = reference.peel_to_id()?.detach();
+        Ok(Some((tracking.shorten().to_str_lossy().into_owned(), id)))
     }
 
     /// Counts of uncommitted changes, by file, like `git status --porcelain`. Unmerged files
@@ -595,7 +615,7 @@ fn worktree_at(repo: &gix::Repository, path: PathBuf, git_dir: &Path) -> Result<
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Details {
     pub changes: Changes,
-    /// `None` without an upstream (or while detached).
+    /// `None` while detached (or unborn).
     pub upstream: Option<Upstream>,
     pub modified: Option<SystemTime>,
 }

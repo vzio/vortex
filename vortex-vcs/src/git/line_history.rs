@@ -64,10 +64,10 @@ impl PartialOrd for Queued {
     }
 }
 
-/// The sections of the commit log: their labels, and the commits of each but the last (which
+/// The sections of the commit log: their dividers, and the commits of each but the last (which
 /// has all the others).
 struct Sections {
-    labels: Vec<String>,
+    dividers: Vec<crate::Divider>,
     members: Vec<HashSet<ObjectId>>,
 }
 
@@ -90,7 +90,13 @@ impl Sections {
             members.push(commits);
         }
         Ok(Sections {
-            labels: sections.into_iter().map(|section| section.label).collect(),
+            dividers: sections
+                .into_iter()
+                .map(|section| crate::Divider {
+                    label: section.label,
+                    unpushed: section.unpushed,
+                })
+                .collect(),
             members,
         })
     }
@@ -99,7 +105,7 @@ impl Sections {
         self.members
             .iter()
             .position(|commits| commits.contains(id))
-            .unwrap_or(self.labels.len() - 1)
+            .unwrap_or(self.dividers.len() - 1)
     }
 }
 
@@ -356,7 +362,7 @@ pub fn for_each_line_commit(
             } => {
                 if divider != Some(queued.section) {
                     divider = Some(queued.section);
-                    if !f(LineEvent::Divider(&sections.labels[queued.section])) {
+                    if !f(LineEvent::Divider(&sections.dividers[queued.section])) {
                         return Ok(());
                     }
                 }

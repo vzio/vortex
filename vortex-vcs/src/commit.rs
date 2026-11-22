@@ -17,7 +17,17 @@ pub struct CommitInfo {
 /// commits of a branch).
 #[derive(Clone)]
 pub enum LogEntry {
-    /// The label of the section that follows.
-    Divider(String),
+    /// The divider of the section that follows.
+    Divider(Divider),
     Commit(CommitInfo),
+}
+
+/// The divider that starts a section of the commit log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Divider {
+    /// The name of the section: `main (unpushed)`, `origin/main`...
+    pub label: String,
+    /// Whether the section's commits are on no remote: the commits of the current branch that
+    /// its upstream doesn't have, or all of those not on the base branch when it has no upstream.
+    pub unpushed: bool,
 }

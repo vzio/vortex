@@ -14,6 +14,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use vortex_core::unicode::width::{UnicodeWidthChar, UnicodeWidthStr};
+use vortex_vcs::summary::Upstream;
 use vortex_view::graphics::{Modifier, Rect, Style};
 use vortex_view::Theme;
 
@@ -354,11 +355,23 @@ fn project_rows(stats: &Stats, s: &Styles, worktrees_max: usize) -> Vec<Row> {
     rows.push(Row::new(
         "upstream",
         value(&stats.upstream, s, |upstream| match upstream {
-            Some(upstream) => {
-                let mut spans = vec![(upstream.name.clone(), s.value), ("  ".into(), s.value)];
-                match upstream.ahead {
+            Some(Upstream {
+                name: Some(name),
+                ahead,
+            }) => {
+                let mut spans = vec![(name.clone(), s.value), ("  ".into(), s.value)];
+                match ahead {
                     0 => spans.push(("all pushed".into(), s.good)),
                     n => spans.push((format!("{n} unpushed"), s.warning)),
+                }
+                spans
+            }
+            // nothing is pushed: the branch's own commits (not on the base branch) are counted
+            Some(Upstream { name: None, ahead }) => {
+                let mut spans = vec![("no upstream".into(), s.label)];
+                if *ahead > 0 {
+                    spans.push(("  ".into(), s.value));
+                    spans.push((format!("{ahead} unpushed"), s.warning));
                 }
                 spans
             }
@@ -1286,7 +1299,7 @@ pub(crate) mod tests {
         );
         stats.upstream.set_at(
             Ok(Some(Upstream {
-                name: "origin/main".into(),
+                name: Some("origin/main".into()),
                 ahead: 3,
             })),
             at,
@@ -2088,6 +2101,39 @@ pub(crate) mod tests {
         let drawn = draw(&stats, 100, 44, born, settled(born));
         assert!(
             drawn.contains("no upstream") && drawn.contains("no commits yet"),
+            "{drawn}"
+        );
+    }
+
+    /// A branch with no upstream has pushed nothing: its commits not on the base are unpushed.
+    #[test]
+    fn no_upstream_shows_what_is_unpushed() {
+        let born = Instant::now();
+        let stats = loaded(born);
+        stats.upstream.set_at(
+            Ok(Some(Upstream {
+                name: None,
+                ahead: 3,
+            })),
+            born,
+        );
+        let drawn = draw(&stats, 100, 44, born, settled(born));
+        for text in ["no upstream", "3 unpushed"] {
+            assert!(drawn.contains(text), "{text}:\n{drawn}");
+        }
+        assert!(!drawn.contains("all pushed"), "{drawn}");
+
+        stats.upstream.set_at(
+            Ok(Some(Upstream {
+                name: None,
+                ahead: 0,
+            })),
+            born,
+        );
+        let drawn = draw(&stats, 100, 44, born, settled(born));
+        assert!(drawn.contains("no upstream"), "{drawn}");
+        assert!(
+            !drawn.contains("unpushed") && !drawn.contains("all pushed"),
             "{drawn}"
         );
     }

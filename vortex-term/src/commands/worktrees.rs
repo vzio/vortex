@@ -126,11 +126,20 @@ fn changes_cell(details: &Details, s: &Styles) -> Vec<Span<'static>> {
 }
 
 fn unpushed_cell(details: &Details, s: &Styles) -> Vec<Span<'static>> {
-    vec![match &details.upstream {
-        None => Span::styled("no upstream", s.label),
-        Some(upstream) if upstream.ahead == 0 => Span::styled("all pushed", s.good),
-        Some(upstream) => Span::styled(format!("{} unpushed", upstream.ahead), s.warning),
-    }]
+    let Some(upstream) = &details.upstream else {
+        // detached
+        return vec![Span::styled("no upstream", s.label)];
+    };
+    match (&upstream.name, upstream.ahead) {
+        (Some(_), 0) => vec![Span::styled("all pushed", s.good)],
+        (None, 0) => vec![Span::styled("no upstream", s.label)],
+        (Some(_), n) => vec![Span::styled(format!("{n} unpushed"), s.warning)],
+        // nothing is pushed: the branch's own commits (not on the base branch) are counted
+        (None, n) => vec![
+            Span::styled(format!("{n} unpushed"), s.warning),
+            Span::styled(" · no upstream", s.label),
+        ],
+    }
 }
 
 fn modified_cell(details: &Details, s: &Styles) -> Vec<Span<'static>> {
@@ -363,5 +372,42 @@ impl Component for WorktreePicker {
 
     fn id(&self) -> Option<&'static str> {
         self.picker.id()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vortex_vcs::summary::{Changes, Upstream};
+    use vortex_view::Theme;
+
+    fn cell(upstream: Option<Upstream>) -> String {
+        let details = Details {
+            changes: Changes::default(),
+            upstream,
+            modified: None,
+        };
+        let styles = Styles::new(&Theme::default());
+        unpushed_cell(&details, &styles)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn upstream(name: Option<&str>, ahead: usize) -> Option<Upstream> {
+        Some(Upstream {
+            name: name.map(str::to_string),
+            ahead,
+        })
+    }
+
+    #[test]
+    fn the_unpushed_cell_says_when_there_is_no_upstream() {
+        assert_eq!(cell(upstream(Some("origin/main"), 0)), "all pushed");
+        assert_eq!(cell(upstream(Some("origin/main"), 2)), "2 unpushed");
+        assert_eq!(cell(upstream(None, 3)), "3 unpushed · no upstream");
+        assert_eq!(cell(upstream(None, 0)), "no upstream");
+        // detached
+        assert_eq!(cell(None), "no upstream");
     }
 }

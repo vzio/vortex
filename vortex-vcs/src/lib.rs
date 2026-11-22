@@ -45,7 +45,7 @@ pub use status::FileChange;
 
 mod commit;
 
-pub use commit::{CommitInfo, LogEntry};
+pub use commit::{CommitInfo, Divider, LogEntry};
 
 /// Where a repository is, and its HEAD.
 #[derive(Debug, Clone, PartialEq, Eq)]

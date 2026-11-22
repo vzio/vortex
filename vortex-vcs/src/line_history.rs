@@ -222,9 +222,9 @@ pub struct LineCommit<'a> {
 pub enum LineEvent<'a> {
     /// The number of commits looked at so far.
     Searched(usize),
-    /// The label of the section of the log the commits that follow are in, as the commit log
-    /// labels them.
-    Divider(&'a str),
+    /// The divider of the section of the log the commits that follow are in, as the commit log
+    /// has it.
+    Divider(&'a crate::Divider),
     Commit(Box<LineCommit<'a>>),
 }
 

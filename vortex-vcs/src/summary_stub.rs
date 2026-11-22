@@ -39,12 +39,15 @@ pub struct Remote {
     pub url: String,
 }
 
-/// The upstream branch of the current branch.
+/// The upstream branch of the current branch, and what it hasn't got.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upstream {
-    /// Its short name, like `origin/main`.
-    pub name: String,
-    /// The number of commits HEAD has that the upstream doesn't.
+    /// Its short name, like `origin/main`; `None` when the branch has no upstream (none is
+    /// configured, or the configured one doesn't exist): then nothing of the branch is pushed.
+    pub name: Option<String>,
+    /// The commits of HEAD that aren't pushed: those the upstream doesn't have, or without an
+    /// upstream those not on the base branch (as the commit log's first section counts them),
+    /// all of them when there's no base branch either.
     pub ahead: usize,
 }
 

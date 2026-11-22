@@ -947,10 +947,24 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     ) -> Self {
         self.dividers = Some(Dividers {
             title_fn: Box::new(divider),
+            style_fn: None,
             groups: None,
             scanned: 0,
             count: 0,
         });
+        self
+    }
+
+    /// A style for some dividers (see [`Picker::with_dividers`], which must be called first),
+    /// patched over the dividers' own (`ui.picker.divider`): `style` returns it for a divider
+    /// that has one, from the theme.
+    pub fn with_divider_style(
+        mut self,
+        style: impl Fn(&T, &D, &vortex_view::Theme) -> Option<Style> + 'static,
+    ) -> Self {
+        if let Some(dividers) = &mut self.dividers {
+            dividers.style_fn = Some(Box::new(style));
+        }
         self
     }
 
@@ -1662,10 +1676,16 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                     let start = if under_cursor { " > " } else { "── " };
                     let rule = "─".repeat(width.saturating_sub(used));
                     let line = format!("{start}{title} {rule}");
+                    let own = self
+                        .dividers
+                        .as_ref()
+                        .and_then(|dividers| dividers.style_fn.as_ref())
+                        .and_then(|style| style(item.data, &self.editor_data, &cx.editor.theme))
+                        .unwrap_or_default();
                     let style = if under_cursor {
-                        text_style.patch(divider_style).patch(selected)
+                        text_style.patch(divider_style).patch(own).patch(selected)
                     } else {
-                        text_style.patch(divider_style)
+                        text_style.patch(divider_style).patch(own)
                     };
                     surface.clear_with(row, text_style);
                     surface.set_stringn(row.x, row.y, &line, width, style);
@@ -2074,6 +2094,8 @@ impl<T: 'static + Send + Sync, D> Drop for Picker<T, D> {
 /// The dividers of a picker, see [`Picker::with_dividers`].
 struct Dividers<T, D> {
     title_fn: DividerTitle<T, D>,
+    /// A style of its own for a divider, see [`Picker::with_divider_style`].
+    style_fn: Option<DividerStyle<T, D>>,
     /// Whether a divider is an entry, when the dividers head groups (see
     /// [`Picker::with_groups`]).
     groups: Option<IsEntry<T>>,
@@ -2101,3 +2123,4 @@ type PickerKeyHandler<T> = Box<dyn Fn(&mut Context, &T)>;
 type PickerMarked<T> = Box<dyn Fn(&T) -> bool>;
 type IsEntry<T> = Box<dyn Fn(&T) -> bool>;
 type DividerTitle<T, D> = Box<dyn for<'a> Fn(&'a T, &'a D) -> Option<Cow<'a, str>>>;
+type DividerStyle<T, D> = Box<dyn Fn(&T, &D, &vortex_view::Theme) -> Option<Style>>;

@@ -108,27 +108,45 @@ impl Repo {
     /// The log, as the label of each section and the summaries of its commits. The log is the same
     /// whether the repository is trusted or not.
     fn log(&self) -> Vec<(String, Vec<String>)> {
+        self.log_flagged()
+            .into_iter()
+            .map(|(label, _, commits)| (label, commits))
+            .collect()
+    }
+
+    /// The label of each divider, whether it is flagged `unpushed`, and its commits.
+    fn log_flagged(&self) -> Vec<(String, bool, Vec<String>)> {
         let log = self.log_with_trust(true);
         assert_eq!(log, self.log_with_trust(false), "log of an untrusted repo");
         log
     }
 
-    fn log_with_trust(&self, trust_full: bool) -> Vec<(String, Vec<String>)> {
-        let sections = std::sync::Mutex::new(Vec::<(String, Vec<String>)>::new());
+    fn log_with_trust(&self, trust_full: bool) -> Vec<(String, bool, Vec<String>)> {
+        let sections = std::sync::Mutex::new(Vec::<(String, bool, Vec<String>)>::new());
         git::for_each_log_entry(self.path(), trust_full, |entry| {
             let mut sections = sections.lock().unwrap();
             match entry.unwrap() {
-                LogEntry::Divider(label) => sections.push((label, Vec::new())),
+                LogEntry::Divider(divider) => {
+                    sections.push((divider.label, divider.unpushed, Vec::new()))
+                }
                 LogEntry::Commit(commit) => sections
                     .last_mut()
                     .expect("a divider comes before the commits")
-                    .1
+                    .2
                     .push(commit.summary),
             }
             true
         })
         .unwrap();
         sections.into_inner().unwrap()
+    }
+
+    /// The label of each divider and whether it is flagged `unpushed`.
+    fn flags(&self) -> Vec<(String, bool)> {
+        self.log_flagged()
+            .into_iter()
+            .map(|(label, unpushed, _)| (label, unpushed))
+            .collect()
     }
 }
 
@@ -161,6 +179,20 @@ fn feature_repo() -> Repo {
     repo.git(&["merge", "-q", "--no-edit", "-m", "merge", "main"]);
     repo.commit_file("f4");
     repo
+}
+
+/// A branch with an upstream: its unpushed section is flagged, the pushed one and the base aren't.
+#[test]
+fn only_the_unpushed_section_is_flagged() {
+    let repo = feature_repo();
+    assert_eq!(
+        repo.flags(),
+        [
+            ("feature (unpushed)".to_string(), true),
+            ("feature".to_string(), false),
+            ("origin/main".to_string(), false),
+        ]
+    );
 }
 
 #[test]
@@ -218,11 +250,11 @@ fn unmerged_main_commits_belong_to_the_feature_section() {
     repo.git(&["checkout", "-q", "feature"]);
     repo.minute.set(repo.minute.get() + 1);
     repo.git(&["merge", "-q", "--no-edit", "-m", "merge", "main"]);
-    // there's no upstream: the label has no "unpushed"
+    // there's no upstream: nothing of the feature is pushed, the unpushed m2 included
     assert_eq!(
         repo.log(),
         [
-            section("feature", &["merge", "m2", "f1"]),
+            section("feature (unpushed · no upstream)", &["merge", "m2", "f1"]),
             section("origin/main", &["m1"]),
         ]
     );
@@ -261,6 +293,14 @@ fn detached_head() {
             section("origin/main", &["m3", "m2", "m1"]),
         ]
     );
+    // a detached HEAD may be on a remote: not flagged
+    assert_eq!(
+        repo.flags(),
+        [
+            ("HEAD (detached)".to_string(), false),
+            ("origin/main".to_string(), false),
+        ]
+    );
 }
 
 #[test]
@@ -268,8 +308,15 @@ fn no_remote_and_no_other_branch() {
     let repo = Repo::new();
     repo.commit_file("m1");
     repo.commit_file("m2");
-    // main is the current branch: it's not its own base
-    assert_eq!(repo.log(), [section("main", &["m2", "m1"])]);
+    // main is the current branch: it's not its own base. It has no upstream: all unpushed
+    assert_eq!(
+        repo.log(),
+        [section("main (unpushed · no upstream)", &["m2", "m1"])]
+    );
+    assert_eq!(
+        repo.flags(),
+        [("main (unpushed · no upstream)".to_string(), true)]
+    );
 }
 
 #[test]
@@ -280,14 +327,20 @@ fn no_remote_and_a_local_base() {
     repo.commit_file("f1");
     assert_eq!(
         repo.log(),
-        [section("feature", &["f1"]), section("main", &["m1"])]
+        [
+            section("feature (unpushed · no upstream)", &["f1"]),
+            section("main", &["m1"])
+        ]
     );
 
     // master is a base too
     repo.git(&["branch", "-m", "main", "master"]);
     assert_eq!(
         repo.log(),
-        [section("feature", &["f1"]), section("master", &["m1"])]
+        [
+            section("feature (unpushed · no upstream)", &["f1"]),
+            section("master", &["m1"])
+        ]
     );
 }
 
@@ -299,8 +352,19 @@ fn remote_without_upstream() {
     assert_eq!(
         repo.log(),
         [
-            section("local-only", &["l1", "f4", "merge", "f3", "f2", "f1"]),
+            section(
+                "local-only (unpushed · no upstream)",
+                &["l1", "f4", "merge", "f3", "f2", "f1"]
+            ),
             section("origin/main", &["m3", "m2", "m1"]),
+        ]
+    );
+    // nothing counts as pushed, the base branch's commits are not flagged
+    assert_eq!(
+        repo.flags(),
+        [
+            ("local-only (unpushed · no upstream)".to_string(), true),
+            ("origin/main".to_string(), false),
         ]
     );
 }
@@ -315,7 +379,7 @@ fn upstream_that_does_not_exist_is_ignored() {
     assert_eq!(
         repo.log(),
         [
-            section("gone", &["g1"]),
+            section("gone (unpushed · no upstream)", &["g1"]),
             section("origin/main", &["m3", "m2", "m1"]),
         ]
     );
