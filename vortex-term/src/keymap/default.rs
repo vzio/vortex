@@ -63,8 +63,8 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "n" => goto_next_buffer,
             "p" => goto_previous_buffer,
             ["history"]
-            "a" => history_toggle,
-            "A" => history_back,
+            "a" => history_back,
+            "A" => history_picker,
             "." => goto_last_modification,
         },
         ":" => command_mode,

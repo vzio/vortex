@@ -373,8 +373,8 @@ fn undo(cx: &mut Context, undo: bool) {
 fn goto_key(cx: &mut Context, prefix: char, key: KeyEvent) {
     // history (this fork): the hex view is a place like any buffer
     match (prefix, key.code) {
-        ('g', KeyCode::Char('a')) => return crate::history::toggle(cx),
-        ('g', KeyCode::Char('A')) => return crate::history::back(cx),
+        ('g', KeyCode::Char('a')) => return crate::history::back(cx),
+        ('g', KeyCode::Char('A')) => return crate::history::history_picker(cx),
         _ => {}
     }
     let Some(mut target) = Target::of(cx.editor) else {

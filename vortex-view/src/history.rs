@@ -225,14 +225,12 @@ impl History {
     }
 }
 
-/// Which way `ga`, `gA` and `a` go.
+/// Which way a step through history goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
-    /// `ga`: to the last place, or back to where a walk started.
-    Toggle,
-    /// `gA`, then `A`: one place back.
+    /// `ga`: one place back.
     Back,
-    /// `a` after `gA`: one place forward; the last one ends the walk.
+    /// `history_forward` (no default key): one place forward; the last one ends the walk.
     Forward,
 }
 
@@ -377,45 +375,10 @@ impl Editor {
     ) -> Result<Place, &'static str> {
         let view_id = self.tree.focus;
         let count = count.max(1);
-        // the present is recorded when a walk starts, so the walk can come back to it
-        let start_walk = |editor: &mut Self| -> Result<(), &'static str> {
-            let history = &editor.tree.get(view_id).history;
-            let last = history.places.back().cloned();
-            let usable = history
-                .places
-                .iter()
-                .any(|place| editor.reachable(place, &here));
-            if !usable {
-                return Err("No jumps to go back to");
-            }
-            let same_as_last = last.is_some_and(|last| editor.same_place(&last, &here));
-            if let Place::Text { doc, .. } = &here {
-                let doc = editor.documents.get_mut(doc).expect("the focused buffer");
-                editor.tree.get_mut(view_id).sync_changes(doc);
-            }
-            let history = &mut editor.tree.get_mut(view_id).history;
-            history.push(here.clone(), same_as_last);
-            history.current = history.places.len() - 1;
-            Ok(())
-        };
-
         match step {
-            Step::Toggle if self.tree.get(view_id).history.is_walking() => {
-                let history = &mut self.tree.get_mut(view_id).history;
-                let start = history
-                    .places
-                    .pop_back()
-                    .expect("a walk records where it starts");
-                history.current = history.places.len();
-                // its buffer may have been closed meanwhile
-                if !self.reachable(&start, &here) && !self.same_place(&start, &here) {
-                    return Err("Where the walk started is gone");
-                }
-                Ok(start)
-            }
-            Step::Toggle | Step::Back => {
+            Step::Back => {
                 if !self.tree.get(view_id).history.is_walking() {
-                    start_walk(self)?;
+                    self.start_walk(&here)?;
                 }
                 let history = &self.tree.get(view_id).history;
                 let mut index = history.current;
@@ -454,20 +417,71 @@ impl Editor {
                 let Some(index) = found else {
                     return Err("At the newest jump");
                 };
-                let history = &mut self.tree.get_mut(view_id).history;
-                if index == last {
-                    // back where the walk started: the present again
-                    let start = history
-                        .places
-                        .pop_back()
-                        .expect("a walk records where it starts");
-                    history.current = history.places.len();
-                    return Ok(start);
-                }
-                history.current = index;
-                Ok(history.places[index].clone())
+                Ok(self.walk_to(index))
             }
         }
+    }
+
+    /// Goes to the place at `index` of the focused view's history (the history picker's `Enter`)
+    /// from `here`, moving the walk's position there without recording a jump, and returns the
+    /// place to show. The last place of a walk is where it started: going there ends the walk.
+    pub fn history_go_to(&mut self, index: usize, here: Place) -> Result<Place, &'static str> {
+        let view_id = self.tree.focus;
+        let history = &self.tree.get(view_id).history;
+        let Some(place) = history.places.get(index) else {
+            return Err("That place is gone");
+        };
+        let ends_walk = history.is_walking() && index == history.places.len() - 1;
+        if !ends_walk && !self.reachable(place, &here) {
+            if self.same_place(place, &here) {
+                return Err("Already there");
+            }
+            return Err("That place is gone");
+        }
+        if !self.tree.get(view_id).history.is_walking() {
+            self.start_walk(&here)?;
+        }
+        Ok(self.walk_to(index))
+    }
+
+    /// Records the present, `here`, as where a walk starts, so the walk can come back to it.
+    fn start_walk(&mut self, here: &Place) -> Result<(), &'static str> {
+        let view_id = self.tree.focus;
+        let history = &self.tree.get(view_id).history;
+        let last = history.places.back().cloned();
+        let usable = history
+            .places
+            .iter()
+            .any(|place| self.reachable(place, here));
+        if !usable {
+            return Err("No jumps to go back to");
+        }
+        let same_as_last = last.is_some_and(|last| self.same_place(&last, here));
+        if let Place::Text { doc, .. } = here {
+            let doc = self.documents.get_mut(doc).expect("the focused buffer");
+            self.tree.get_mut(view_id).sync_changes(doc);
+        }
+        let history = &mut self.tree.get_mut(view_id).history;
+        history.push(here.clone(), same_as_last);
+        history.current = history.places.len() - 1;
+        Ok(())
+    }
+
+    /// Moves the walk of the focused view to `index` and returns its place; the last place, where
+    /// the walk started, ends the walk (the present again).
+    fn walk_to(&mut self, index: usize) -> Place {
+        let view_id = self.tree.focus;
+        let history = &mut self.tree.get_mut(view_id).history;
+        if index + 1 == history.places.len() {
+            let start = history
+                .places
+                .pop_back()
+                .expect("a walk records where it starts");
+            history.current = history.places.len();
+            return start;
+        }
+        history.current = index;
+        history.places[index].clone()
     }
 
     /// Shows a place in a buffer in the focused view, centered, without recording a jump.

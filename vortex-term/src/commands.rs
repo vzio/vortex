@@ -552,9 +552,9 @@ impl MappableCommand {
         select_prev_sibling, "Select previous sibling the in syntax tree",
         select_all_siblings, "Select all siblings of the current node",
         select_all_children, "Select all children of the current node",
-        history_toggle, "Go back to the last jump, or return to where a walk started",
         history_back, "Go one jump back in history",
-        history_forward, "Go one jump forward in history",
+        history_forward, "Go one jump forward in history, after going back",
+        history_picker, "Open the history picker: the jumps, newest first",
         toggle_bookmark, "Set or remove a bookmark on the cursor's line",
         next_bookmark, "Go to the next bookmark",
         prev_bookmark, "Go to the previous bookmark",
@@ -6108,16 +6108,16 @@ fn match_brackets(cx: &mut Context) {
 
 //
 
-fn history_toggle(cx: &mut Context) {
-    crate::history::toggle(cx);
-}
-
 fn history_back(cx: &mut Context) {
     crate::history::back(cx);
 }
 
 fn history_forward(cx: &mut Context) {
     crate::history::forward(cx);
+}
+
+fn history_picker(cx: &mut Context) {
+    crate::history::history_picker(cx);
 }
 
 fn toggle_bookmark(cx: &mut Context) {
