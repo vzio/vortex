@@ -35,6 +35,7 @@ mod test {
     mod inline_blame;
     mod line_history;
     mod menus;
+    mod modes;
     mod move_lines;
     mod movement;
     mod palette;

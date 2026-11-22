@@ -356,6 +356,7 @@
                  opened, jumped to and flashed, and marked ┃
                  in the gutter. It is a mode, with a bar at the
                  bottom: its state, the change, and its keys.
+                 The screen changes color while it is on.
                  Keys don't stop it by accident: v looks around
                  with your own cursor (v again follows), n N go
                  through the changes in the order they happened
@@ -443,6 +444,7 @@
  moment. The third lists the keys. A panel opens below your
  splits while the program runs: its variables, your watches, the
  call stack, the breakpoints and a console.
+ The screen changes color while debug mode is on.
 
   space G        debug mode: the debugger as a video player
   Esc            leave debug mode; the program keeps running

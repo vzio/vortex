@@ -89,3 +89,58 @@ pub fn paint_screen(theme: &Theme, area: Rect, surface: &mut Surface) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vortex_view::graphics::Color;
+
+    fn theme(toml: &str) -> Theme {
+        Theme::from(toml::from_str::<toml::Value>(toml).unwrap())
+    }
+
+    #[test]
+    fn the_screen_has_the_background_of_its_scope() {
+        let theme = theme(
+            r##"
+"ui.background.mode" = { bg = "#112233" }
+"ui.popup" = { bg = "#445566" }
+"##,
+        );
+        assert_eq!(screen_style(&theme).bg, Some(Color::Rgb(0x11, 0x22, 0x33)));
+    }
+
+    #[test]
+    fn the_screen_falls_back_to_the_popup_background() {
+        let theme = theme(r##""ui.popup" = { bg = "#445566" }"##);
+        assert_eq!(screen_style(&theme).bg, Some(Color::Rgb(0x44, 0x55, 0x66)));
+        // a scope without a background is no screen either
+        let theme = self::tests::theme(
+            r##"
+"ui.background.mode" = { fg = "#ffffff" }
+"ui.popup" = { bg = "#445566" }
+"##,
+        );
+        assert_eq!(screen_style(&theme).bg, Some(Color::Rgb(0x44, 0x55, 0x66)));
+    }
+
+    #[test]
+    fn the_screen_style_is_only_a_background() {
+        let theme = theme(
+            r##"
+"ui.background.mode" = { fg = "#ffffff", bg = "#112233", modifiers = ["bold"] }
+"##,
+        );
+        let style = screen_style(&theme);
+        assert_eq!(style.fg, None);
+        assert!(style.add_modifier.is_empty());
+    }
+
+    #[test]
+    fn without_a_scope_or_popup_background_the_screen_has_none() {
+        assert_eq!(
+            screen_style(&theme(r##""ui.text" = { fg = "#ffffff" }"##)).bg,
+            None
+        );
+    }
+}

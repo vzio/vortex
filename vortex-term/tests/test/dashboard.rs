@@ -894,6 +894,10 @@ async fn in_a_repository_the_w_badge_shows_and_w_starts_watch_mode() {
 
     session.keys("w").await;
     assert!(session.app.editor.watch.is_active());
+    assert_eq!(
+        vortex_term::modes::current(&session.app.editor),
+        Some(vortex_term::modes::Mode::Watch)
+    );
     assert!(!up(&session), "{:#?}", session.rows());
     session
         .wait_for_screen("the mode bar", |rows| on_screen(rows, "WATCH ● following"))
