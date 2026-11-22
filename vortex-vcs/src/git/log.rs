@@ -32,7 +32,7 @@ fn resolve(repo: &Repository, name: &str) -> Option<ObjectId> {
 /// section: the first that exists of the remote's default branch (`<remote>/HEAD`), `<remote>/main`,
 /// `<remote>/master` and the local `main` and `master`. The current branch itself is never its
 /// own base.
-pub(super) fn base_branch(
+fn base_branch(
     repo: &Repository,
     remote: &str,
     current: Option<&str>,
@@ -105,6 +105,14 @@ fn upstream(repo: &Repository, name: &FullName) -> Option<(String, String)> {
         .filter(|_| remote != ".")?;
     // (as git does by default, without looking at the refspecs of the remote)
     Some((format!("refs/remotes/{remote}/{branch}"), remote))
+}
+
+/// The commit the base branch of the branch `name` points to, found as the log's sections find
+/// it (the remote of its upstream if one is configured, else `origin`).
+pub(super) fn base_of(repo: &Repository, name: &FullName) -> Option<ObjectId> {
+    let remote = upstream(repo, name).map_or_else(|| "origin".to_string(), |(_, remote)| remote);
+    let current = name.as_bstr().to_string();
+    base_branch(repo, &remote, Some(&current)).map(|(_, id)| id)
 }
 
 /// The sections of the log of HEAD, in the order they are listed.

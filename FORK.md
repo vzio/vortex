@@ -558,12 +558,14 @@ The sections are made of the commits reachable from HEAD (`B` is the current bra
 
 | Section | Commits | Divider |
 | --- | --- | --- |
-| 1 | not on the upstream of `B`, nor on the base branch | `B (unpushed)`; `B` if `B` has no upstream; `HEAD (detached)` for a detached HEAD |
+| 1 | not on the upstream of `B`, nor on the base branch | `B (unpushed)`; `B (unpushed · no upstream)` if `B` has no upstream; `HEAD (detached)` for a detached HEAD |
 | 2 | on the upstream of `B`, not on the base branch | `B` |
 | 3 | on the base branch | the name of the base branch as git shows it: `origin/main`, or `main` |
 
 - The upstream is the remote tracking branch of `B` (`branch.<B>.remote` and `.merge`) if it is
-  configured and exists.
+  configured and exists. Without one nothing of `B` counts as pushed: all its commits that aren't
+  on the base branch are section 1, there is no section 2. A detached HEAD may well be on a remote
+  (a tag, a remote branch), so its commits aren't called unpushed.
 - The base branch is the first that exists of: the branch `refs/remotes/origin/HEAD` points to
   (`<remote>/HEAD` if the upstream is on another remote), `<remote>/main`, `<remote>/master`, the
   local `main` and `master`. A local branch is never the base of itself.
@@ -571,8 +573,11 @@ The sections are made of the commits reachable from HEAD (`B` is the current bra
   there is no base branch, the commits that aren't in section 1 are in section 2.
 - On `main` with `origin/main` as its upstream (and base), section 1 is `main (unpushed)`, section 2
   is empty and section 3 is `origin/main`. Without a remote or an upstream there's only the
-  section with the name of the branch, plus the base branch if there's a local `main` or `master`
-  that isn't the current branch.
+  section `B (unpushed · no upstream)` (`main (unpushed · no upstream)` on `main`), plus the base
+  branch if there's a local `main` or `master` that isn't the current branch.
+- The dividers of the unpushed sections (`B (unpushed)`, `B (unpushed · no upstream)`) are drawn with
+  the theme scope `ui.picker.divider.unpushed`, falling back to `warning`, over the divider's style.
+  The other dividers, `HEAD (detached)` included, are not.
 - Commits are put in a section by reachability, not by their parent: a merge commit of `main` into
   the feature branch is in the section of the feature branch, and the commits it brought in that are
   on the base branch are in the section of the base branch. Every commit is listed once.
@@ -753,8 +758,8 @@ the commit log: the same columns, branch sections and dividers, modal keys and s
 | `Enter` in the diff | Open the file as it is now, at the hunk, closing the line history. |
 | `s`, `j`/`k`..., `v`, `A-v`, `w`/`e`/`b`, `S-Down`/`S-Up`, `A-s`, `Esc`, `q` | As in the [commit log](#usage-1). |
 
-- **Rows**: the commits, newest first in the sections of the commit log (`B (unpushed)`, `B`, the
-  base branch, with the same rules); the last one, which added the lines, is marked `(added)`.
+- **Rows**: the commits, newest first in the sections of the commit log (`B (unpushed)` or
+  `B (unpushed · no upstream)`, `B`, the base branch, with the same rules); the last one, which added the lines, is marked `(added)`.
   The first row is the uncommitted changes when any of the lines has uncommitted changes, staged
   or not, saved or not.
 - **Prompt row**: what's followed and the count: `src/main.rs:12-14 · 7 commits`. While it
@@ -3012,7 +3017,11 @@ without `l`):
 - **branch** and **commit**: the branch (`detached at 8b83cad` when detached) and HEAD's short id
   and summary (`no commits yet` before the first);
 - **upstream**: the upstream branch of the current one and how many commits it doesn't have
-  (`3 unpushed`, `all pushed`), or `no upstream`. There is no "behind": it would need a fetch;
+  (`3 unpushed`, `all pushed`). Without an upstream (none configured, or the configured one
+  doesn't exist) it says `no upstream` and, as the commit log counts them, how many commits of
+  HEAD aren't on the base branch (`no upstream  3 unpushed`; just `no upstream` when none; all the
+  commits when there's no base branch); `none while detached`. There is no "behind": it would need
+  a fetch;
 - **remote**: the upstream's remote, else `origin`, else the first one, with its URL as
   configured, or `no remote`;
 - **changes**: staged, unstaged and untracked files, like `git status`, or `clean`;
@@ -3139,7 +3148,9 @@ The columns:
 - **branch**, or `detached at <hash>`, or `missing`;
 - **changes**: staged, unstaged and untracked files, like `git status`, or `clean`;
 - **unpushed**: the commits the branch has that its upstream doesn't (`2 unpushed`, `all
-  pushed`), or `no upstream` (also while detached). There is no "behind": it would need a fetch;
+  pushed`). Without an upstream: `3 unpushed · no upstream`, counted as in the dashboard, or just
+  `no upstream` when there are none (and while detached). There is no "behind": it would need a
+  fetch;
 - **modified**: when it was last modified, `just now`, `5m ago`, `2h ago`, `3d ago`, `4mo ago`,
   `2y ago`.
 

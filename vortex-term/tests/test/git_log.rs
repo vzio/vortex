@@ -512,6 +512,40 @@ async fn the_log_has_a_divider_for_each_branch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_branch_without_upstream_is_all_unpushed() {
+    let Some(work) = Repo::enter("a_branch_without_upstream_is_all_unpushed") else {
+        return;
+    };
+    // a new branch off the pushed main, with a commit of its own and no upstream
+    git(
+        &work,
+        "",
+        &[
+            "checkout",
+            "-q",
+            "--no-track",
+            "-b",
+            "local-only",
+            "origin/main",
+        ],
+    );
+    std::fs::write(work.join("l1.txt"), "l1\n").unwrap();
+    let date = "2024-03-01T13:00:00+00:00";
+    git(&work, date, &["add", "-A"]);
+    git(&work, date, &["commit", "-q", "-m", "Local only"]);
+
+    let session = Session::open_log_on_uncommitted().await;
+    let log = session.log();
+    let dividers: Vec<_> = log.iter().filter(|row| row.contains('─')).collect();
+    assert_eq!(dividers.len(), 2, "{log:#?}");
+    assert!(
+        dividers[0].starts_with("── local-only (unpushed · no upstream) ─"),
+        "{log:#?}"
+    );
+    assert!(dividers[1].starts_with("── origin/main ─"), "{log:#?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_cursor_never_rests_on_a_divider() {
     let Some(_) = Repo::enter("the_cursor_never_rests_on_a_divider") else {
         return;

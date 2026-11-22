@@ -336,11 +336,10 @@ impl Repo {
             }));
         }
         // No upstream: what isn't on the base branch is unpushed, as in the commit log
-        let current = branch.as_bstr().to_string();
-        let base = super::log::base_branch(&repo, "origin", Some(&current));
+        let base = super::log::base_of(&repo, &branch);
         Ok(Some(Upstream {
             name: None,
-            ahead: ahead_of(base.into_iter().map(|(_, id)| id).collect())?,
+            ahead: ahead_of(base.into_iter().collect())?,
         }))
     }
 
