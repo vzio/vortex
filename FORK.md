@@ -1784,8 +1784,6 @@ theme = "gruvbox"
 
 - One theme for the whole screen: splits of different languages side by side show the focused
   one's theme in all of them.
-- The terminal's colors don't follow: a 16-color terminal shows a true-color language theme as
-  well as it shows the main theme, no better.
 
 ## Practice
 
