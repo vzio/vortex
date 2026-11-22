@@ -118,7 +118,10 @@ mod tests {
         let root = PathBuf::from("/work/project");
         let path = root.join("src/main.rs");
         assert_eq!(shown_path_in(&path, &root, false), "src/main.rs");
-        assert_eq!(shown_path_in(&path, &root, true), "/work/project/src/main.rs");
+        assert_eq!(
+            shown_path_in(&path, &root, true),
+            "/work/project/src/main.rs"
+        );
         let outside = PathBuf::from("/etc/hosts");
         assert_eq!(shown_path_in(&outside, &root, false), "/etc/hosts");
     }

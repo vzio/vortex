@@ -52,4 +52,5 @@ mod test {
     mod watch;
     mod worktrees;
     mod x_empty_line;
+    mod yank_place;
 }
