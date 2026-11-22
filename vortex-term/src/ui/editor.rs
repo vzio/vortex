@@ -2063,6 +2063,11 @@ impl Component for EditorView {
             );
         }
         self.glitch_diagnostics(cx.editor, surface);
+        // a mode's screen (this fork) has a background of its own: over the views' plain
+        // background (text, gutter), not what has its own (the cursor line, selections, statuslines)
+        if crate::modes::current(cx.editor).is_some() {
+            crate::modes::paint_screen(&cx.editor.theme, editor_area, surface);
+        }
 
         if let Some(panel_area) = panel_area {
             crate::terminal::render(cx.editor, panel_area, surface);

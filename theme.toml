@@ -84,6 +84,8 @@
 
 # User interface
 "ui.background" = { fg = "text", bg = "background" }
+# watch and debug mode (this fork): their screen is not an editable buffer
+"ui.background.mode" = { bg = "mode_screen" }
 "ui.background.separator" = "n_4"
 
 "ui.gutter" = { bg = "background" }
@@ -285,6 +287,7 @@ hint = { fg = "n_8", bg = "n_1" }
 
 [palette]
 background = "#0f0f0f"
+mode_screen = "#161020"   # the screen of watch and debug mode: a faint purple, not a buffer
 
 # Reds, vivid to faded;
 # contrast on the background in comments

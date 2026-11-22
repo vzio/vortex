@@ -14,6 +14,7 @@ pub mod health;
 pub mod history;
 pub mod job;
 pub mod keymap;
+pub mod modes;
 pub mod logging;
 pub mod practice;
 pub mod terminal;

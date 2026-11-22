@@ -59,7 +59,9 @@ pub fn enter(editor: &mut Editor) {
 /// Leaves debug mode: the session goes on as it was. Nothing is printed: the bar going away says
 /// it.
 pub fn leave(editor: &mut Editor) {
-    editor.debug.mode = None;
+    if editor.debug.mode.take().is_some() {
+        crate::modes::restore_editing(editor);
+    }
 }
 
 /// `:debug-mode`: enters debug mode, or leaves it when it is on.

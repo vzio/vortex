@@ -103,7 +103,7 @@ fn resume(editor: &mut Editor) {
 pub fn leave_mode(editor: &mut Editor) {
     if let Some(session) = editor.watch.active() {
         session.leave();
-        session.flash = None;
+        crate::modes::restore_editing(editor);
     }
 }
 
@@ -192,7 +192,9 @@ fn plural(count: usize) -> &'static str {
 pub fn stop(editor: &mut Editor) -> Option<usize> {
     let session = editor.watch.live()?;
     session.stop();
-    Some(session.change_count())
+    let count = session.change_count();
+    crate::modes::restore_editing(editor);
+    Some(count)
 }
 
 /// The result of `:watch-stop` for the status line: short.
@@ -208,6 +210,7 @@ pub fn clear(editor: &mut Editor) {
     for doc in editor.documents_mut() {
         doc.clear_watch_base();
     }
+    crate::modes::restore_editing(editor);
 }
 
 /// The hash of some lines, or of a file's content.
