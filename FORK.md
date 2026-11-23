@@ -367,7 +367,8 @@ its drawing after the dashboard's and no cursor, in `ui/editor.rs`; `ScreenKind:
 cover rule of `Editor::place` (normal mode, a modified buffer allowed) in `vortex-view/src/history.rs`,
 and showing it again and leaving it for its own text in `vortex-term/src/history.rs`;
 `markdown-view` (`MarkdownViewStartup`) and `markdown-width` in `vortex-view/src/editor.rs`; a file
-named on the command line opening rendered in `Application::new`; the file tree's `open_selected`
+named on the command line opening rendered in `Application::new` (and `Application::markdown`,
+the tests' way to the page); the file tree's `open_selected`
 (`ui/explorer.rs`); `markdown_view` in `commands.rs` and `V` in `keymap/default.rs`;
 `:markdown-view` in `typed.rs`; `ui::markdown` made public for `highlighted_code_block`; the
 Markdown scopes and `ui.markdown.*` in `theme.toml` and `matrix_theme.toml`.
