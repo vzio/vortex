@@ -147,6 +147,8 @@ impl Application {
                 _ => false,
             };
 
+        // a Markdown file named on the command line opens rendered (this fork)
+        let files_named = !args.load_tutor && !args.files.is_empty();
         if args.load_tutor {
             let path = vortex_loader::runtime_file(Path::new("tutor"));
             editor.open(&path, Action::VerticalSplit)?;
@@ -243,6 +245,10 @@ impl Application {
         if dashboard {
             if let Some(view) = compositor.find::<ui::EditorView>() {
                 view.open_dashboard(&mut editor);
+            }
+        } else if files_named && crate::markdown_view::opens_rendered(&editor, doc!(editor), true) {
+            if let Some(view) = compositor.find::<ui::EditorView>() {
+                view.open_markdown(&mut editor, crate::markdown_view::Start::Source, false);
             }
         }
 

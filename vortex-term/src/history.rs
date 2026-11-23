@@ -89,6 +89,16 @@ pub fn step(
 fn show(compositor: &mut Compositor, editor: &mut Editor, place: Place, here: &Place) {
     match place {
         Place::Text { doc, selection } => {
+            // leaving the render mode for its own text: the place's cursor, not the page's
+            if let Place::Screen(Screen {
+                kind: ScreenKind::Markdown(_),
+                ..
+            }) = here
+            {
+                if let Some(view) = compositor.find::<ui::EditorView>() {
+                    view.close_markdown(editor, false);
+                }
+            }
             editor.show_place(doc, selection);
             close_dashboard_buffer(editor, here);
         }
@@ -124,6 +134,18 @@ fn restore(compositor: &mut Compositor, editor: &mut Editor, screen: &Screen) {
             }
         }
         ScreenKind::DebugPanel => editor.debug.focus(),
+        ScreenKind::Markdown(doc) => {
+            if editor.document(doc).is_none() {
+                return;
+            }
+            let view_id = editor.tree.focus;
+            if editor.tree.get(view_id).doc != doc {
+                editor.switch(doc, vortex_view::editor::Action::Replace);
+            }
+            if let Some(view) = compositor.find::<ui::EditorView>() {
+                view.show_markdown_again(editor, doc);
+            }
+        }
     }
 }
 
@@ -213,12 +235,19 @@ fn describe(editor: &Editor, place: &Place) -> (String, String, Option<(Document
         }
         Place::Screen(screen) => {
             let name = match screen.kind {
-                ScreenKind::Dashboard => "the dashboard",
-                ScreenKind::Vortex => "the vortex",
-                ScreenKind::Diff => "a diff",
-                ScreenKind::DebugPanel => "the debug panel",
+                ScreenKind::Dashboard => "the dashboard".to_string(),
+                ScreenKind::Vortex => "the vortex".to_string(),
+                ScreenKind::Diff => "a diff".to_string(),
+                ScreenKind::DebugPanel => "the debug panel".to_string(),
+                ScreenKind::Markdown(doc) => {
+                    let name = editor
+                        .document(doc)
+                        .map(|doc| doc.display_name().into_owned())
+                        .unwrap_or_default();
+                    format!("{name}, rendered")
+                }
             };
-            (name.to_string(), String::new(), None)
+            (name, String::new(), None)
         }
     }
 }

@@ -8,7 +8,7 @@ pub mod hex_view;
 mod info;
 pub mod keyhelp;
 pub mod lsp;
-mod markdown;
+pub mod markdown;
 pub mod menu;
 pub mod modebar;
 pub mod overlay;

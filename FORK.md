@@ -1742,6 +1742,11 @@ theme = "matrix"
   don't mix), a glitch on the logo (0.06), a slow one on the vortex (0.004), 0.02 on error
   diagnostics, and the terminal panel through a phosphor filter of its text green.
 
+Markdown follows the same idea: headings go from bright to dim green as the level goes down, bold,
+and levels 1 to 3 sit on a dark green band. Strikethrough is crossed out and dim. The render mode
+scopes are `ui.markdown.border`, `ui.markdown.dim` and `ui.markdown.reading` (a faint band). The
+contrast test checks them.
+
 Its contrast is tested (WCAG ratios, `vortex-view/src/contrast_tests.rs`): text on the background at least 7:1,
 comments and inactive text at least 4.5:1, text on the tinted backgrounds (the current line, the
 selections, strings) at least 4.5:1, the selection and the cursor distinguishable from the text
@@ -3702,6 +3707,13 @@ theme = "helix"
 `default`, the name the built-in theme had before, still loads `vortex` (in `theme = "default"`
 and in a theme's `inherits = "default"`), so older configs keep working; it is no longer listed by
 `:theme`. A terminal without true color still starts with `base16_default`.
+
+Markdown has a style for each part. Headings go by level in purples and reds, and levels 1 to 3 sit
+on a dark band of their hue (purple, red, grey-purple). Strikethrough is crossed out and dimmer.
+Inline code and code blocks have their own backgrounds. The Markdown render mode adds three scopes:
+`ui.markdown.border` (table borders, quote bars, rules), `ui.markdown.dim` (images and raw HTML,
+which a terminal can't show) and `ui.markdown.reading` (the reading line). The contrast test checks
+all of them.
 
 ## Practice
 

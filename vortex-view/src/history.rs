@@ -71,6 +71,8 @@ pub enum ScreenKind {
     Diff,
     /// The debug panel, focused.
     DebugPanel,
+    /// The Markdown render mode of a buffer.
+    Markdown(DocumentId),
 }
 
 /// What the terminal UI needs to show a screen again (the diff view itself). It is taken when
@@ -243,11 +245,14 @@ impl Editor {
         }
         let view = self.tree.get(self.tree.focus);
         if let Some(cover) = &self.screen_cover {
+            // the render mode covers a buffer that may be modified, in normal mode only
+            let markdown = matches!(cover.kind, ScreenKind::Markdown(_));
             if cover.view == view.id
                 && cover.doc == view.doc
-                && self
-                    .document(cover.doc)
-                    .is_some_and(|doc| doc.version() == cover.version && !doc.is_modified())
+                && (!markdown || self.mode() == crate::document::Mode::Normal)
+                && self.document(cover.doc).is_some_and(|doc| {
+                    doc.version() == cover.version && (markdown || !doc.is_modified())
+                })
             {
                 return Place::screen(cover.kind);
             }
@@ -360,6 +365,7 @@ impl Editor {
                 ScreenKind::Diff => !screen.is_empty(),
                 ScreenKind::DebugPanel => self.debug_adapters.get_active_client().is_some(),
                 ScreenKind::Dashboard | ScreenKind::Vortex => true,
+                ScreenKind::Markdown(doc) => self.documents.contains_key(&doc),
             },
         }
     }
