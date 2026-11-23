@@ -390,6 +390,20 @@ impl EditorView {
         let text_annotations = view.text_annotations(doc, Some(theme));
         let mut decorations = DecorationManager::default();
 
+        // with selective soft wrap (this fork) the lines are scrolled sideways by different
+        // amounts: each line draws the rulers, first, at its own offset
+        let selective = doc.text_format(inner.width, None).is_selective();
+        if selective {
+            let (columns, style) = Self::rulers(editor, doc, theme);
+            if !columns.is_empty() {
+                decorations.add_decoration(text_decorations::rulers::Rulers::new(
+                    columns,
+                    style,
+                    inner.height,
+                ));
+            }
+        }
+
         if is_focused && config.cursorline {
             decorations.add_decoration(Self::cursorline(doc, view, theme));
         }
@@ -495,7 +509,9 @@ impl EditorView {
             );
         }
 
-        Self::render_rulers(editor, doc, view, inner, surface, theme);
+        if !selective {
+            Self::render_rulers(editor, doc, view, inner, surface, theme);
+        }
 
         let primary_cursor = doc
             .selection(view.id)
@@ -588,6 +604,18 @@ impl EditorView {
         statusline::render(&mut context, statusline_area, surface);
     }
 
+    /// The columns of the rulers of `doc` (1-based), and their style.
+    fn rulers(editor: &Editor, doc: &Document, theme: &Theme) -> (Vec<u16>, Style) {
+        let style = theme
+            .try_get("ui.virtual.ruler")
+            .unwrap_or_else(|| Style::default().bg(Color::Red));
+        let rulers = doc
+            .language_config()
+            .and_then(|config| config.rulers.clone())
+            .unwrap_or_else(|| editor.config().rulers.clone());
+        (rulers, style)
+    }
+
     pub fn render_rulers(
         editor: &Editor,
         doc: &Document,
@@ -596,15 +624,7 @@ impl EditorView {
         surface: &mut Surface,
         theme: &Theme,
     ) {
-        let editor_rulers = &editor.config().rulers;
-        let ruler_theme = theme
-            .try_get("ui.virtual.ruler")
-            .unwrap_or_else(|| Style::default().bg(Color::Red));
-
-        let rulers = doc
-            .language_config()
-            .and_then(|config| config.rulers.as_ref())
-            .unwrap_or(editor_rulers);
+        let (rulers, ruler_theme) = Self::rulers(editor, doc, theme);
 
         let view_offset = doc.view_offset(view.id);
 
@@ -1259,13 +1279,14 @@ impl EditorView {
 
             let Position { col, .. } =
                 visual_offset_from_block(text, cursor, cursor, &text_format, text_annotations).0;
+            // the cursor's line may be scrolled sideways or not (this fork: selective soft wrap)
+            let offset =
+                text_format.col_offset(text.char_to_line(cursor), view_offset.horizontal_offset);
 
             // if the cursor is horizontally in the view
-            if col >= view_offset.horizontal_offset
-                && inner_area.width > (col - view_offset.horizontal_offset) as u16
-            {
+            if col >= offset && inner_area.width > (col - offset) as u16 {
                 let area = Rect::new(
-                    inner_area.x + (col - view_offset.horizontal_offset) as u16,
+                    inner_area.x + (col - offset) as u16,
                     view.area.y,
                     1,
                     view.area.height,

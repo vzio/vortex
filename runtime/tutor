@@ -168,6 +168,12 @@
  Set markdown-view = "always" or "never" under [editor] to
  change when Markdown opens rendered.
 
+ In the source, prose wraps to the window but tables and code
+ blocks don't: their lines stay one above the other and run
+ past the right edge. Moving along a wide row scrolls them all
+ sideways together while the prose stays put; back on prose,
+ they start at the left edge again.
+
 
 
 =================================================================

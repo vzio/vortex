@@ -676,6 +676,10 @@ pub struct SoftWrap {
     pub wrap_indicator: Option<String>,
     /// Softwrap at `text_width` instead of viewport width if it is shorter
     pub wrap_at_text_width: Option<bool>,
+    /// The tree-sitter node types whose lines never wrap (this fork: selective soft wrap), like
+    /// Markdown's tables and code blocks: they stay one visual line each and scroll sideways
+    /// together. Names the grammar doesn't have match nothing.
+    pub except: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

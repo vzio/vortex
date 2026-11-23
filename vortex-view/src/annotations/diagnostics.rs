@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use vortex_core::diagnostic::Severity;
 use vortex_core::doc_formatter::{FormattedGrapheme, TextFormat};
+use vortex_core::selective_wrap::LineOffsets;
 use vortex_core::text_annotations::LineAnnotation;
 use vortex_core::{softwrapped_dimensions, Diagnostic, Position};
 
@@ -104,6 +105,7 @@ impl InlineDiagnosticsConfig {
             wrap_indicator_highlight: None,
             viewport_width: width,
             soft_wrap_at_text_width: true,
+            unwrapped: Default::default(),
         }
     }
 }
@@ -259,7 +261,7 @@ impl<'a> InlineDiagnosticAccumulator<'a> {
 pub(crate) struct InlineDiagnostics<'a> {
     state: InlineDiagnosticAccumulator<'a>,
     width: u16,
-    horizontal_off: usize,
+    horizontal_off: LineOffsets,
 }
 
 impl<'a> InlineDiagnostics<'a> {
@@ -268,7 +270,7 @@ impl<'a> InlineDiagnostics<'a> {
         doc: &'a Document,
         cursor: usize,
         width: u16,
-        horizontal_off: usize,
+        horizontal_off: LineOffsets,
         config: InlineDiagnosticsConfig,
     ) -> Box<dyn LineAnnotation + 'a> {
         Box::new(InlineDiagnostics {
@@ -289,8 +291,11 @@ impl LineAnnotation for InlineDiagnostics<'_> {
     }
 
     fn process_anchor(&mut self, grapheme: &FormattedGrapheme) -> usize {
-        self.state
-            .proccess_anchor(grapheme, self.width, self.horizontal_off)
+        self.state.proccess_anchor(
+            grapheme,
+            self.width,
+            self.horizontal_off.of_line(grapheme.line_idx),
+        )
     }
 
     fn insert_virtual_lines(

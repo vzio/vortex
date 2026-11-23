@@ -22,6 +22,7 @@ use unicode_segmentation::{Graphemes, UnicodeSegmentation};
 use vortex_stdx::rope::{RopeGraphemes, RopeSliceExt};
 
 use crate::graphemes::{Grapheme, GraphemeStr};
+use crate::selective_wrap::UnwrappedLines;
 use crate::syntax::Highlight;
 use crate::text_annotations::TextAnnotations;
 use crate::{Position, RopeSlice};
@@ -151,6 +152,34 @@ pub struct TextFormat {
     pub wrap_indicator_highlight: Option<Highlight>,
     pub viewport_width: u16,
     pub soft_wrap_at_text_width: bool,
+    /// The lines that don't wrap although `soft_wrap` is on (this fork: selective soft wrap).
+    pub unwrapped: UnwrappedLines,
+}
+
+impl TextFormat {
+    /// Whether the visual lines of document line `line` wrap.
+    #[inline]
+    pub fn wraps(&self, line: usize) -> bool {
+        self.soft_wrap && !self.unwrapped.contains(line)
+    }
+
+    /// The sideways offset of the visual lines of document line `line`, for a view scrolled
+    /// `horizontal_offset` columns sideways: the lines that don't wrap share it (all of them,
+    /// with soft wrap off), the lines that wrap always start at the left edge.
+    #[inline]
+    pub fn col_offset(&self, line: usize, horizontal_offset: usize) -> usize {
+        if horizontal_offset == 0 || self.wraps(line) {
+            0
+        } else {
+            horizontal_offset
+        }
+    }
+
+    /// Whether some lines wrap and others don't, so the sideways offset differs between lines.
+    #[inline]
+    pub fn is_selective(&self) -> bool {
+        self.soft_wrap && !self.unwrapped.is_empty()
+    }
 }
 
 // test implementation is basically only used for testing or when softwrap is always disabled
@@ -165,6 +194,7 @@ impl Default for TextFormat {
             viewport_width: 17,
             wrap_indicator_highlight: None,
             soft_wrap_at_text_width: false,
+            unwrapped: UnwrappedLines::default(),
         }
     }
 }
@@ -182,6 +212,9 @@ pub struct DocumentFormatter<'t> {
     /// The line pos of the `graphemes` iter used for inserting annotations
     line_pos: usize,
     exhausted: bool,
+    /// Whether the current document line wraps: `soft_wrap`, unless the line is one of the
+    /// format's unwrapped lines (this fork: selective soft wrap).
+    wraps: bool,
 
     inline_annotation_graphemes: Option<(Graphemes<'t>, Option<Highlight>)>,
 
@@ -223,6 +256,7 @@ impl<'t> DocumentFormatter<'t> {
             graphemes: text.slice(block_char_idx..).graphemes(),
             char_pos: block_char_idx,
             exhausted: false,
+            wraps: text_fmt.wraps(block_line_idx),
             indent_level: None,
             peeked_grapheme: None,
             word_buf: Vec::with_capacity(64),
@@ -433,7 +467,7 @@ impl<'t> Iterator for DocumentFormatter<'t> {
     type Item = FormattedGrapheme<'t>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let grapheme = if self.text_fmt.soft_wrap {
+        let grapheme = if self.wraps {
             if self.word_i >= self.word_buf.len() {
                 self.advance_to_next_word();
                 self.word_i = 0;
@@ -445,6 +479,9 @@ impl<'t> Iterator for DocumentFormatter<'t> {
             self.word_i += 1;
             grapheme
         } else {
+            // a word never spans a line break, so a line that doesn't wrap starts with nothing
+            // left from the wrapping of the line before
+            debug_assert!(self.peeked_grapheme.is_none() && self.word_i >= self.word_buf.len());
             self.advance_grapheme(self.visual_pos.col, self.char_pos)?
         };
 
@@ -470,6 +507,11 @@ impl<'t> Iterator for DocumentFormatter<'t> {
             self.visual_pos.col = 0;
             if !grapheme.is_virtual() {
                 self.line_pos += 1;
+                let wraps = self.text_fmt.wraps(self.line_pos);
+                if wraps != self.wraps {
+                    self.wraps = wraps;
+                    self.indent_level = None;
+                }
             }
         } else {
             self.visual_pos.col += grapheme.width();

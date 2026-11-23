@@ -23,7 +23,7 @@ use ::parking_lot::Mutex;
 use serde::de::{self, Deserialize, Deserializer};
 use serde::Serialize;
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::future::Future;
@@ -39,6 +39,7 @@ use vortex_core::{
     history::{History, State, UndoKind},
     indent::{auto_detect_indent_style, IndentStyle},
     line_ending::auto_detect_line_ending,
+    selective_wrap::{self, UnwrappedLines},
     syntax::{self, config::LanguageConfiguration},
     ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
 };
@@ -200,6 +201,15 @@ pub enum DocumentOpenError {
     IoError(#[from] io::Error),
 }
 
+/// What the unwrapped lines of a document were computed for.
+#[derive(Debug)]
+struct UnwrappedKey {
+    version: i32,
+    /// The root node of the syntax tree, new with every parse.
+    tree: usize,
+    except: Box<[String]>,
+}
+
 pub struct Document {
     pub(crate) id: DocumentId,
     text: Rope,
@@ -256,6 +266,9 @@ pub struct Document {
     // be more troublesome.
     pub history: Cell<History>,
     pub config: Arc<dyn DynAccess<Config>>,
+    /// The lines that don't soft wrap (this fork: selective soft wrap), for the key they were
+    /// computed for: they're found again when the text, the syntax tree or the setting changes.
+    unwrapped: RefCell<Option<(UnwrappedKey, UnwrappedLines)>>,
 
     savepoints: Vec<Weak<SavePoint>>,
 
@@ -838,6 +851,7 @@ impl Document {
             conflicted: false,
             version: 0,
             history: Cell::new(History::default()),
+            unwrapped: RefCell::new(None),
             savepoints: Vec::new(),
             last_saved_time: SystemTime::now(),
             disk: None,
@@ -2783,8 +2797,18 @@ impl Document {
             .or_else(|| config.soft_wrap.wrap_indicator.clone())
             .unwrap_or_else(|| "↪ ".into());
         let tab_width = self.tab_width() as u16;
+        let soft_wrap = enable_soft_wrap && viewport_width > 10;
+        let except = language_soft_wrap
+            .and_then(|soft_wrap| soft_wrap.except.as_deref())
+            .or(editor_soft_wrap.except.as_deref())
+            .unwrap_or_default();
+        let unwrapped = if soft_wrap {
+            self.unwrapped_lines(except)
+        } else {
+            UnwrappedLines::default()
+        };
         TextFormat {
-            soft_wrap: enable_soft_wrap && viewport_width > 10,
+            soft_wrap,
             tab_width,
             max_wrap: max_wrap.min(viewport_width / 4),
             max_indent_retain: max_indent_retain.min(viewport_width * 2 / 5),
@@ -2795,7 +2819,31 @@ impl Document {
             wrap_indicator_highlight: theme
                 .and_then(|theme| theme.find_highlight("ui.virtual.wrap")),
             soft_wrap_at_text_width,
+            unwrapped,
         }
+    }
+
+    /// The lines of the nodes of kind `except` (selective soft wrap), from the syntax tree; none
+    /// without one. Computed once per version of the text and tree.
+    fn unwrapped_lines(&self, except: &[String]) -> UnwrappedLines {
+        let Some(syntax) = self.syntax.as_ref().filter(|_| !except.is_empty()) else {
+            return UnwrappedLines::default();
+        };
+        let (version, tree) = (self.version, syntax.tree().root_node().id());
+        let mut cache = self.unwrapped.borrow_mut();
+        if let Some((key, lines)) = cache.as_ref() {
+            if key.version == version && key.tree == tree && *key.except == *except {
+                return lines.clone();
+            }
+        }
+        let lines = selective_wrap::unwrapped_lines(syntax, self.text.slice(..), except);
+        let key = UnwrappedKey {
+            version,
+            tree,
+            except: except.into(),
+        };
+        *cache = Some((key, lines.clone()));
+        lines
     }
 
     /// Set the inlay hints for this document and `view_id`.

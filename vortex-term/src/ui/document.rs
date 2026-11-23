@@ -137,6 +137,11 @@ pub fn render_text(
                 is_in_indent_area = true;
                 decorations.render_virtual_lines(renderer, last_line_pos, last_line_end)
             }
+            // with selective soft wrap (this fork) only the lines that don't wrap are scrolled
+            // sideways: everything drawn on this visual line (the text, the cursor, the
+            // decorations, the ghost text below it) uses its offset
+            renderer
+                .set_col_offset(text_fmt.col_offset(grapheme.line_idx, renderer.horizontal_offset));
             last_line_pos = LinePos {
                 first_visual_line: grapheme.line_idx != last_line_pos.doc_line,
                 doc_line: grapheme.line_idx,
@@ -184,7 +189,8 @@ pub fn render_text(
     }
 
     renderer.draw_indent_guides(last_line_indent_level, last_line_pos.visual_line);
-    decorations.render_virtual_lines(renderer, last_line_pos, last_line_end)
+    decorations.render_virtual_lines(renderer, last_line_pos, last_line_end);
+    decorations.finish_rendering(renderer);
 }
 
 #[derive(Debug)]
@@ -204,7 +210,12 @@ pub struct TextRenderer<'a> {
     pub starting_indent: usize,
     pub draw_indent_guides: bool,
     pub viewport: Rect,
+    /// The vertical offset, and the sideways offset of the visual line being drawn: the view's
+    /// `horizontal_offset`, or 0 on a line that wraps (this fork: selective soft wrap).
     pub offset: Position,
+    /// The view's sideways offset, shared by the lines that don't wrap.
+    pub horizontal_offset: usize,
+    indent_guide_skip_levels: usize,
 }
 
 pub struct GraphemeStyle {
@@ -272,9 +283,13 @@ impl<'a> TextRenderer<'a> {
             virtual_tab,
             whitespace_style: theme.get("ui.virtual.whitespace"),
             indent_width,
-            starting_indent: offset.col / indent_width as usize
-                + !offset.col.is_multiple_of(indent_width as usize) as usize
-                + editor_config.indent_guides.skip_levels as usize,
+            starting_indent: starting_indent(
+                offset.col,
+                indent_width,
+                editor_config.indent_guides.skip_levels as usize,
+            ),
+            indent_guide_skip_levels: editor_config.indent_guides.skip_levels as usize,
+            horizontal_offset: offset.col,
             indent_guide_style: text_style.patch(
                 theme
                     .try_get("ui.virtual.indent-guide")
@@ -286,6 +301,15 @@ impl<'a> TextRenderer<'a> {
             offset,
         }
     }
+    /// Sets the sideways offset of the visual line about to be drawn.
+    pub fn set_col_offset(&mut self, col: usize) {
+        if col != self.offset.col {
+            self.offset.col = col;
+            self.starting_indent =
+                starting_indent(col, self.indent_width, self.indent_guide_skip_levels);
+        }
+    }
+
     /// Draws a single `grapheme` at the current render position with a specified `style`.
     pub fn draw_decoration_grapheme(
         &mut self,
@@ -494,6 +518,11 @@ impl<'a> TextRenderer<'a> {
     }
 }
 
+/// The first indent guide drawn, for a view scrolled `col` columns sideways.
+fn starting_indent(col: usize, indent_width: u16, skip_levels: usize) -> usize {
+    col / indent_width as usize + !col.is_multiple_of(indent_width as usize) as usize + skip_levels
+}
+
 struct SyntaxHighlighter<'h, 'r, 't> {
     inner: Option<Highlighter<'h>>,
     text: RopeSlice<'r>,
@@ -595,3 +624,6 @@ impl<'t> OverlayHighlighter<'t> {
         self.update_pos();
     }
 }
+
+#[cfg(test)]
+mod drawing_cost;

@@ -93,6 +93,7 @@ git blame FILE
 - [`x` on an empty line](#x-on-an-empty-line)
 - [Move lines](#move-lines)
 - [Soft wrap for Markdown](#soft-wrap-for-markdown)
+- [Selective soft wrap](#selective-soft-wrap)
 - [Markdown render mode](#markdown-render-mode)
 - [`gw` with case](#gw-with-case)
 - [Yank `file:lines`](#yank-filelines)
@@ -136,6 +137,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | `gw` with case | `label_index` and `label_target` in `vortex-term/src/commands.rs` (`jump_to_label`), `vortex-term/tests/test/goto_word.rs` |
 | Yank `file:lines` | `vortex-term/src/yank_place.rs` (the places and the clipboard); the commands in `vortex-term/src/commands.rs`, `Space :` in `keymap/default.rs`; `C-y` in the lists of changes (`commands/changes.rs`), the line history (`commands/git_log.rs`, `LineRow::places` in `commands/line_history.rs`), the bookmark and history pickers (`vortex-term/src/history.rs`) and the file tree (`ui/explorer.rs`); tests in `vortex-term/tests/test/yank_place.rs` |
 | Soft wrap for Markdown | the markdown entry of `languages.toml`, `vortex-term/tests/test/soft_wrap.rs` |
+| Selective soft wrap | `vortex-core/src/selective_wrap.rs` (the unwrapped lines, found in the syntax tree; `LineOffsets`), `TextFormat::{wraps, col_offset, is_selective}` and the formatter's `wraps` in `vortex-core/src/doc_formatter.rs` (tests in `doc_formatter/test.rs`), `char_idx_at_screen_offset` in `vortex-core/src/position.rs`, `vortex-term/src/ui/text_decorations/rulers.rs` (rulers per line), `vortex-term/src/ui/document/drawing_cost.rs` (the measurement), `vortex-term/tests/test/selective_wrap.rs` |
 | Markdown render mode | `vortex-term/src/markdown_view.rs` (the view: when it is up, the reading line, the keys and the commands it takes over, links, search, the outline, code blocks scrolled sideways, going back to the source, the drawing), `vortex-term/src/markdown_view/` (`parse.rs` Markdown to styled blocks, `page.rs` the layout of the page and its headings, links and code blocks, `wrap.rs` wrapping styled text, `table.rs` the tables' columns and cells, `tests.rs` and `snapshots/` the rendering tests), `vortex-term/tests/test/markdown_view.rs` |
 | Terminal panel | `vortex-terminal/` (the shell: pty, emulator, OSC 133, bash/zsh integration), `vortex-view/src/terminal.rs` (panel state, `[editor.terminal]`), `vortex-term/src/terminal/` (drawing, focus, input encoding, the `vx` shim), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
@@ -372,6 +374,19 @@ the tests' way to the page); the file tree's `open_selected`
 (`ui/explorer.rs`); `markdown_view` in `commands.rs` and `V` in `keymap/default.rs`;
 `:markdown-view` in `typed.rs`; `ui::markdown` made public for `highlighted_code_block`; the
 Markdown scopes and `ui.markdown.*` in `theme.toml` and `matrix_theme.toml`.
+
+Selective soft wrap changes core files: `TextFormat` (the `unwrapped` lines, `wraps`,
+`col_offset`, `is_selective`) and the formatter's `wraps` in `vortex-core/src/doc_formatter.rs`;
+`char_idx_at_screen_offset` in `vortex-core/src/position.rs`; `except` of `SoftWrap` in
+`vortex-core/src/syntax/config.rs`; `Document::text_format` and its cache of the unwrapped lines
+(`unwrapped_lines`) in `vortex-view/src/document.rs`; `offset_coords_to_in_view_center` (the
+offset rule), `screen_coords_at_pos`, `text_pos_at_visual_coords` and the inline diagnostics'
+offsets (`LineOffsets`) in `vortex-view/src/view.rs` and `vortex-view/src/annotations/diagnostics.rs`;
+`TextRenderer::set_col_offset` (an offset per visual line) and `render_text` in
+`vortex-term/src/ui/document.rs`; `Decoration::finish_rendering` in
+`vortex-term/src/ui/text_decorations.rs`; the rulers and the cursor column in `render_view` and
+`highlight_cursorcolumn` (`ui/editor.rs`); `align_view_middle` in `commands.rs`; Markdown's
+`except` in `languages.toml`.
 
 To build: `cargo install --path vortex-term --locked`.
 
@@ -1488,6 +1503,78 @@ soft-wrap = { enable = false }
 ```
 
 Tested in `vortex-term/tests/test/soft_wrap.rs`.
+
+## Selective soft wrap
+
+With soft wrap on, every line wraps to the window. That's right for prose and wrong for tables and
+code, whose lines must stay one above the other. So wrapping is selective:
+
+- **Normal text wraps** to the window, as soft wrap does.
+- **The lines of some syntax nodes never wrap**: Markdown's tables and code blocks, for example.
+  Each stays one visual line and runs past the right edge, as in a buffer without soft wrap.
+- **One sideways offset, for the unwrapped lines only.** Moving the cursor right along a wide table
+  row scrolls the view sideways to keep the cursor visible: every unwrapped line on the screen
+  shifts by the same amount, so the rows of a table stay aligned, while the lines that wrap stay
+  put, starting at the left edge. When the cursor goes to a line that wraps, the offset goes back
+  to 0 and the tables start at the left edge again: the screen reads as a page whenever you aren't
+  working in a wide block. Back in the table, the offset comes back as soon as the cursor needs it.
+- With soft wrap off nothing changes: every line shares the offset, as before.
+
+Which nodes never wrap is a setting of the language, `soft-wrap.except`, a list of tree-sitter node
+types; it sits next to `soft-wrap.enable` in `languages.toml`. Markdown's defaults:
+
+```toml
+[[language]]
+name = "markdown"
+soft-wrap = { enable = true, except = ["pipe_table", "fenced_code_block", "indented_code_block", "html_block", "minus_metadata", "plus_metadata"] }
+```
+
+Tables, fenced and indented code blocks (diagrams and math in fences included), HTML blocks (hand
+laid out, indented markup) and the YAML or TOML front matter. Any language can list its own, say
+long string literals:
+
+```toml
+[[language]]
+name = "rust"
+soft-wrap = { enable = true, except = ["raw_string_literal"] }
+```
+
+`except = []` wraps everything again. The setting is also read from `[editor.soft-wrap]` for the
+languages that don't set it, like the other `soft-wrap` keys. Names a grammar doesn't have match
+nothing, and a language without a grammar wraps everything.
+
+How it works:
+
+- A node's lines are all the lines it touches, from the line of its first byte to the line of its
+  last: wrapping is decided per document line. The nodes are looked up in the root layer of the
+  syntax tree (an injected language's nodes aren't), once per version of the text, when the view is
+  first drawn after an edit, and kept with the document.
+- The document formatter (`DocumentFormatter`) asks at each line start whether the line wraps; the
+  set travels in its `TextFormat`.
+- Everything that maps text to screen cells and back takes the sideways offset of the line it is
+  on (`TextFormat::col_offset`): the drawing (text, selections, search and other highlights, the
+  jump labels of `gw`, inlay hints, indent guides, the cursor), the ghost text of diagnostics and
+  its layout, inline blame, the debugger's time per line, mouse clicks and drags, the cursor's
+  position for popups, the cursor column, the rulers (drawn per line when the offset differs
+  between lines) and keeping the cursor in view. Row-wide things (the cursor line, the debugger's
+  frame line, watch mode's flash, the gutter and its markers) have no column to map.
+
+**The cost.** Drawing a 120x50 view in the middle of a 25,000-line Markdown file (1000 sections of
+prose, a wide table and a code block), with syntax highlighting, median of 300 frames
+(`vortex-term/src/ui/document/drawing_cost.rs`, built with the integration profile):
+
+DRAWING_COST_TABLE
+
+### Limitations
+
+- Wrapping is per line: a listed node that starts or ends in the middle of a line keeps the whole
+  line from wrapping.
+- Only the root language's nodes are looked at: a Rust string inside a Markdown code block is
+  already unwrapped as part of the block, but `except` of an injected language does nothing.
+- The rulers on the rows of ghost text (diagnostics, blame) take the offset of the line above them;
+  past the end of the file, none.
+- There's no way to scroll the unwrapped lines sideways without moving the cursor (as without soft
+  wrap: `z` has no sideways scroll), and the mouse wheel scrolls up and down only.
 
 ## Markdown render mode
 

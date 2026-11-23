@@ -9,8 +9,9 @@ use crate::{
 };
 
 use vortex_core::{
-    char_idx_at_visual_offset,
+    char_idx_at_screen_offset, char_idx_at_visual_offset,
     doc_formatter::TextFormat,
+    selective_wrap::LineOffsets,
     text_annotations::TextAnnotations,
     visual_offset_from_anchor, visual_offset_from_block, Position, RopeSlice, Selection,
     Transaction,
@@ -200,7 +201,9 @@ impl View {
                 char_idx_at_visual_offset(doc_text, cursor, -v_off, 0, &text_fmt, &annotations);
         }
 
-        if text_fmt.soft_wrap {
+        // only the lines that don't wrap scroll sideways (all of them with soft wrap off): on a
+        // line that wraps, the view goes back to its left edge (this fork: selective soft wrap)
+        if text_fmt.wraps(doc_text.char_to_line(cursor)) {
             offset.horizontal_offset = 0;
         } else {
             // determine the current visual column of the text
@@ -317,6 +320,7 @@ impl View {
         let text_fmt = doc.text_format(viewport.width, None);
         let annotations = self.text_annotations(doc, None);
 
+        let pos_char = pos.min(text.len_chars());
         let mut pos = visual_offset_from_anchor(
             text,
             view_offset.anchor,
@@ -334,7 +338,10 @@ impl View {
         if pos.row >= viewport.height as usize {
             return None;
         }
-        pos.col = pos.col.saturating_sub(view_offset.horizontal_offset);
+        let line = text.char_to_line(pos_char);
+        pos.col = pos
+            .col
+            .saturating_sub(text_fmt.col_offset(line, view_offset.horizontal_offset));
 
         Some(pos)
     }
@@ -404,13 +411,16 @@ impl View {
                 .selection(self.id)
                 .primary()
                 .cursor(doc.text().slice(..));
-            text_annotations.add_line_annotation(InlineDiagnostics::new(
-                doc,
-                cursor,
-                width,
-                doc.view_offset(self.id).horizontal_offset,
-                config,
-            ));
+            // the ghost text of a line is laid out from where the line is drawn: scrolled
+            // sideways or not (this fork: selective soft wrap)
+            let horizontal = doc.view_offset(self.id).horizontal_offset;
+            let offsets = if horizontal == 0 {
+                LineOffsets::default()
+            } else {
+                LineOffsets::new(&doc.text_format(width, None), horizontal)
+            };
+            text_annotations
+                .add_line_annotation(InlineDiagnostics::new(doc, cursor, width, offsets, config));
         }
 
         text_annotations
@@ -458,13 +468,15 @@ impl View {
         let view_offset = doc.view_offset(self.id);
 
         let text_row = row as usize + view_offset.vertical_offset;
-        let text_col = column as usize + view_offset.horizontal_offset;
 
-        let (char_idx, virt_lines) = char_idx_at_visual_offset(
+        // the offset is added to the column for the line on that row only: with selective soft
+        // wrap, the lines that wrap aren't scrolled sideways
+        let (char_idx, virt_lines) = char_idx_at_screen_offset(
             text,
             view_offset.anchor,
             text_row as isize,
-            text_col,
+            column as usize,
+            view_offset.horizontal_offset,
             &text_fmt,
             annotations,
         );

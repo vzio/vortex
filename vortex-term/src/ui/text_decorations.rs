@@ -12,6 +12,7 @@ pub use step_times::StepTimes;
 
 pub mod blame;
 mod diagnostics;
+pub mod rulers;
 pub mod step_times;
 
 /// Decorations are the primary mechanism for extending the text rendering.
@@ -70,6 +71,9 @@ pub trait Decoration {
     fn reset_pos(&mut self, _pos: usize) -> usize {
         usize::MAX
     }
+
+    /// Called once the text of the view is rendered, after the virtual lines of its last line.
+    fn finish_rendering(&mut self, _renderer: &mut TextRenderer) {}
 
     fn skip_concealed_anchor(&mut self, conceal_end_char_idx: usize) -> usize {
         self.reset_pos(conceal_end_char_idx)
@@ -131,6 +135,12 @@ impl<'a> DecorationManager<'a> {
     pub fn decorate_line(&mut self, renderer: &mut TextRenderer, pos: LinePos) {
         for (decoration, _) in &mut self.decorations {
             decoration.decorate_line(renderer, pos);
+        }
+    }
+
+    pub fn finish_rendering(&mut self, renderer: &mut TextRenderer) {
+        for (decoration, _) in &mut self.decorations {
+            decoration.finish_rendering(renderer);
         }
     }
 
