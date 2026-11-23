@@ -114,7 +114,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Feature | Modules |
 | --- | --- |
 | The status line rule | `vortex-term/tests/status_line_guard.rs` (the test that keeps key hints out of it) |
-| The mode bar | `vortex-term/src/ui/modebar.rs` (segments, the layout and its truncation, badges, the mouse), `Layer`, `Keymaps::layer_get` and `layer_reverse_map` in `vortex-term/src/keymap.rs`, `layers()` in `vortex-term/src/keymap/default.rs`, `RawKeys` in `vortex-term/src/config.rs` (`[keys.watch]`, `[keys.debug]`), debug mode's bar in `vortex-term/src/debug/bar.rs` |
+| The mode bar | `vortex-term/src/modes.rs` (which mode is on, leaving it, `restore_editing`, the mode's screen), `vortex-term/tests/test/modes.rs`, `vortex-term/src/ui/modebar.rs` (segments, the layout and its truncation, badges, the mouse), `Layer`, `Keymaps::layer_get` and `layer_reverse_map` in `vortex-term/src/keymap.rs`, `layers()` in `vortex-term/src/keymap/default.rs`, `RawKeys` in `vortex-term/src/config.rs` (`[keys.watch]`, `[keys.debug]`), debug mode's bar in `vortex-term/src/debug/bar.rs` |
 | Menus and key help | the `["group"]` form of `keymap!` in `vortex-term/src/keymap/macros.rs`, `KeyTrieNode::groups` and `grouped_infobox` in `vortex-term/src/keymap.rs`, `Info::grouped` in `vortex-view/src/info.rs`, `vortex-term/src/ui/keyhelp.rs` (the `?` overlay), `with_help`, `key_help`, `without_header` and `with_info` in `vortex-term/src/ui/picker.rs`, `vortex-term/tests/test/menus.rs` |
 | The command palette's recent commands | `Editor::recent_commands` and `remember_command` in `vortex-view/src/editor.rs`, `with_tie_rank` in `vortex-term/src/ui/picker.rs`, `palette_key` and `command_palette` in `vortex-term/src/commands.rs`, `vortex-term/tests/test/palette.rs` |
 | Diff view | `vortex-term/src/ui/diff_view.rs`, `vortex-term/src/commands/diff_view.rs` |
@@ -330,7 +330,7 @@ area, above the message line, and keeps where its badges were drawn for a click
 (`EditorView::click_modebar`), and `handle_event` runs the keys of the layer of the mode that is on
 first (`EditorView::layer_key`), in `ui/editor.rs`; `Keymaps` has the layers (`with_layers`, given
 `Config::layers` by `Application::new`); `Config` reads `[keys.watch]` beside the modes' tables
-(`RawKeys`); the infobox moves up over the bar (`ui/info.rs`).
+(`RawKeys`); the infobox moves up over the bar (`ui/info.rs`); while a mode is on, `EditorView::render` paints the views' background with the mode's screen (`modes::paint_screen`), and `EditorView::cursor` draws looking around as select mode.
 
 Menus and key help change core files: `KeyTrieNode` has the groups of its keys and
 `KeyTrieNode::infobox` draws them; `Info` has `separators`, drawn dim by `ui/info.rs`;
@@ -408,6 +408,21 @@ label) runs the command. A label may be a glyph (`▶`) rather than a word.
 | `ui.modebar.info` | the information | `ui.statusline` |
 | `ui.modebar.key` | a badge's key | `ui.dashboard.key` |
 | `ui.modebar.label` | a badge's label | `ui.dashboard.action` |
+
+**The mode's screen.** While a mode is on, the views (the text and the gutter, not the bars, the
+panels or the cursor line and selections) get the background `ui.background.mode`, falling back to
+`ui.popup`'s, so it is obvious the buffer isn't being edited. A mode and its screen are atomic: one
+is never on without the other, and leaving a mode, however it is left (`Esc`, its command again,
+`:watch-stop`, `:watch-clear`, a typed command, or the other mode starting), gives plain editing
+back through `modes::restore_editing`: normal mode, the buffer's keys and cursor (a focused debug
+panel is unfocused, watch mode's flash is cleared), on the file and line the mode was showing.
+While a mode is on, looking around (watch mode, `v`) and view mode (debug mode, `v`) draw the cursor
+as in select mode. `vortex-term/src/modes.rs` has which mode is on (`modes::current`), leaving it,
+and the screen's style.
+
+| Scope | What | Falls back to |
+| --- | --- | --- |
+| `ui.background.mode` | the background of the views while watch mode or debug mode is on | `ui.popup` |
 
 **How debug mode uses it.** Debug mode is one more mode of the bar, the same way as watch mode:
 

@@ -86,6 +86,8 @@
 
 # User interface
 "ui.background" = { fg = "text", bg = "background" }
+# watch and debug mode (this fork): their screen is not an editable buffer
+"ui.background.mode" = { bg = "mode_screen" }
 "ui.background.separator" = "line"
 
 "ui.gutter" = { bg = "background" }
@@ -295,6 +297,7 @@ terminal-phosphor = "phosphor"
 
 [palette]
 background = "#000000"
+mode_screen = "#03140a"   #      the screen of watch and debug mode
 
 # Phosphor greens, darkest to brightest; contrast on black in comments
 g_1 = "#06200d"           #      cursor line, strings, popups
