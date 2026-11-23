@@ -93,6 +93,7 @@ git blame FILE
 - [`x` on an empty line](#x-on-an-empty-line)
 - [Move lines](#move-lines)
 - [Soft wrap for Markdown](#soft-wrap-for-markdown)
+- [`gw` with case](#gw-with-case)
 - [Terminal panel](#terminal-panel)
 - [The debugger](#the-debugger)
 - [API browser (in progress)](#api-browser-in-progress)
@@ -129,6 +130,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Inline blame | `vortex-vcs/src/git/blame.rs`, `vortex-vcs/src/git/blame/ignore_revs.rs`, `vortex-vcs/src/blame_stub.rs`, `vortex-vcs/benches/blame.rs`, `vortex-stdx/src/time.rs`, `vortex-view/src/blame.rs`, `vortex-term/src/handlers/blame.rs`, `vortex-term/src/commands/blame.rs`, `vortex-term/src/ui/text_decorations/blame.rs` |
 | `x` on an empty line | `vortex-term/src/handlers/line_select.rs` |
 | Move lines | `vortex-term/src/commands/move_lines.rs` |
+| `gw` with case | `label_index` and `label_target` in `vortex-term/src/commands.rs` (`jump_to_label`), `vortex-term/tests/test/goto_word.rs` |
 | Soft wrap for Markdown | the markdown entry of `languages.toml`, `vortex-term/tests/test/soft_wrap.rs` |
 | Terminal panel | `vortex-terminal/` (the shell: pty, emulator, OSC 133, bash/zsh integration), `vortex-view/src/terminal.rs` (panel state, `[editor.terminal]`), `vortex-term/src/terminal/` (drawing, focus, input encoding, the `vx` shim), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
@@ -1467,6 +1469,28 @@ soft-wrap = { enable = false }
 ```
 
 Tested in `vortex-term/tests/test/soft_wrap.rs`.
+
+## `gw` with case
+
+`gw` puts a two-letter label on every word on screen; typing a label selects that word. The case
+of the label adds options, with no new keys:
+
+| Label typed | Selects | Cursor |
+| --- | --- | --- |
+| `ab` | the word (as upstream) | at its end |
+| `Ab` | the word | at its start |
+| `aB` | the WORD around the word: everything up to whitespace, as `W` is to `w`, so the label on `bar` in `foo.bar` selects `foo.bar` | at its end |
+| `AB` | that WORD | at its start |
+
+- **Select mode** (`gw` there extends): the same rules. The selection grows from the primary
+  selection's far side to the cursor's place in the word or WORD: a target after the selection
+  starts from its start, one before it from its end.
+- **Only with a lowercase alphabet.** The options exist when `jump-label-alphabet` has no
+  uppercase letters, which is the default (`a` to `z`). An alphabet with uppercase letters takes
+  the characters as they are, as before: `A` is then a label letter of its own.
+- The labels are drawn as before, in lowercase; Shift is the only difference.
+
+Code: `label_index` and `label_target` next to `jump_to_label` in `vortex-term/src/commands.rs`.
 
 ## Terminal panel
 

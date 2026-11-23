@@ -1,0 +1,37 @@
+title = "Jump to a label"
+chapter = "search"
+kind = "learn"
+feature = "gw jumps to a word by its label; the case picks the cursor and the WORD"
+lesson = """
+`gw` puts a two-letter label on every word on screen: type one to select that
+word, wherever it is. The case of the letters is an option (this fork): `Ab`
+puts the cursor at the start instead of the end, and `aB` takes the WORD
+around the word, up to the spaces, as `W` is to `w`; `AB` does both.
+"""
+start = '''
+#!/bin/sh
+set -eu
+cargo build --release --locked
+cp target/release/vx ~/.local/bin/vx
+strip ~/.local/bin/vx
+tar czf dist/vx.tar.gz -C target/release vx
+sha256sum dist/vx.tar.gz > dist/SUMS
+gh release upload v1.2.0 dist/vx.tar.gz
+'''
+goal = '''
+#!/bin/sh
+set -eu
+cargo build --release --locked
+cp $root/target/release/vx $bin/vx
+strip $bin/vx
+tar czf dist/vx-$v.tar.gz -C target/release vx
+sha256sum dist/vx-$v.tar.gz > dist/SHA256SUMS
+gh release upload v$v dist/vx-$v.tar.gz
+'''
+hints = [
+  "Eight edits all over the script: paths that become `$root/...` and `$bin/vx`, `-$v` after `vx`, `SHA256` before `SUMS`, `v$v`.",
+  "`gw` and a label selects that word. `aB` (second letter uppercase) takes the whole path around it, ready for `c`; `Ab` and `AB` put the cursor at the start, where `i` types.",
+  "`gwAK` and `i$root/<esc>`; `gwaE` and `c$bin/vx<esc>`, `gwaC` and the same; `gwag` and `a-$v<esc>`, `gwao` likewise; `gwAg` and `iSHA256<esc>`; `gwaG` and `cv$v<esc>`; `gwac` and `a-$v<esc>`.",
+]
+teach = "gwAKi$root/<esc>gwaEc$bin/vx<esc>gwaCc$bin/vx<esc>gwaga-$v<esc>gwaoa-$v<esc>gwAgiSHA256<esc>gwaGcv$v<esc>gwaca-$v<esc>"
+naive = "jjjghllli$root/<esc>ghllllllllllllllllllllllllllldddddddddddddddi$bin/vx<esc>jghlllllldddddddddddddddi$bin/vx<esc>jghlllllllllllllla-$v<esc>jghlllllllllllllllla-$v<esc>ghllllllllllllllllllllllllllllllllllliSHA256<esc>jghllllllllllllllllllddddddiv$v<esc>ghlllllllllllllllllllllllllllla-$v<esc>"

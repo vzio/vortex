@@ -103,7 +103,7 @@ Assumes: chapters 1-4.
 
 ## 6. Search and jump
 
-Keys: `/` `?` `n` `N` `*` `<A-*>` `ga` `gg` `ge` `<space>=`
+Keys: `/` `?` `n` `N` `*` `<A-*>` `ga` `gg` `ge` `gw` `<space>=`
 
 How to get somewhere without counting lines or columns:
 
@@ -115,6 +115,9 @@ How to get somewhere without counting lines or columns:
 - coming back: a search is a jump, and `ga` (this fork's history) returns to where you were
   before it;
 - the ends of the file: `gg` and `ge`;
+- a word you can see: `gw` labels every word on screen and two letters jump there. The case of the
+  letters is this fork's option: an uppercase first one puts the cursor at the word's start, an
+  uppercase second one takes the WORD around it (up to the spaces);
 - the changes since the last commit (this fork's diff view): `<space>=` shows them, `n` and `N`
   jump between its hunks as between matches, and `r` reverts a hunk, as an edit `u` undoes.
 

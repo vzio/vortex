@@ -63,7 +63,7 @@ use vortex_view::{
     history::{Jump, Place},
     info::Info,
     input::KeyEvent,
-    keyboard::KeyCode,
+    keyboard::{KeyCode, KeyModifiers},
     theme::Style,
     tree,
     view::View,
@@ -7282,16 +7282,19 @@ fn jump_to_label(cx: &mut Context, labels: Vec<Range>, behaviour: Movement) {
     doc.set_jump_labels(view.id, overlays);
 
     // Accept two characters matching a visible label. Jump to the candidate
-    // for that label if it exists.
+    // for that label if it exists. With a lowercase alphabet (this fork), the case of the
+    // label adds options: an uppercase first letter puts the cursor at the start, an
+    // uppercase second letter takes the WORD around the word (see `label_target`).
     let primary_selection = doc.selection(view.id).primary();
     let view_id = view.id;
     let doc = doc.id();
     cx.on_next_key(move |cx, event| {
         let alphabet = &cx.editor.config().jump_label_alphabet;
-        let Some(i) = event
+        let cased = !alphabet.iter().any(|c| c.is_uppercase());
+        let Some((i, at_start)) = event
             .char()
-            .filter(|_| event.modifiers.is_empty())
-            .and_then(|ch| alphabet.iter().position(|&it| it == ch))
+            .filter(|_| event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT)
+            .and_then(|ch| label_index(alphabet, ch, cased))
         else {
             doc_mut!(cx.editor, &doc).remove_jump_labels(view_id);
             return;
@@ -7305,15 +7308,19 @@ fn jump_to_label(cx: &mut Context, labels: Vec<Range>, behaviour: Movement) {
         cx.on_next_key(move |cx, event| {
             doc_mut!(cx.editor, &doc).remove_jump_labels(view_id);
             let alphabet = &cx.editor.config().jump_label_alphabet;
-            let Some(inner) = event
+            let cased = !alphabet.iter().any(|c| c.is_uppercase());
+            let Some((inner, whole)) = event
                 .char()
-                .filter(|_| event.modifiers.is_empty())
-                .and_then(|ch| alphabet.iter().position(|&it| it == ch))
+                .filter(|_| event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT)
+                .and_then(|ch| label_index(alphabet, ch, cased))
             else {
                 return;
             };
-            if let Some(mut range) = labels.get(outer + inner).copied() {
-                range = if behaviour == Movement::Extend {
+            if let Some(range) = labels.get(outer + inner).copied() {
+                let text = doc!(cx.editor, &doc).text().slice(..);
+                let range = if cased {
+                    label_target(text, range, primary_selection, behaviour, at_start, whole)
+                } else if behaviour == Movement::Extend {
                     let anchor = if range.anchor < range.head {
                         let from = primary_selection.from();
                         if range.anchor < from {
@@ -7341,6 +7348,74 @@ fn jump_to_label(cx: &mut Context, labels: Vec<Range>, behaviour: Movement) {
             }
         });
     });
+}
+
+/// The index in `alphabet` of a typed label character, and whether it was typed uppercase: with
+/// a lowercase alphabet (`cased`), an uppercase letter is its lowercase one with an option (this
+/// fork); an alphabet with uppercase letters takes characters as they are.
+fn label_index(alphabet: &[char], ch: char, cased: bool) -> Option<(usize, bool)> {
+    if let Some(i) = alphabet.iter().position(|&it| it == ch) {
+        return Some((i, false));
+    }
+    if !cased || !ch.is_uppercase() {
+        return None;
+    }
+    let mut lower = ch.to_lowercase();
+    let (Some(lower), None) = (lower.next(), lower.next()) else {
+        return None;
+    };
+    alphabet
+        .iter()
+        .position(|&it| it == lower)
+        .map(|i| (i, true))
+}
+
+/// What a label of `gw` selects (this fork), with a lowercase alphabet: the labeled word, or the
+/// WORD around it (`whole`: everything up to whitespace, as `W` is to `w`), with the cursor at
+/// its end or at its start (`at_start`). Extending, the selection grows from the primary one's
+/// far side to the cursor's place in the target.
+fn label_target(
+    text: RopeSlice,
+    word: Range,
+    primary: Range,
+    behaviour: Movement,
+    at_start: bool,
+    whole: bool,
+) -> Range {
+    let (mut from, mut to) = (word.from(), word.to());
+    if whole {
+        let blank = |c: char| c.is_whitespace();
+        while from > 0 && !blank(text.char(from - 1)) {
+            from -= 1;
+        }
+        while to < text.len_chars() && !blank(text.char(to)) {
+            to += 1;
+        }
+    }
+    if behaviour != Movement::Extend {
+        return if at_start {
+            Range::new(to, from)
+        } else {
+            Range::new(from, to)
+        };
+    }
+    if from >= primary.from() {
+        // forward from the selection's start: the cursor on the target's last or first character
+        let head = if at_start {
+            graphemes::next_grapheme_boundary(text, from)
+        } else {
+            to
+        };
+        Range::new(primary.from(), head)
+    } else {
+        // backward from the selection's end
+        let head = if at_start {
+            from
+        } else {
+            graphemes::prev_grapheme_boundary(text, to)
+        };
+        Range::new(primary.to().max(to), head)
+    }
 }
 
 fn jump_to_word(cx: &mut Context, behaviour: Movement) {
