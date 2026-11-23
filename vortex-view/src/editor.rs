@@ -1651,8 +1651,6 @@ pub struct Editor {
     pub screen_cover: Option<crate::history::ScreenCover>,
     /// No jump records while set: history's own steps, the debugger's stops (this fork).
     pub history_paused: bool,
-    /// After `gA`: `A` goes back, `a` forward, until another key (this fork).
-    pub history_menu: bool,
     /// The bookmarks of closed files and the one the ring is at (this fork).
     pub bookmark_state: crate::bookmarks::Bookmarks,
     /// Messages shown instead of `'file' written` when the save of these documents completes
@@ -1851,7 +1849,6 @@ impl Editor {
             last_selection: None,
             screen_cover: None,
             history_paused: false,
-            history_menu: false,
             bookmark_state: Default::default(),
             registers: Registers::new(Box::new(arc_swap::access::Map::new(
                 Arc::clone(&config),

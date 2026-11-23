@@ -1,4 +1,4 @@
-//! History (`ga`, `gA` and its sticky state) and bookmarks (`C-s`, `C-i`, `C-o`, `space j`), end to
+//! History (`ga`, the forward step, the history picker `gA`) and bookmarks (`C-s`, `C-i`, `C-o`, `space j`), end to
 //! end through the key events of the application, with real files where several buffers matter.
 
 use std::{
@@ -10,15 +10,19 @@ use std::{
 use termina::event::{Event, KeyEvent};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use vortex_term::{application::Application, history::picker_rows};
+use vortex_term::{
+    application::Application,
+    history::{history_rows, picker_rows},
+};
 use vortex_view::{
     current_ref,
+    document::Mode,
     graphics::Style,
     history::{Jump, Place},
     input::parse_macro,
 };
 
-use super::helpers::AppBuilder;
+use super::helpers::{test_config, AppBuilder};
 
 /// The editor driven key by key, so that a test looks at it between two batches of keys.
 struct H {
@@ -155,8 +159,29 @@ impl H {
         editor.tree.get(editor.tree.focus).history.is_walking()
     }
 
-    fn menu_open(&self) -> bool {
-        self.app.editor.history_menu
+    /// The position of the walk in the focused view's history (`len()` when not walking).
+    fn current(&self) -> usize {
+        let editor = &self.app.editor;
+        editor.tree.get(editor.tree.focus).history.current()
+    }
+
+    fn len(&self) -> usize {
+        let editor = &self.app.editor;
+        editor.tree.get(editor.tree.focus).history.len()
+    }
+
+    /// Runs `history_forward`, which has no default key, from the command palette.
+    async fn forward(&mut self) -> &mut Self {
+        self.pick("<space>?", "history_forward").await
+    }
+
+    /// The rows of the history picker as it would open now, `(mark, place, text)`.
+    fn picker(&self) -> Vec<(bool, String, String)> {
+        let editor = &self.app.editor;
+        history_rows(editor, &editor.place())
+            .into_iter()
+            .map(|row| (row.current, row.name, row.text))
+            .collect()
     }
 
     fn infobox(&self) -> Option<String> {
@@ -241,7 +266,8 @@ async fn file_edges_and_searches_record_and_ga_returns() -> anyhow::Result<()> {
     h.keys("ga").await;
     assert_eq!(h.line(), 5);
     h.keys("ga").await;
-    assert_eq!(h.line(), end, "ga again returns");
+    assert_eq!(h.line(), 5, "ga again has nothing older");
+    assert_eq!(h.status(), "At the oldest jump");
 
     // gg from the end, a search, n
     h.keys("gg").await;
@@ -297,9 +323,9 @@ async fn motions_record_nothing() -> anyhow::Result<()> {
     h.keys("ga").await;
     assert_eq!(h.status(), "No jumps to go back to");
     h.keys("gA").await;
-    assert_eq!(h.status(), "No jumps to go back to");
-    assert!(!h.menu_open(), "a failed gA opens no menu");
+    assert_eq!(h.status(), "No jumps yet");
     assert!(h.infobox().is_none());
+    assert!(!on_screen(&h.app, "History"), "no picker opens");
     h.finish().await
 }
 
@@ -456,17 +482,19 @@ async fn a_view_remembers_thirty_places() -> anyhow::Result<()> {
 // ga, gA
 
 #[tokio::test(flavor = "multi_thread")]
-async fn ga_toggles_between_two_places() -> anyhow::Result<()> {
+async fn ga_goes_back_one_place_and_stops_at_the_oldest() -> anyhow::Result<()> {
     let (_dir, mut h) = forty()?;
     h.keys("4j/line 20<ret>").await;
     assert_eq!(h.line(), 19);
     h.keys("ga").await;
     assert_eq!(h.line(), 4);
     h.keys("ga").await;
-    assert_eq!(h.line(), 19);
-    h.keys("gaga").await;
-    assert_eq!(h.line(), 19, "ga ga is back where you were");
-    assert!(!h.menu_open(), "ga opens no menu");
+    assert_eq!(
+        h.line(),
+        4,
+        "there is no toggle: ga again has nothing older"
+    );
+    assert_eq!(h.status(), "At the oldest jump");
     h.finish().await
 }
 
@@ -478,105 +506,19 @@ async fn walkable(h: &mut H) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn ga_after_a_walk_returns_to_where_the_walk_started() -> anyhow::Result<()> {
+async fn ga_repeated_visits_the_places_from_the_newest_to_the_oldest() -> anyhow::Result<()> {
     let (_dir, mut h) = forty()?;
     walkable(&mut h).await;
-    h.keys("gAA").await;
-    assert_eq!(h.line(), 9);
-    assert!(h.walking());
-    h.keys("<esc>ga").await;
-    assert_eq!(h.line(), 29, "back to where the walk started");
-    assert!(!h.walking());
+    for line in [19, 9, 3] {
+        h.keys("ga").await;
+        assert_eq!(h.line(), line);
+        assert!(h.walking());
+    }
     h.keys("ga").await;
-    assert_eq!(h.line(), 19, "and ga is a plain toggle again");
-    h.finish().await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn ga_right_after_the_sticky_state_also_returns() -> anyhow::Result<()> {
-    let (_dir, mut h) = forty()?;
-    walkable(&mut h).await;
-    // `g` closes the state and runs as the key it is
-    h.keys("gAAga").await;
-    assert_eq!(h.line(), 29);
-    assert!(!h.menu_open());
-    h.finish().await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn gaa_walks_back_and_the_sticky_state_opens() -> anyhow::Result<()> {
-    let (_dir, mut h) = forty()?;
-    walkable(&mut h).await;
-    h.keys("gA").await;
-    assert_eq!(h.line(), 19);
-    assert!(h.menu_open());
-    assert_eq!(
-        h.infobox().as_deref(),
-        Some("History: A back · a forward · Esc done")
-    );
-    h.finish().await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn gaaa_is_back_three_and_a_steps_forward() -> anyhow::Result<()> {
-    let (_dir, mut h) = forty()?;
-    walkable(&mut h).await;
-    h.keys("gAAA").await;
-    assert_eq!(h.line(), 3, "three places back");
-    assert!(h.menu_open());
-    h.keys("A").await;
     assert_eq!(h.line(), 3);
     assert_eq!(h.status(), "At the oldest jump");
-    assert!(h.menu_open(), "the state stays at the end");
-    h.keys("a").await;
-    assert_eq!(h.line(), 9);
-    h.keys("aa").await;
-    assert_eq!(
-        h.line(),
-        29,
-        "the last place forward is where the walk started"
-    );
-    assert!(!h.walking());
-    h.keys("a").await;
-    assert_eq!(h.status(), "At the newest jump");
-    assert_eq!(h.line(), 29);
-    h.finish().await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn back_three_and_forward_one() -> anyhow::Result<()> {
-    let (_dir, mut h) = forty()?;
-    walkable(&mut h).await;
-    h.keys("gAAAa").await;
-    assert_eq!(h.line(), 9);
-    assert!(h.menu_open());
-    h.finish().await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn esc_closes_the_sticky_state() -> anyhow::Result<()> {
-    let (_dir, mut h) = forty()?;
-    walkable(&mut h).await;
-    h.keys("gAA").await;
-    assert!(h.menu_open());
-    h.keys("<esc>").await;
-    assert!(!h.menu_open());
-    assert!(h.infobox().is_none());
-    assert_eq!(h.line(), 9, "Esc stays where it is");
-    // the keys are normal again: A is not a step
-    h.keys("A<esc>").await;
-    assert_eq!(h.line(), 9);
-    h.finish().await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn another_key_closes_the_sticky_state_and_runs() -> anyhow::Result<()> {
-    let (_dir, mut h) = forty()?;
-    walkable(&mut h).await;
-    h.keys("gAAj").await;
-    assert!(!h.menu_open());
-    assert!(h.infobox().is_none());
-    assert_eq!(h.line(), 10, "back two (line 10), then down one");
+    // the present was recorded when the walk started
+    assert_eq!(h.history(), [3, 9, 19, 29]);
     h.finish().await
 }
 
@@ -584,8 +526,106 @@ async fn another_key_closes_the_sticky_state_and_runs() -> anyhow::Result<()> {
 async fn a_count_goes_back_that_many_places() -> anyhow::Result<()> {
     let (_dir, mut h) = forty()?;
     walkable(&mut h).await;
-    h.keys("2gA").await;
+    h.keys("2ga").await;
     assert_eq!(h.line(), 9);
+    h.keys("ga").await;
+    assert_eq!(h.line(), 3);
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_of_three_visits_the_oldest_place() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    h.keys("3ga").await;
+    assert_eq!(h.line(), 3);
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_forward_command_walks_forward_and_ends_where_the_walk_started() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    // there is no walk to go forward in
+    h.forward().await;
+    assert_eq!(h.line(), 29);
+    assert_eq!(h.status(), "At the newest jump");
+
+    h.keys("3ga").await;
+    assert_eq!(h.line(), 3);
+    h.forward().await;
+    assert_eq!(h.line(), 9);
+    h.forward().await;
+    assert_eq!(h.line(), 19);
+    assert!(h.walking());
+    h.forward().await;
+    assert_eq!(h.line(), 29, "the last step is where the walk started");
+    assert!(!h.walking());
+    assert_eq!(
+        h.history(),
+        [3, 9, 19],
+        "the walk's start is not kept as a place"
+    );
+    h.forward().await;
+    assert_eq!(h.status(), "At the newest jump");
+    assert_eq!(h.line(), 29);
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_forward_has_no_key() -> anyhow::Result<()> {
+    let keymap = vortex_term::keymap::default();
+    for mode in [Mode::Normal, Mode::Select, Mode::Insert] {
+        let bound = keymap[&mode].reverse_map();
+        assert!(!bound.contains_key("history_forward"), "bound in {mode:?}");
+    }
+    assert!(keymap[&Mode::Normal]
+        .reverse_map()
+        .contains_key("history_back"));
+    assert!(keymap[&Mode::Normal]
+        .reverse_map()
+        .contains_key("history_picker"));
+    assert!(
+        vortex_term::commands::MappableCommand::STATIC_COMMAND_LIST
+            .iter()
+            .any(|command| command.name() == "history_forward"),
+        "but it is a command of the palette"
+    );
+    for name in ["history_toggle", "history_menu"] {
+        assert!(
+            vortex_term::commands::MappableCommand::STATIC_COMMAND_LIST
+                .iter()
+                .all(|command| command.name() != name),
+            "{name} exists"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_old_sticky_keys_are_gone() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    h.keys("ga").await;
+    assert_eq!(h.line(), 19);
+    assert!(
+        h.infobox().is_none(),
+        "no History infobox: {:?}",
+        h.infobox()
+    );
+    // `A` and `a` are the insert commands again
+    h.keys("A").await;
+    assert_eq!(h.app.editor.mode(), Mode::Insert);
+    assert_eq!(h.line(), 19);
+    h.keys("x<esc>").await;
+    assert!(h.text().contains("line 20x\n"), "{}", h.text());
+    h.keys("ga").await;
+    assert_eq!(h.line(), 9);
+    h.keys("a").await;
+    assert_eq!(h.app.editor.mode(), Mode::Insert);
+    h.keys("y<esc>").await;
+    assert!(h.text().contains("line 10y\n"), "{}", h.text());
+    assert!(h.infobox().is_none());
     h.finish().await
 }
 
@@ -593,16 +633,15 @@ async fn a_count_goes_back_that_many_places() -> anyhow::Result<()> {
 async fn a_new_jump_while_walking_drops_the_places_ahead() -> anyhow::Result<()> {
     let (_dir, mut h) = forty()?;
     walkable(&mut h).await;
-    h.keys("gAA<esc>").await;
+    h.keys("gaga").await;
     assert_eq!(h.line(), 9);
     h.keys("/line 35<ret>").await;
     assert_eq!(h.line(), 34);
     assert_eq!(h.history(), [3, 9], "the places ahead (19 and 29) are gone");
     assert!(!h.walking());
     // and there is nothing ahead to walk to
-    h.keys("gAa").await;
+    h.forward().await;
     assert_eq!(h.line(), 34);
-    h.keys("a").await;
     assert_eq!(h.status(), "At the newest jump");
     h.finish().await
 }
@@ -611,11 +650,335 @@ async fn a_new_jump_while_walking_drops_the_places_ahead() -> anyhow::Result<()>
 async fn walking_back_records_the_present_once() -> anyhow::Result<()> {
     let (_dir, mut h) = forty()?;
     walkable(&mut h).await;
-    h.keys("gA<esc>").await;
+    h.keys("ga").await;
     assert_eq!(h.history(), [3, 9, 19, 29]);
-    h.keys("gA<esc>").await;
+    h.keys("ga").await;
     assert_eq!(h.history(), [3, 9, 19, 29]);
     h.finish().await
+}
+
+// The history picker (gA)
+
+/// Opens the history picker with `gA` and waits for it to be drawn.
+async fn open_picker(h: &mut H) {
+    h.keys("gA").await;
+    h.settle(Duration::from_millis(300)).await;
+    assert!(
+        on_screen(&h.app, "History") || on_screen(&h.app, "●"),
+        "{:#?}",
+        screen_rows(&h.app)
+    );
+}
+
+fn picker_is_open(h: &H) -> bool {
+    on_screen(&h.app, "●")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_picker_lists_the_places_newest_first_with_the_present_marked() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    let rows = h.picker();
+    let shown: Vec<(bool, &str)> = rows
+        .iter()
+        .map(|(mark, name, text)| {
+            assert!(
+                name.ends_with(&format!("forty.txt:{}", text.trim_start_matches("line "))),
+                "{name} {text}"
+            );
+            (*mark, text.as_str())
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (true, "line 30"),
+            (false, "line 20"),
+            (false, "line 10"),
+            (false, "line 4")
+        ],
+        "the present first, marked, then the places newest first"
+    );
+    // the rows are the screen's: the mark, the place and the line's text
+    open_picker(&mut h).await;
+    let rows = screen_rows(&h.app);
+    assert!(
+        rows.iter().any(|row| row.contains("●")
+            && row.contains("forty.txt:30")
+            && row.contains("line 30")),
+        "{rows:#?}"
+    );
+    assert!(on_screen(&h.app, "forty.txt:20") && on_screen(&h.app, "forty.txt:4"));
+    // the mark is on one row only
+    assert_eq!(rows.iter().filter(|row| row.contains("●")).count(), 1);
+    assert_eq!(h.status(), "");
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn after_walking_back_the_mark_is_where_the_walk_is() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    h.keys("gaga").await;
+    assert_eq!(h.line(), 9);
+    let rows = h.picker();
+    // no present row: the walk's start (line 30) is the newest place
+    let shown: Vec<(bool, &str)> = rows
+        .iter()
+        .map(|(mark, _, text)| (*mark, text.as_str()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (false, "line 30"),
+            (false, "line 20"),
+            (true, "line 10"),
+            (false, "line 4")
+        ]
+    );
+    open_picker(&mut h).await;
+    let rows = screen_rows(&h.app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("●") && row.contains("forty.txt:10")),
+        "{rows:#?}"
+    );
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_picker_shows_the_line_of_the_place_in_its_preview() -> anyhow::Result<()> {
+    // a long file, so that the preview shows the part around the place and not all of it
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("long.txt");
+    std::fs::write(&path, lines(300))?;
+    let mut h = H::file(&path)?;
+    h.keys("/line 120<ret>/line 250<ret>").await;
+    assert_eq!(h.line(), 249);
+    open_picker(&mut h).await;
+    // the cursor is on the present, line 250: the preview shows the file around it
+    assert!(on_screen(&h.app, "line 255"), "{:#?}", screen_rows(&h.app));
+    assert!(!on_screen(&h.app, "line 125"));
+    // `j` moves to the place of line 120
+    h.keys("j").await;
+    h.settle(Duration::from_millis(300)).await;
+    assert!(on_screen(&h.app, "line 125"), "{:#?}", screen_rows(&h.app));
+    assert!(!on_screen(&h.app, "line 255"));
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_picker_is_modal_s_filters_and_question_mark_shows_its_keys() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    open_picker(&mut h).await;
+    // modal: `j` moves, it is not typed; the status line stays clear
+    h.keys("jj").await;
+    assert_eq!(h.line(), 29, "nothing moved in the buffer");
+    h.keys("?").await;
+    assert!(on_screen(&h.app, "go there"), "{:#?}", screen_rows(&h.app));
+    h.keys("j").await;
+    assert!(!on_screen(&h.app, "go there"));
+
+    // `s` filters: the rows narrow to the matching ones
+    h.keys("s10").await;
+    h.settle(Duration::from_millis(300)).await;
+    let rows = screen_rows(&h.app);
+    assert!(
+        rows.iter().any(|row| row.contains("forty.txt:10")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("forty.txt:20")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("forty.txt:30")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("forty.txt:4")),
+        "{rows:#?}"
+    );
+    // Enter on the only row goes there
+    h.keys("<ret>").await;
+    h.settle(Duration::from_millis(100)).await;
+    assert_eq!(h.line(), 9);
+    assert!(!picker_is_open(&h));
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn enter_goes_there_and_moves_the_position_without_recording_a_jump() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    assert_eq!((h.len(), h.current()), (3, 3));
+    open_picker(&mut h).await;
+    // the present, line 20, line 10
+    h.keys("jj<ret>").await;
+    h.settle(Duration::from_millis(100)).await;
+    assert!(!picker_is_open(&h));
+    assert_eq!(h.line(), 9, "line 10");
+    // what walking back to it would do: the present is recorded as where the walk started,
+    // and nothing else is
+    assert_eq!(h.history(), [3, 9, 19, 29]);
+    assert_eq!((h.len(), h.current()), (4, 1));
+    assert!(h.walking());
+
+    // the picker opens on the mark; from the middle of a walk to the oldest place
+    open_picker(&mut h).await;
+    h.keys("j<ret>").await;
+    h.settle(Duration::from_millis(100)).await;
+    assert_eq!(h.line(), 3);
+    assert_eq!((h.len(), h.current()), (4, 0));
+    // and to the newest, where the walk started, which ends it
+    open_picker(&mut h).await;
+    h.keys("gg<ret>").await;
+    h.settle(Duration::from_millis(100)).await;
+    assert_eq!(h.line(), 29);
+    assert!(!h.walking());
+    assert_eq!(h.history(), [3, 9, 19], "no jump was recorded by any of it");
+    // ga and the forward step carry on from where Enter left the position
+    h.keys("ga").await;
+    assert_eq!(h.line(), 19);
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn enter_on_the_present_and_esc_do_nothing() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    let before = (h.line(), h.col(), h.history());
+    open_picker(&mut h).await;
+    h.keys("<ret>").await;
+    h.settle(Duration::from_millis(100)).await;
+    assert!(!picker_is_open(&h), "Enter closes it");
+    assert_eq!((h.line(), h.col(), h.history()), before);
+    assert!(!h.walking());
+    assert_eq!((h.len(), h.current()), (3, 3));
+
+    open_picker(&mut h).await;
+    h.keys("jj<esc>").await;
+    h.settle(Duration::from_millis(100)).await;
+    assert!(!picker_is_open(&h), "Esc closes it");
+    assert_eq!((h.line(), h.col(), h.history()), before);
+    assert!(!h.walking());
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_screen_is_listed_by_name_and_enter_goes_to_the_place_before_it() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    h.keys("3j:dashboard<ret>").await;
+    h.settle(Duration::from_millis(300)).await;
+    let rows = h.picker();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!((rows[0].0, rows[0].1.as_str()), (true, "the dashboard"));
+    assert!(rows[1].1.ends_with("forty.txt:4"), "{rows:?}");
+    assert!(!rows[1].0);
+    open_picker(&mut h).await;
+    assert!(
+        on_screen(&h.app, "the dashboard"),
+        "{:#?}",
+        screen_rows(&h.app)
+    );
+    h.keys("j<ret>").await;
+    h.settle(Duration::from_millis(300)).await;
+    assert_eq!(h.name(), "forty.txt");
+    assert_eq!(h.line(), 3);
+    assert!(!picker_is_open(&h));
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_picker_goes_to_a_place_in_another_file() -> anyhow::Result<()> {
+    let f = files()?;
+    let mut h = H::file(&f.alpha)?;
+    h.keys("3j").await;
+    h.keys(&open(&f.beta)).await;
+    h.keys("gA").await;
+    h.settle(Duration::from_millis(300)).await;
+    let rows = h.picker();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].1.ends_with("beta.txt:1"));
+    assert!(rows[1].1.ends_with("alpha.txt:4"));
+    h.keys("j<ret>").await;
+    h.settle(Duration::from_millis(300)).await;
+    assert_eq!(h.at(), "alpha.txt:4");
+    h.finish().await
+}
+
+/// The diff view: `gA` opens the picker over it (the present is "a diff"), and `Enter` leaves
+/// the diff for the place.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_diff() {
+    use super::git_log::{git, on_screen as rows_have, status, Repo, Session};
+
+    let Some(work) = Repo::enter_in(
+        module_path!(),
+        "the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_diff",
+    ) else {
+        return;
+    };
+    let original: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(work.join("a.txt"), &original).unwrap();
+    git(&work, "", &["add", "-A"]);
+    git(&work, "", &["commit", "-q", "-m", "Add a.txt"]);
+    std::fs::write(work.join("a.txt"), original.replace("line 3\n", "three\n")).unwrap();
+
+    // a.txt open with the cursor on its fifth line, then the diff of its change
+    let app = AppBuilder::new()
+        .with_config(test_config())
+        .with_file(work.join("a.txt"), Some(vortex_core::Position::new(4, 0)))
+        .build()
+        .unwrap();
+    let mut session = Session::with_app(app);
+    session.first_frame().await;
+    session.keys("<space>l").await;
+    session
+        .wait_for_screen("the log", |rows| {
+            rows_have(rows, "Uncommitted changes (1 file)")
+        })
+        .await;
+    session.open_diff(0).await;
+    assert!(
+        rows_have(&session.rows(), "hunk 1/1"),
+        "{:#?}",
+        session.rows()
+    );
+
+    // `gA` over the diff: the picker lists the present, "a diff", and the place before it
+    session.keys("gA").await;
+    session
+        .wait_for_screen("the history picker", |rows| rows_have(rows, "●"))
+        .await;
+    let rows = session.rows();
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("●") && row.contains("a diff")),
+        "{rows:#?}"
+    );
+    assert!(rows_have(&rows, "a.txt:5"), "{rows:#?}");
+    assert_eq!(status(&session.app), "");
+
+    // `Enter` on the place leaves the diff, as `ga` does
+    session.keys("j<ret>").await;
+    session
+        .wait_for_screen("the diff to be left", |rows| {
+            !rows_have(rows, "hunk 1/1") && !rows_have(rows, "●")
+        })
+        .await;
+    let editor = &session.app.editor;
+    let (view, doc) = vortex_view::current_ref!(editor);
+    assert!(doc.path().is_some_and(|path| path.ends_with("a.txt")));
+    let text = doc.text().slice(..);
+    assert_eq!(
+        text.char_to_line(doc.selection(view.id).primary().cursor(text)),
+        4
+    );
+    // the diff is a place of the history now, listed by name
+    let rows = history_rows(editor, &editor.place());
+    assert!(rows.iter().any(|row| row.name == "a diff"), "{rows:?}");
 }
 
 // Switching files
@@ -629,7 +992,7 @@ async fn switching_files_records() -> anyhow::Result<()> {
     assert_eq!(h.at(), "beta.txt:1");
     h.keys("ga").await;
     assert_eq!(h.at(), "alpha.txt:4", "back to the first file at its line");
-    h.keys("ga").await;
+    h.forward().await;
     assert_eq!(h.at(), "beta.txt:1");
     h.finish().await
 }
@@ -841,7 +1204,7 @@ async fn going_to_a_bookmark_records_a_history_jump() -> anyhow::Result<()> {
     assert_eq!(h.history(), [0]);
     h.keys("ga").await;
     assert_eq!(h.line(), 0, "ga returns");
-    h.keys("ga").await;
+    h.forward().await;
     assert_eq!(h.line(), 10);
     h.finish().await
 }
@@ -1078,21 +1441,6 @@ async fn joined_bookmarked_lines_keep_the_older_bookmark() -> anyhow::Result<()>
     h.keys("J").await;
     assert_eq!(h.bookmarks(), 1);
     assert_eq!(h.numbers().len(), 1);
-    h.finish().await
-}
-
-// Palette and the sticky state share the keys
-
-#[tokio::test(flavor = "multi_thread")]
-async fn the_sticky_state_does_not_swallow_keys_after_it_closes() -> anyhow::Result<()> {
-    let (_dir, mut h) = forty()?;
-    walkable(&mut h).await;
-    h.keys("gAA<esc>jj").await;
-    assert_eq!(h.line(), 11);
-    // a bare `a` after the state is the append command, not a step
-    h.keys("a<esc>").await;
-    assert_eq!(h.line(), 11);
-    assert!(!h.menu_open());
     h.finish().await
 }
 
@@ -1437,5 +1785,22 @@ async fn the_bookmark_picker_is_modal_has_no_header_and_question_mark_shows_its_
     // filter mode: `?` is typed into the query
     h.keys("s?").await;
     assert!(!on_screen(&h.app, "any key closes"));
+    h.finish().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_palette_runs_commands_that_ask_the_compositor_for_something() -> anyhow::Result<()> {
+    let (_dir, mut h) = forty()?;
+    walkable(&mut h).await;
+    // `history_picker` opens a picker, `history_forward` and `history_back` step through history:
+    // all of them leave a callback for the compositor, which the palette runs once it has closed
+    h.pick("<space>?", "history_picker").await;
+    assert!(picker_is_open(&h), "{:#?}", screen_rows(&h.app));
+    h.keys("<esc>").await;
+    h.pick("<space>?", "history_back").await;
+    assert_eq!(h.line(), 19);
+    h.forward().await;
+    assert_eq!(h.line(), 29);
+    assert!(!h.walking());
     h.finish().await
 }

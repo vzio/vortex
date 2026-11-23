@@ -643,7 +643,7 @@ const MOVE: &[&str] = &[
 ];
 
 /// The `goto_*` static commands that may open another buffer: they end watch mode. History
-/// (`history_toggle`, `history_back`, `history_forward`) and the bookmarks' `next_bookmark`,
+/// (`history_back`, `history_forward`, `history_picker`) and the bookmarks' `next_bookmark`,
 /// `prev_bookmark` and `bookmark_picker` end it too, as any command in no list does.
 const OPENS: &[&str] = &[
     "goto_definition",
@@ -999,9 +999,9 @@ mod tests {
         // history and bookmarks
         assert_eq!(effect("toggle_bookmark"), Effect::None);
         for name in [
-            "history_toggle",
             "history_back",
             "history_forward",
+            "history_picker",
             "next_bookmark",
             "prev_bookmark",
             "bookmark_picker",

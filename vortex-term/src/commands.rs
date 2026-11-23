@@ -552,9 +552,9 @@ impl MappableCommand {
         select_prev_sibling, "Select previous sibling the in syntax tree",
         select_all_siblings, "Select all siblings of the current node",
         select_all_children, "Select all children of the current node",
-        history_toggle, "Go back to the last jump, or return to where a walk started",
         history_back, "Go one jump back in history",
-        history_forward, "Go one jump forward in history",
+        history_forward, "Go one jump forward in history, after going back",
+        history_picker, "Open the history picker: the jumps, newest first",
         toggle_bookmark, "Set or remove a bookmark on the cursor's line",
         next_bookmark, "Go to the next bookmark",
         prev_bookmark, "Go to the previous bookmark",
@@ -3794,6 +3794,11 @@ pub fn command_palette(cx: &mut Context) {
                 ui::PickerColumn::new("doc", |item: &MappableCommand, _| item.doc().into()),
             ];
 
+            // what the command asks of the compositor (a picker to open, a step through history)
+            // runs once the palette has closed
+            let pending: std::rc::Rc<std::cell::RefCell<Vec<compositor::Callback>>> =
+                Default::default();
+            let queue = pending.clone();
             let picker = Picker::new(columns, 0, commands, keymap, move |cx, command, _action| {
                 let mut ctx = Context {
                     register,
@@ -3807,6 +3812,7 @@ pub fn command_palette(cx: &mut Context) {
 
                 ctx.editor.remember_command(&palette_key(command));
                 command.execute(&mut ctx);
+                queue.borrow_mut().append(&mut ctx.callback);
 
                 if ctx.editor.tree.contains(focus) {
                     let config = ctx.editor.config();
@@ -3823,6 +3829,7 @@ pub fn command_palette(cx: &mut Context) {
             })
             // its commands record their own jumps (this fork: history)
             .without_jumps()
+            .with_after_close(pending)
             .with_tie_rank(move |command| {
                 recent
                     .get(&palette_key(command))
@@ -6108,16 +6115,16 @@ fn match_brackets(cx: &mut Context) {
 
 //
 
-fn history_toggle(cx: &mut Context) {
-    crate::history::toggle(cx);
-}
-
 fn history_back(cx: &mut Context) {
     crate::history::back(cx);
 }
 
 fn history_forward(cx: &mut Context) {
     crate::history::forward(cx);
+}
+
+fn history_picker(cx: &mut Context) {
+    crate::history::history_picker(cx);
 }
 
 fn toggle_bookmark(cx: &mut Context) {

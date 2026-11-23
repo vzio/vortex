@@ -1751,11 +1751,6 @@ impl Component for EditorView {
                 // clear status
                 cx.editor.status_msg = None;
 
-                // `gA`'s sticky state (this fork: history) takes `A`, `a` and `Esc` first
-                if let Some(result) = crate::history::menu_key(key, cx.editor, |_| None) {
-                    return result;
-                }
-
                 // the keys of watch mode and debug mode (this fork) come first while they are on
                 let layer_handled = self.layer_key(key, &mut cx).is_some();
 

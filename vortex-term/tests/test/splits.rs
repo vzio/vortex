@@ -145,14 +145,14 @@ async fn test_changes_in_splits_apply_to_all_views() -> anyhow::Result<()> {
     // * <C-w>w       Switch to window 1.
     // * kd           Delete line 1 (the blank one) in window 1.
     // * <C-w>q       Close window 1, focusing window 2.
-    // * gA<esc>      Step back to the recorded place in window 2, and stay there.
+    // * ga           Step back to the recorded place in window 2.
     // * d            Delete a character there.
     //
     // This panicked in the past because the history place on line 2 of window 2
     // was not updated and after the `kd` step, pointed outside of the document.
     test((
         "#[o|]#ne\ntwo\n",
-        "<C-w>v[<space>ge<C-w>wkd<C-w>qgA<esc>d",
+        "<C-w>v[<space>ge<C-w>wkd<C-w>qgad",
         "#[n|]#e\ntwo\n",
         LineFeedHandling::AsIs,
     ))

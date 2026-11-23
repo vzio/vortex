@@ -312,6 +312,9 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     callback_fn: PickerCallback<T>,
     /// Whether picking a result records a jump in history (this fork); not for the command palette.
     records_jumps: bool,
+    /// Callbacks for the compositor that the picked item left behind, run once the picker is
+    /// closed: the command palette's (a command that opens or steps through something).
+    after_close: Option<std::rc::Rc<std::cell::RefCell<Vec<compositor::Callback>>>>,
     default_action: Action,
 
     pub truncate_start: bool,
@@ -536,6 +539,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             show_preview: true,
             callback_fn: Box::new(callback_fn),
             records_jumps: true,
+            after_close: None,
             default_action: Action::Replace,
             completion_height: 0,
             widths,
@@ -900,6 +904,15 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     /// commands record their own.
     pub fn without_jumps(mut self) -> Self {
         self.records_jumps = false;
+        self
+    }
+
+    /// The callbacks collected in `queue` while an item is picked run after the picker closes.
+    pub fn with_after_close(
+        mut self,
+        queue: std::rc::Rc<std::cell::RefCell<Vec<compositor::Callback>>>,
+    ) -> Self {
+        self.after_close = Some(queue);
         self
     }
 
@@ -1927,6 +1940,15 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
                         compositor.last_picker = compositor.pop();
                     })
                 };
+            let Some(queue) = picker.after_close.clone() else {
+                return EventResult::Consumed(Some(callback));
+            };
+            let callback: compositor::Callback = Box::new(move |compositor, ctx| {
+                callback(compositor, ctx);
+                for after in queue.take() {
+                    after(compositor, ctx);
+                }
+            });
             EventResult::Consumed(Some(callback))
         };
 

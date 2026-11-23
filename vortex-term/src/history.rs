@@ -1,5 +1,5 @@
-//! History and bookmarks in the terminal UI (this fork): `ga`, `gA` and its sticky state, showing
-//! a screen again, and the bookmark commands and picker. What a jump records and how history
+//! History and bookmarks in the terminal UI (this fork): `ga`, the forward step, the history
+//! picker (`gA`), showing a screen again, and the bookmark commands and picker. What a jump records and how history
 //! walks are in `vortex_view::history`; bookmarks are in `vortex_view::bookmarks`.
 
 use std::path::PathBuf;
@@ -9,42 +9,27 @@ use vortex_view::{
     align_view,
     bookmarks::{At, Bookmark, Direction},
     history::{Jump, Place, Screen, ScreenCover, ScreenKind, Step},
-    info::Info,
-    input::KeyEvent,
     keyboard::{KeyCode, KeyModifiers},
     Align, DocumentId, Editor,
 };
 
 use crate::{
     commands::Context,
-    compositor::{self, Compositor, EventResult},
+    compositor::Compositor,
     job,
     ui::{self, diff_view::DiffView, overlay::overlaid, Picker, PickerColumn},
 };
 
-/// The infobox of `gA`'s sticky state.
-pub const MENU_TITLE: &str = "History";
-pub const MENU_TEXT: &str = "A back · a forward · Esc done";
-
-/// `ga`: to the last place jumped from, or back to where a walk with `gA` started.
-pub fn toggle(cx: &mut Context) {
-    let count = cx.count();
-    cx.callback.push(Box::new(move |compositor, cx| {
-        step(compositor, cx.editor, Step::Toggle, count, None);
-    }));
-}
-
-/// `gA`: one place back, and the sticky state where `A` goes on back and `a` forward.
+/// `ga`: one place back in the focused view's history (a count goes further back).
 pub fn back(cx: &mut Context) {
     let count = cx.count();
     cx.callback.push(Box::new(move |compositor, cx| {
-        if step(compositor, cx.editor, Step::Back, count, None) {
-            open_menu(cx.editor);
-        }
+        step(compositor, cx.editor, Step::Back, count, None);
     }));
 }
 
-/// One place forward after `gA`; the last one is where the walk started.
+/// `history_forward` (no default key, in the command palette): one place forward, after `ga`;
+/// the last one is where the walk started.
 pub fn forward(cx: &mut Context) {
     let count = cx.count();
     cx.callback.push(Box::new(move |compositor, cx| {
@@ -52,74 +37,14 @@ pub fn forward(cx: &mut Context) {
     }));
 }
 
-fn open_menu(editor: &mut Editor) {
-    editor.history_menu = true;
-    editor.autoinfo = Some(menu_info());
-}
-
-pub fn menu_info() -> Info {
-    let mut info = Info::new(MENU_TITLE, &[] as &[(&str, &str)]);
-    info.text = MENU_TEXT.to_string();
-    info.width = info.width.max(MENU_TEXT.chars().count() as u16);
-    info
-}
-
-fn close_menu(editor: &mut Editor) {
-    editor.history_menu = false;
-    if editor
-        .autoinfo
-        .as_ref()
-        .is_some_and(|info| info.title == MENU_TITLE)
-    {
-        editor.autoinfo = None;
-    }
-}
-
-/// A key while `gA`'s sticky state is open: `A` back, `a` forward, `Esc` closes it; any other
-/// key closes it and is not taken (`None`), so it does what it always does. `here` is the screen
-/// on top that a step leaves (the diff view), `None` for the editor's place.
-pub fn menu_key(
-    key: KeyEvent,
-    editor: &mut Editor,
-    here: impl FnOnce(&mut Compositor) -> Option<Place> + 'static,
-) -> Option<EventResult> {
-    if !editor.history_menu {
-        return None;
-    }
-    let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
-    let step_of = match key.code {
-        KeyCode::Char('A') if plain => Step::Back,
-        KeyCode::Char('a') if plain => Step::Forward,
-        KeyCode::Esc => {
-            close_menu(editor);
-            return Some(EventResult::Consumed(None));
-        }
-        _ => {
-            close_menu(editor);
-            return None;
-        }
-    };
-    Some(EventResult::Consumed(Some(Box::new(
-        move |compositor: &mut Compositor, cx: &mut compositor::Context| {
-            let here = here(compositor);
-            step(compositor, cx.editor, step_of, 1, here);
-            // the menu stays open, even at either end
-            open_menu(cx.editor);
-        },
-    ))))
-}
-
-/// A step from the screen on top, `here`, already off the compositor (the diff view's `ga` and
-/// `gA`); `gA` opens the sticky state.
+/// A step from the screen on top, `here`, already off the compositor (the diff view's `ga`).
 pub fn step_from_screen(
     compositor: &mut Compositor,
     editor: &mut Editor,
     step_of: Step,
     here: Option<Place>,
 ) {
-    if step(compositor, editor, step_of, 1, here) && step_of == Step::Back {
-        open_menu(editor);
-    }
+    step(compositor, editor, step_of, 1, here);
 }
 
 /// Takes a step through the focused view's history and shows where it lands; `here` is the
@@ -133,9 +58,8 @@ pub fn step(
     here: Option<Place>,
 ) -> bool {
     // a step may open another buffer or screen: it waits for watch mode to end, also from the keys that
-    // don't go through the keymap (the sticky state, the hex view, a diff on top)
+    // don't go through the keymap (the hex view, a diff on top)
     let name = match step {
-        Step::Toggle => "history_toggle",
         Step::Back => "history_back",
         Step::Forward => "history_forward",
     };
@@ -244,6 +168,173 @@ pub fn cover(editor: &mut Editor, kind: ScreenKind) {
         doc: view.doc,
         version: doc.version(),
     });
+}
+
+// The history picker
+
+/// A row of the history picker: a place of the focused view's history, or the present.
+#[derive(Debug, Clone)]
+pub struct HistoryRow {
+    /// Its index in the history; `None` for the present, listed first when not walking.
+    pub index: Option<usize>,
+    /// Where the walk is: the present, or the place a walk is at.
+    pub current: bool,
+    /// The file (relative to the working directory) or the buffer's name, and the line; or the
+    /// screen.
+    pub name: String,
+    /// The line's text, trimmed; empty for a screen.
+    pub text: String,
+    /// What the preview shows: the buffer and the line.
+    preview: Option<(DocumentId, usize)>,
+}
+
+/// A place as the picker shows it.
+fn describe(editor: &Editor, place: &Place) -> (String, String, Option<(DocumentId, usize)>) {
+    match place {
+        Place::Text { doc, selection } => {
+            let Some(document) = editor.document(*doc) else {
+                return ("(closed)".to_string(), String::new(), None);
+            };
+            let text = document.text().slice(..);
+            let cursor = selection.primary().cursor(text).min(text.len_chars());
+            let line = text.char_to_line(cursor);
+            let name = match document.path() {
+                Some(path) => vortex_stdx::path::get_relative_path(path)
+                    .display()
+                    .to_string(),
+                None => document.display_name().into_owned(),
+            };
+            let content = text.line(line).to_string();
+            (
+                format!("{name}:{}", line + 1),
+                content.trim().to_string(),
+                Some((*doc, line)),
+            )
+        }
+        Place::Screen(screen) => {
+            let name = match screen.kind {
+                ScreenKind::Dashboard => "the dashboard",
+                ScreenKind::Vortex => "the vortex",
+                ScreenKind::Diff => "a diff",
+                ScreenKind::DebugPanel => "the debug panel",
+            };
+            (name.to_string(), String::new(), None)
+        }
+    }
+}
+
+/// The rows of the history picker for the focused view, newest first: the present first when
+/// not walking, then the places it jumped from; the row where the walk is, is `current`.
+pub fn history_rows(editor: &Editor, here: &Place) -> Vec<HistoryRow> {
+    let history = &editor.tree.get(editor.tree.focus).history;
+    let mut rows = Vec::with_capacity(history.len() + 1);
+    if !history.is_walking() {
+        let (name, text, preview) = describe(editor, here);
+        rows.push(HistoryRow {
+            index: None,
+            current: true,
+            name,
+            text,
+            preview,
+        });
+    }
+    let places: Vec<&Place> = history.places().collect();
+    for (index, place) in places.into_iter().enumerate().rev() {
+        let (name, text, preview) = describe(editor, place);
+        rows.push(HistoryRow {
+            index: Some(index),
+            current: history.current() == index,
+            name,
+            text,
+            preview,
+        });
+    }
+    rows
+}
+
+/// `gA`: the history picker, the focused view's places newest first, where the walk is marked.
+pub fn history_picker(cx: &mut Context) {
+    cx.callback.push(Box::new(|compositor, cx| {
+        open_history_picker(compositor, cx.editor, None)
+    }));
+}
+
+/// Opens the history picker; `here` is the place of the screen on top it is opened from (the
+/// diff view, shown as the present), `None` for the editor's place.
+pub fn open_history_picker(compositor: &mut Compositor, editor: &mut Editor, here: Option<Place>) {
+    // it may open another buffer or screen: it waits for watch mode to end, as `ga` does
+    if !crate::watch::before_command(editor, "history_picker") {
+        return;
+    }
+    let present = here.clone().unwrap_or_else(|| editor.place());
+    let rows = history_rows(editor, &present);
+    if rows.iter().all(|row| row.index.is_none()) {
+        editor.set_status("No jumps yet");
+        return;
+    }
+    let cursor = rows.iter().position(|row| row.current).unwrap_or(0) as u32;
+    let columns = [
+        PickerColumn::new("", |row: &HistoryRow, _| {
+            if row.current { "●" } else { " " }.into()
+        }),
+        PickerColumn::new("place", |row: &HistoryRow, _| row.name.as_str().into()),
+        PickerColumn::new("line", |row: &HistoryRow, _| row.text.as_str().into()),
+    ];
+    let picker = Picker::new(columns, 1, rows, (), |cx, row: &HistoryRow, _action| {
+        let Some(index) = row.index else {
+            // the present: already there
+            return;
+        };
+        cx.jobs.callback(async move {
+            let call: job::Callback = job::Callback::EditorCompositor(Box::new(
+                move |editor: &mut Editor, compositor: &mut Compositor| {
+                    // opened over a diff: going somewhere leaves it, as `ga` does
+                    let here = ui::diff_view::leave_for_history(compositor);
+                    go_to_place(compositor, editor, index, here);
+                },
+            ));
+            Ok(call)
+        });
+    })
+    .with_modes()
+    .without_header()
+    // going there is history's own step, not a new jump
+    .without_jumps()
+    .with_help(
+        "History",
+        vec![(
+            "history",
+            vec![("Enter", "go there"), ("ga", "(outside) one back")],
+        )],
+    )
+    .with_initial_cursor(cursor)
+    .with_preview(|_editor, row: &HistoryRow| {
+        row.preview
+            .map(|(doc, line)| (doc.into(), Some((line, line))))
+    });
+    compositor.push(Box::new(overlaid(picker)));
+}
+
+/// Goes to the place at `index` of the focused view's history from `here` (a screen already off
+/// the compositor, `None` for the editor's place), moving the walk's position there, without
+/// recording a jump.
+fn go_to_place(
+    compositor: &mut Compositor,
+    editor: &mut Editor,
+    index: usize,
+    here: Option<Place>,
+) {
+    let left = here.clone();
+    let here = here.unwrap_or_else(|| editor.place());
+    match editor.history_go_to(index, here.clone()) {
+        Ok(place) => show(compositor, editor, place, &here),
+        Err(message) => {
+            if let Some(Place::Screen(screen)) = left {
+                restore(compositor, editor, &screen);
+            }
+            editor.set_status(message);
+        }
+    }
 }
 
 // Bookmarks

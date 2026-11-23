@@ -1051,15 +1051,10 @@ impl DiffView {
             return self.answer(confirm, key, editor);
         }
 
-        // `gA`'s sticky state (this fork: history)
-        if let Some(result) = crate::history::menu_key(*key, editor, leave) {
-            return result;
-        }
-
         if let Some(prefix) = self.pending.take() {
             match (prefix, key.code) {
-                ('g', KeyCode::Char('a')) => return history_step(Step::Toggle),
-                ('g', KeyCode::Char('A')) => return history_step(Step::Back),
+                ('g', KeyCode::Char('a')) => return history_step(Step::Back),
+                ('g', KeyCode::Char('A')) => return history_picker(),
                 (']' | '[', KeyCode::Char('c')) => return self.step_hunk(prefix == ']', editor),
                 ('g', KeyCode::Char('g')) => self.scroll_to(0),
                 ('g', KeyCode::Char('e')) => self.scroll_to(usize::MAX),
@@ -1272,7 +1267,26 @@ fn layout(
     (row + 1, col)
 }
 
-/// Takes a history step from the diff view on top (this fork): `ga`, `gA`.
+/// Opens the history picker over the diff view (this fork): `gA`. Going to a place leaves the
+/// diff, as `ga` does.
+fn history_picker() -> EventResult {
+    EventResult::Consumed(Some(Box::new(
+        |compositor: &mut Compositor, cx: &mut Context| {
+            // the present is this diff (it stays on the compositor until a place is picked)
+            let here = Place::screen(ScreenKind::Diff);
+            crate::history::open_history_picker(compositor, cx.editor, Some(here));
+        },
+    )))
+}
+
+/// Takes the diff view off the compositor for a history step, if it is on it (the history
+/// picker's `Enter` over a diff), and returns it as the place history leaves.
+pub(crate) fn leave_for_history(compositor: &mut Compositor) -> Option<Place> {
+    compositor.find_id::<DiffView>(ID)?;
+    leave(compositor)
+}
+
+/// Takes a history step from the diff view on top (this fork): `ga`.
 fn history_step(step: Step) -> EventResult {
     EventResult::Consumed(Some(Box::new(
         move |compositor: &mut Compositor, cx: &mut Context| {

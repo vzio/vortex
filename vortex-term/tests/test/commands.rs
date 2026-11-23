@@ -282,11 +282,12 @@ async fn test_undo_redo() -> anyhow::Result<()> {
     // * ge          Go to the last line. The place on line 3 is recorded in the history.
     // * u           Undo the two newlines. The recorded place is now on line 1.
     // * 3G          Go to "three", away from the place.
-    // * gAa         Step back in the history and forward again. This would panic if the
-    //               history places were not being updated correctly.
+    // * ga          Step back in the history. This would panic if the history places were not
+    //               being updated correctly.
+    // * gAk<ret>    Forward again: the history picker, the row above (newer), Enter.
     test((
         "#[o|]#ne\ntwo\nthree\n",
-        "2[<space>geu3GgAa",
+        "2[<space>geu3GgagAk<ret>",
         "one\ntwo\n#[t|]#hree\n",
         LineFeedHandling::AsIs,
     ))
@@ -299,12 +300,12 @@ async fn test_undo_redo() -> anyhow::Result<()> {
     // * gg          Go to the first line, the blank one. The place on the last line is recorded.
     // * d           Delete the newline of line 1. The recorded places should be adjusted.
     // * uU          Undo and redo the `d` edit.
-    // * gAA         Step back in the history, twice. This would panic if the history places
+    // * gaga        Step back in the history, twice. This would panic if the history places
     //               were not being updated correctly.
-    // * <esc>ga     Close the state; `ga` goes where the walk started.
+    // * gAgg<ret>   The history picker's newest row: back where the walk started.
     test((
         "#[o|]#ne\ntwo\nthree\n",
-        "[<space>geggduUgAA<esc>ga",
+        "[<space>geggduUgagagAgg<ret>",
         "#[o|]#ne\ntwo\nthree\n",
         LineFeedHandling::AsIs,
     ))
