@@ -34,6 +34,7 @@ mod test {
     mod history;
     mod hunks;
     mod inline_blame;
+    mod language_theme;
     mod line_history;
     mod menus;
     mod modes;

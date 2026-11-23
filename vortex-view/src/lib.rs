@@ -20,6 +20,7 @@ pub mod history;
 pub mod info;
 pub mod input;
 pub mod keyboard;
+pub mod language_theme;
 pub mod register;
 pub mod terminal;
 pub mod theme;

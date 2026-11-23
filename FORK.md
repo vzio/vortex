@@ -106,6 +106,7 @@ git blame FILE
 - [The vortex theme](#the-vortex-theme)
 - [Theme effects](#theme-effects)
 - [The Matrix theme](#the-matrix-theme)
+- [A theme per language](#a-theme-per-language)
 - [Practice](#practice)
 - [Tutor](#tutor)
 
@@ -145,6 +146,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | The vortex theme | `theme.toml` (the theme), `helix_theme.toml` (upstream's default theme), the built-in themes in `vortex-view/src/theme.rs` |
 | Theme effects | `vortex-view/src/effects.rs` (the `[effects]` table: parsing, validation, inheritance), `vortex-term/src/ui/glitch.rs` (the glitch and its wake-ups), `vortex-term/src/dashboard/charset.rs` (blocks or the measured ASCII ramp), `vortex-term/src/terminal/phosphor.rs` (the phosphor filter), the glitch over error diagnostics in `vortex-term/src/ui/text_decorations/diagnostics.rs` (where the ghost text of errors is) and `glitch_diagnostics` in `vortex-term/src/ui/editor.rs` |
 | The Matrix theme | `matrix_theme.toml` (the theme and its effects), built in by `vortex-view/src/theme.rs`, `vortex-view/src/contrast_tests.rs` (the contrast test) |
+| A theme per language | `vortex-view/src/language_theme.rs` (which theme to show, the themes loaded, the toggle); `theme` on `LanguageConfiguration` in `vortex-core/src/syntax/config.rs`; `language_themes` and `theme_swapped` in `vortex-view/src/editor.rs`; the call before each frame in `Application::render` (`vortex-term/src/application.rs`, with `EditorView::has_dashboard`); `:theme` and `:language-themes` in `commands/typed.rs`; tests in `vortex-term/tests/test/language_theme.rs` |
 | Practice | `vortex-term/src/practice.rs`, `vortex-term/src/practice/`, `runtime/practice/`, `vortex-term/tests/test/practice.rs` |
 
 Hooks into core files: commands and keys in `vortex-term/src/commands.rs`,
@@ -1747,6 +1749,41 @@ and the background. Measured: text 11.7:1 on the background, comments and
 inactive text 6.8:1, text on the primary selection 5.1:1 (its lowest pair), errors 5.9:1, the
 selection 1.7:1 against the background and the cursor 16.7:1. The same rows run on the vortex
 theme too, printed only (`cargo test -p vortex-view contrast -- --nocapture`).
+
+## A theme per language
+
+A language can have its own theme: the whole editor takes the theme of the focused buffer's
+language, so you see at a glance which language (and which way of thinking) you are in. It is
+opt-in, per language, in `languages.toml`, the built-in one or yours (yours wins, as for any
+language setting):
+
+```toml
+[[language]]
+name = "rust"
+theme = "gruvbox"
+```
+
+- **Which theme.** The focused buffer's language's, when it names one; otherwise the main theme
+  (the config's `theme`, or the last `:theme`). Focusing another split or switching buffers
+  switches it, at the next frame.
+- **`:theme` overrides it.** An explicit `:theme NAME` shows that theme everywhere, whatever the
+  language, until `vx` quits or `:language-themes` turns the languages' themes back on. Previewing
+  a theme while typing `:theme` starts from the main theme.
+- **`:language-themes`** turns them back on after a `:theme`, or off when they are on (the main
+  theme everywhere). It says which in the status line. Nothing is saved: the next run starts with
+  them on.
+- **Screens keep the main theme**: the dashboard and the side by side diff are not a language.
+- **Effects come along.** A theme's `[effects]` are part of it (see [Theme effects](#theme-effects)):
+  a language whose theme is `matrix` glitches its error diagnostics, and the dashboard keeps the
+  main theme's effects.
+- **Loaded once.** Each language theme is loaded the first time it is needed and kept in memory
+  for the run; nothing is written to disk. One that fails to load (a typo, no `ui.selection`) is
+  a warning in the log, once, and the language uses the main theme.
+
+### Limitations
+
+- One theme for the whole screen: splits of different languages side by side show the focused
+  one's theme in all of them.
 
 ## Practice
 

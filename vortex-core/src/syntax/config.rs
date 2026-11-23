@@ -52,6 +52,9 @@ pub struct LanguageConfiguration {
     pub block_comment_tokens: Option<Vec<BlockCommentToken>>,
     pub text_width: Option<usize>,
     pub soft_wrap: Option<SoftWrap>,
+    /// A theme for the buffers of this language (this fork): the whole editor takes it while
+    /// one of them is focused.
+    pub theme: Option<String>,
 
     #[serde(default)]
     pub auto_format: bool,
