@@ -114,8 +114,28 @@ struct Search {
 struct Laid {
     page: Page,
     version: i32,
-    width: usize,
+    widths: page::Widths,
     theme: String,
+}
+
+/// Where the page goes in the area drawn.
+#[derive(Debug, Clone, Copy)]
+struct Columns {
+    widths: page::Widths,
+    /// The prose's left edge.
+    left: u16,
+    /// The window's columns, its margins left out: what tables and code blocks may take.
+    inner_left: u16,
+    inner_right: u16,
+}
+
+impl Columns {
+    /// Where the line `line` starts on the screen.
+    fn line_left(&self, line: &page::Line) -> u16 {
+        self.left
+            .saturating_sub(line.shift as u16)
+            .max(self.inner_left)
+    }
 }
 
 pub struct MarkdownView {
@@ -212,18 +232,23 @@ impl MarkdownView {
         self.top
     }
 
-    /// The page's width and left edge in `area`, capped by `markdown-width` and centered.
-    fn page_columns(&self, editor: &Editor) -> (usize, u16) {
+    /// The page's widths in `area` (the prose's, capped by `markdown-width`, and the window's
+    /// less a cell each side), the prose's left edge (centered), and the window's columns that
+    /// tables and code blocks may take.
+    fn page_columns(&self, editor: &Editor) -> Columns {
         let area = self.area;
+        let margin = u16::from(area.width > 20);
+        let wide = (area.width - 2 * margin).max(1) as usize;
         let cap = editor.config().markdown_width as usize;
-        let inner = if area.width > 20 {
-            area.width as usize - 2
-        } else {
-            area.width as usize
-        };
-        let width = if cap == 0 { inner } else { inner.min(cap) }.max(1);
-        let left = area.x + (area.width.saturating_sub(width as u16)) / 2;
-        (width, left)
+        let prose = if cap == 0 { wide } else { wide.min(cap) };
+        let widths = page::Widths { prose, wide };
+        let inner_left = area.x + margin;
+        Columns {
+            widths,
+            left: inner_left + widths.left_room() as u16,
+            inner_left,
+            inner_right: inner_left + wide as u16,
+        }
     }
 
     /// The rows of the page on the screen (the last row is the status row).
@@ -233,14 +258,14 @@ impl MarkdownView {
 
     /// Lays the page out again if the buffer, the width or the theme changed, keeping the place.
     fn lay_out(&mut self, editor: &mut Editor) {
-        let (width, _) = self.page_columns(editor);
+        let widths = self.page_columns(editor).widths;
         let Some(doc) = editor.document(self.doc) else {
             return;
         };
         let version = doc.version();
         let theme = editor.theme.name().to_string();
         if self.laid.as_ref().is_some_and(|laid| {
-            laid.version == version && laid.width == width && laid.theme == theme
+            laid.version == version && laid.widths == widths && laid.theme == theme
         }) {
             return;
         }
@@ -251,7 +276,7 @@ impl MarkdownView {
         });
         let text = doc.text().to_string();
         let loader = editor.syn_loader.load();
-        let page = Page::new(&text, width, &editor.theme, &loader);
+        let page = Page::new(&text, widths, &editor.theme, &loader);
         if self
             .laid
             .as_ref()
@@ -272,7 +297,7 @@ impl MarkdownView {
         self.laid = Some(Laid {
             page,
             version,
-            width,
+            widths,
             theme,
         });
         if let Some((top, reading)) = kept {
@@ -512,9 +537,10 @@ impl MarkdownView {
                 let line = self.top + (event.row - area.y) as usize;
                 if line < self.len() {
                     self.reading = line;
-                    let (_, left) = self.page_columns(editor);
-                    let column = event.column.saturating_sub(left) as usize;
-                    let links = self.laid.as_ref().unwrap().page.lines[line].links();
+                    let columns = self.page_columns(editor);
+                    let page_line = &self.laid.as_ref().unwrap().page.lines[line];
+                    let column = event.column.saturating_sub(columns.line_left(page_line)) as usize;
+                    let links = page_line.links();
                     self.selected = links
                         .iter()
                         .position(|(start, end, _)| (*start..*end).contains(&column))
@@ -915,12 +941,13 @@ impl MarkdownView {
         let theme = &editor.theme;
         let background = theme.get("ui.background");
         surface.clear_with(area, background);
-        let (width, left) = self.page_columns(editor);
+        let columns = self.page_columns(editor);
         let reading_style = theme.get_or("ui.markdown.reading", "ui.cursorline.primary");
         let match_style = theme.get_or("ui.markdown.match", "ui.selection");
         let link_style = theme.get_or("ui.markdown.link.selected", "ui.selection.primary");
         let border = theme.get_or("ui.markdown.border", "ui.virtual");
-        let right = (left as usize + width).min(area.right() as usize) as u16;
+        let right = columns.inner_right.min(area.right());
+        let prose_right = (columns.left + columns.widths.prose as u16).min(right);
         let page = &self.laid.as_ref().unwrap().page;
         for row in 0..self.height() {
             let index = self.top + row;
@@ -928,20 +955,25 @@ impl MarkdownView {
                 break;
             };
             let y = area.y + row as u16;
+            // a table or a code block wider than the prose breaks out to the left
+            let left = columns.line_left(line);
             if index == self.reading {
-                surface.set_style(Rect::new(left, y, right - left, 1), reading_style);
-                if left > area.x {
-                    surface.set_string(left - 1, y, "▏", border);
+                let from = left.min(columns.left);
+                let to = (left + line.extent() as u16).clamp(prose_right, right);
+                surface.set_style(Rect::new(from, y, to - from, 1), reading_style);
+                if from > area.x {
+                    surface.set_string(from - 1, y, "│", border);
                 }
             }
-            if let Some((column, style)) = line.fill {
-                let x = left + column as u16;
-                if x < right {
+            if let Some((start, end, style)) = line.fill {
+                let x = (left + start as u16).min(right);
+                let to = (left + end as u16).min(right);
+                if x < to {
                     let fill = Style {
                         bg: style.bg,
                         ..Default::default()
                     };
-                    surface.set_style(Rect::new(x, y, right - x, 1), fill);
+                    surface.set_style(Rect::new(x, y, to - x, 1), fill);
                 }
             }
             let shift = line
@@ -1015,7 +1047,7 @@ impl MarkdownView {
         let page = &self.laid.as_ref().unwrap().page;
         let section = page
             .section(self.reading)
-            .map(|heading| format!("§ {}  ", heading.text))
+            .map(|heading| format!("{}  ", heading.text))
             .unwrap_or_default();
         let position = format!("{}/{} ", self.reading + 1, page.lines.len().max(1));
         let right = format!("{section}{position}");

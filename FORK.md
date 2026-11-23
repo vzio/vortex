@@ -1506,17 +1506,17 @@ CommonMark and GitHub's extensions, with `pulldown-cmark`:
   `#` markers hidden.
 - **Emphasis, strong, strikethrough, inline code**, their markers hidden.
 - **Paragraphs** wrapped to the reading width.
-- **Lists**, nested, with bullets (`•`, `◦`, `▪` by depth) or right-aligned numbers and hanging
-  indents; task lists as `☐` and `☑`. A loose list keeps a blank line between its items.
+- **Lists**, nested, with bullets (`-`, `*`, `+` by depth) or right-aligned numbers and hanging
+  indents; task lists as `[ ]` and `[x]`. A loose list keeps a blank line between its items.
 - **Block quotes** behind a bar (`▎`); GitHub's alerts (`> [!NOTE]`...) with their name on the first
   line. **Rules** as a line across the page.
 - **Code blocks** on their own background, highlighted by their language (tree-sitter, as in hover
-  popups), never wrapped. A block whose lines are too long for the page scrolls sideways on its own,
+  popups), never wrapped. A block whose lines are too long for the window scrolls sideways on its own,
   like GitHub's: a cut line shows `>` in the block's last cell, and `<` on the left once it is
   scrolled.
 - **Tables** with box-drawing borders, aligned columns (`:---`, `:---:`, `---:`) and a bold header.
-  When the table is wider than the page, each cell wraps inside its own column, so a table stays a
-  table at any width: each column first gets its widest word (or all its text, if shorter), and
+  When the table is wider than the window, each cell wraps inside its own column, so a table stays
+  a table at any width: each column first gets its widest word (or all its text, if shorter), and
   what is left goes to the columns in proportion to what they still lack; when even the widest words
   don't fit, words are cut. Rows of several lines are separated by a rule.
 - **Links** as styled text with their address dimmed after it in parentheses; none for an autolink
@@ -1527,12 +1527,20 @@ CommonMark and GitHub's extensions, with `pulldown-cmark`:
   (`$x$`, `$$...$$`) as code, diagrams (```` ```mermaid ````) as their code blocks, front matter as a
   YAML block.
 
-**The reading width**: the window less a cell on each side, capped at `markdown-width` (100 by
-default; `0` for no cap) and centered on wider windows.
+**The reading width**: prose (paragraphs, lists, quotes, headings) takes the window less a cell on
+each side, capped at `markdown-width` (100 by default) and centered on wider windows. Tables and code
+blocks break out of it: they take the window's whole width (less the margins), moving left of the
+prose only as far as they need, so their cells wrap or their lines scroll only when the window itself
+is too narrow. `markdown-width = 0` fills the window with everything.
+
+**Characters**: what the page adds is ASCII (bullets, task boxes, the `<` and `>` of code blocks)
+plus the box-drawing and block characters the fork already draws (tables' borders, rules, the quote
+bar), which every terminal font has. The document's own text passes through as it is, emoji
+included; shortcodes like `:sob:` stay as written.
 
 ### Keys
 
-The page has a **reading line**, highlighted (and marked `▏` in the margin), which moving, headings,
+The page has a **reading line**, highlighted (and marked `│` in the margin), which moving, headings,
 search and links move: it is the line edit keys and `Enter` act on, and where `V` lands in the
 source.
 
@@ -1587,7 +1595,7 @@ source.
 ```toml
 [editor]
 markdown-view = "browse"   # "always", "never"
-markdown-width = 100       # 0: the window's width
+markdown-width = 100       # the prose's widest; 0: the window's width
 ```
 
 ### Limitations

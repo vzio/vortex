@@ -17,8 +17,11 @@ use super::wrap::{self, push_piece, Piece};
 pub struct Line {
     /// From the page's first column.
     pub pieces: Vec<Piece>,
-    /// A background from this column to the page's right edge: a heading's band, a code block.
-    pub fill: Option<(usize, Style)>,
+    /// A background over the columns `start..end`: a heading's band, a code block.
+    pub fill: Option<(usize, usize, Style)>,
+    /// How far left of the prose's left edge it is drawn: a table or a code block wider than the
+    /// prose, which breaks out of it into the room the window has.
+    pub shift: usize,
     /// The line of the source it comes from.
     pub source: usize,
     /// The code block it is a line of: an index into [`Page::code_blocks`].
@@ -28,6 +31,12 @@ pub struct Line {
 impl Line {
     pub fn text(&self) -> String {
         wrap::text(&self.pieces)
+    }
+
+    /// The columns it takes: its text, or its background if wider.
+    pub fn extent(&self) -> usize {
+        let text: usize = self.pieces.iter().map(Piece::width).sum();
+        text.max(self.fill.map_or(0, |(_, end, _)| end))
     }
 
     /// The links on the line: their columns `start..end` and their index.
@@ -83,32 +92,61 @@ impl CodeBlock {
     }
 }
 
+/// The widths a page is laid out at: the prose's (paragraphs, lists, quotes, headings: the
+/// reading width, centered) and the window's, which tables and code blocks wider than the prose
+/// may take.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Widths {
+    pub prose: usize,
+    pub wide: usize,
+}
+
+impl Widths {
+    /// The same width for everything.
+    pub fn uniform(width: usize) -> Self {
+        Self {
+            prose: width,
+            wide: width,
+        }
+    }
+
+    /// The room left of the prose's left edge, the prose being centered in the window.
+    pub fn left_room(&self) -> usize {
+        self.wide.saturating_sub(self.prose) / 2
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Page {
     pub lines: Vec<Line>,
     pub headings: Vec<Heading>,
     pub links: Vec<Target>,
     pub code_blocks: Vec<CodeBlock>,
-    /// The width it was laid out at.
-    pub width: usize,
+    /// The widths it was laid out at.
+    pub widths: Widths,
     /// Where the footnotes start (the end of the body).
     pub body_end: usize,
     footnote_lines: HashMap<String, usize>,
 }
 
 impl Page {
-    /// Parses and lays out `source` at `width`.
-    pub fn new(source: &str, width: usize, theme: &Theme, loader: &syntax::Loader) -> Self {
+    /// Parses and lays out `source` at `widths`.
+    pub fn new(source: &str, widths: Widths, theme: &Theme, loader: &syntax::Loader) -> Self {
         let styles = Styles::new(theme);
         let parsed = parse::parse(source, &styles, theme, loader);
-        Self::lay_out(source, parsed, width, &styles)
+        Self::lay_out(source, parsed, widths, &styles)
     }
 
-    fn lay_out(source: &str, parsed: parse::Parsed, width: usize, styles: &Styles) -> Self {
+    fn lay_out(source: &str, parsed: parse::Parsed, widths: Widths, styles: &Styles) -> Self {
+        let widths = Widths {
+            prose: widths.prose.max(1),
+            wide: widths.wide.max(widths.prose).max(1),
+        };
         let mut layout = Layout {
             lines: Vec::new(),
             prefixes: Vec::new(),
-            width: width.max(1),
+            width: widths.prose,
+            widths,
             starts: line_starts(source),
             styles,
             headings: Vec::new(),
@@ -150,7 +188,7 @@ impl Page {
             headings: layout.headings,
             links,
             code_blocks: layout.code_blocks,
-            width: layout.width,
+            widths,
             body_end,
             footnote_lines,
         }
@@ -263,7 +301,9 @@ impl Prefix {
 struct Layout<'a> {
     lines: Vec<Line>,
     prefixes: Vec<Prefix>,
+    /// The prose's width.
     width: usize,
+    widths: Widths,
     starts: Vec<usize>,
     styles: &'a Styles,
     headings: Vec<Heading>,
@@ -279,19 +319,46 @@ impl Layout<'_> {
             .saturating_sub(1)
     }
 
-    /// The width left for text inside the open containers.
-    fn available(&self) -> usize {
-        let taken: usize = self.prefixes.iter().map(Prefix::width).sum();
-        self.width.saturating_sub(taken).max(1)
+    /// The width the open containers' prefixes take.
+    fn prefix_width(&self) -> usize {
+        self.prefixes.iter().map(Prefix::width).sum()
     }
 
-    /// A line of `pieces` after the containers' prefixes, from the byte `byte` of the source.
+    /// The width left for prose inside the open containers.
+    fn available(&self) -> usize {
+        self.width.saturating_sub(self.prefix_width()).max(1)
+    }
+
+    /// The width left for a table or a code block inside the open containers: the window's.
+    fn wide_available(&self) -> usize {
+        self.widths.wide.saturating_sub(self.prefix_width()).max(1)
+    }
+
+    /// Moves the lines from `start` on left, so that `extent` columns (prefixes included) fit
+    /// in the window, the prose being centered in it.
+    fn break_out(&mut self, start: usize, extent: usize) {
+        let left_room = self.widths.left_room();
+        let right_room = self.widths.wide - left_room;
+        let shift = extent.saturating_sub(right_room).min(left_room);
+        for line in &mut self.lines[start..] {
+            line.shift = shift;
+        }
+    }
+
+    /// A line of `pieces` after the containers' prefixes, from the byte `byte` of the source;
+    /// `fill` is a background to the prose's right edge.
     fn emit(&mut self, pieces: Vec<Piece>, fill: Option<Style>, byte: usize) {
         let source = self.line_of(byte);
         self.emit_at_line(pieces, fill, source);
     }
 
     fn emit_at_line(&mut self, pieces: Vec<Piece>, fill: Option<Style>, source: usize) {
+        let end = self.width;
+        self.emit_filled(pieces, fill.map(|style| (end, style)), source);
+    }
+
+    /// A line whose background `fill` goes to the column given with it.
+    fn emit_filled(&mut self, pieces: Vec<Piece>, fill: Option<(usize, Style)>, source: usize) {
         let mut line = Vec::new();
         let mut column = 0;
         for prefix in &mut self.prefixes {
@@ -311,7 +378,8 @@ impl Layout<'_> {
         }
         self.lines.push(Line {
             pieces: line,
-            fill: fill.map(|style| (column, style)),
+            fill: fill.map(|(end, style)| (column, end.max(column), style)),
+            shift: 0,
             source,
             code: None,
         });
@@ -339,6 +407,7 @@ impl Layout<'_> {
         self.lines.push(Line {
             pieces: line,
             fill: None,
+            shift: 0,
             source,
             code: None,
         });
@@ -384,37 +453,47 @@ impl Layout<'_> {
                 }
             }
             Block::Code { lines, first } => {
-                // never wrapped: the whole lines, which the view scrolls sideways block by block
+                // never wrapped: the whole lines, which the view scrolls sideways block by block;
+                // as wide as the prose, or wider into the window's room, or the window's width
                 let first_line = self.line_of(*first);
-                let available = self.available();
+                let prose = self.available();
+                let wide = self.wide_available();
                 let style = self.styles.code_block;
+                let widest = lines
+                    .iter()
+                    .map(|spans| spans.iter().map(|(text, _)| text.width()).sum::<usize>())
+                    .max()
+                    .unwrap_or(0);
+                let (visible, width) = if widest < prose {
+                    (widest.max(1), prose)
+                } else if widest + 2 <= wide {
+                    (widest, widest + 2)
+                } else {
+                    (wide.saturating_sub(2).max(1), wide)
+                };
+                let end = self.prefix_width() + width;
                 let start = self.lines.len();
-                let mut widest = 0;
                 for (i, spans) in lines.iter().enumerate() {
                     let mut pieces = vec![Piece::new(" ", style)];
                     for (text, span_style) in spans {
                         push_piece(&mut pieces, Piece::new(text.as_str(), *span_style));
                     }
-                    widest = widest.max(pieces.iter().map(Piece::width).sum::<usize>() - 1);
-                    self.emit_at_line(pieces, Some(style), first_line + i);
+                    self.emit_filled(pieces, Some((end, style)), first_line + i);
                 }
                 if lines.is_empty() {
-                    self.emit_at_line(vec![Piece::new(" ", style)], Some(style), first_line);
+                    self.emit_filled(vec![Piece::new(" ", style)], Some((end, style)), first_line);
                 }
-                let column = self.lines[start].fill.map_or(0, |(column, _)| column) + 1;
+                let column = self.lines[start].fill.map_or(0, |(column, _, _)| column) + 1;
                 let block = self.code_blocks.len();
                 for line in &mut self.lines[start..] {
                     line.code = Some(block);
                 }
+                self.break_out(start, end);
                 self.code_blocks.push(CodeBlock {
                     lines: start..self.lines.len(),
                     column,
                     widest,
-                    visible: if widest < available {
-                        widest.max(1)
-                    } else {
-                        available.saturating_sub(2).max(1)
-                    },
+                    visible,
                 });
             }
             Block::Html { lines, first } => {
@@ -469,16 +548,16 @@ impl Layout<'_> {
                             ));
                         }
                         None if item.task.is_none() => {
-                            let bullet = ["•", "◦", "▪"][depth % 3];
+                            let bullet = ["-", "*", "+"][depth % 3];
                             first.push(Piece::new(format!("{bullet} "), self.styles.bullet));
                         }
                         None => {}
                     }
                     if let Some(checked) = item.task {
                         let (mark, style) = if checked {
-                            ("☑ ", self.styles.checked)
+                            ("[x] ", self.styles.checked)
                         } else {
-                            ("☐ ", self.styles.unchecked)
+                            ("[ ] ", self.styles.unchecked)
                         };
                         first.push(Piece::new(mark, style));
                     }
@@ -504,12 +583,20 @@ impl Layout<'_> {
                 );
             }
             Block::Table { aligns, head, rows } => {
-                let width = self.available();
+                // as wide as the window allows: cells wrap only when the window is too narrow
+                let width = self.wide_available();
+                let start = self.lines.len();
                 for (pieces, byte) in
                     table::layout(aligns, head, rows, width, node.source, self.styles.border)
                 {
                     self.emit(pieces, None, byte);
                 }
+                let extent = self.lines[start..]
+                    .iter()
+                    .map(Line::extent)
+                    .max()
+                    .unwrap_or(0);
+                self.break_out(start, extent);
             }
         }
     }
