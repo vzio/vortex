@@ -382,6 +382,7 @@ Selective soft wrap changes core files: `TextFormat` (the `unwrapped` lines, `wr
 (`unwrapped_lines`) in `vortex-view/src/document.rs`; `offset_coords_to_in_view_center` (the
 offset rule), `screen_coords_at_pos`, `text_pos_at_visual_coords` and the inline diagnostics'
 offsets (`LineOffsets`) in `vortex-view/src/view.rs` and `vortex-view/src/annotations/diagnostics.rs`;
+`draw_eol_diagnostic` in `vortex-term/src/ui/text_decorations/diagnostics.rs` (the sideways offset);
 `TextRenderer::set_col_offset` (an offset per visual line) and `render_text` in
 `vortex-term/src/ui/document.rs`; `Decoration::finish_rendering` in
 `vortex-term/src/ui/text_decorations.rs`; the rulers and the cursor column in `render_view` and
@@ -1554,16 +1555,35 @@ How it works:
 - Everything that maps text to screen cells and back takes the sideways offset of the line it is
   on (`TextFormat::col_offset`): the drawing (text, selections, search and other highlights, the
   jump labels of `gw`, inlay hints, indent guides, the cursor), the ghost text of diagnostics and
-  its layout, inline blame, the debugger's time per line, mouse clicks and drags, the cursor's
+  its layout, the end-of-line diagnostic (which was drawn off the screen on any line scrolled
+  sideways, and panicked in debug builds on a line ending left of the offset), inline blame, the debugger's time per line, mouse clicks and drags, the cursor's
   position for popups, the cursor column, the rulers (drawn per line when the offset differs
   between lines) and keeping the cursor in view. Row-wide things (the cursor line, the debugger's
   frame line, watch mode's flash, the gutter and its markers) have no column to map.
 
-**The cost.** Drawing a 120x50 view in the middle of a 25,000-line Markdown file (1000 sections of
-prose, a wide table and a code block), with syntax highlighting, median of 300 frames
-(`vortex-term/src/ui/document/drawing_cost.rs`, built with the integration profile):
+**The cost.** Drawing a 120x50 view in the middle of a 7,600-line Markdown file (400 sections of
+prose, a wide table and a Rust code block), with syntax highlighting: the median of 300 frames,
+then the median of three runs, release build, on this branch and on `main` before it
+(`vortex-term/src/ui/document/drawing_cost.rs`; the runs vary by about 10%):
 
-DRAWING_COST_TABLE
+| | `main` | selective soft wrap |
+|---|---|---|
+| every line wraps (`main`; here `except = []`) | 479 µs | 471 µs |
+| Markdown's defaults: tables and code unwrapped | | 527 µs |
+| the same, scrolled 40 columns sideways | | 538 µs |
+| soft wrap off | 625 µs | 558 µs |
+
+- The machinery itself costs nothing measurable per frame: with every line wrapping, or none, the
+  times are those of `main`, within the noise.
+- With tables and code unwrapped a frame costs between the two: an unwrapped line is laid out
+  whole, as without soft wrap, even the part past the right edge.
+- Finding the unwrapped lines costs about 4 ms after an edit, once, at the next frame, on this file
+  (a walk of its syntax tree, without the inside of tables and code blocks). The edit itself, with
+  its reparse, costs about 62 ms here, so it adds about 6%. Moving and scrolling cost nothing:
+  the lines are kept until the text changes.
+- Big files parse slowly: 25,000 lines of this kind take longer than the parser's timeout (7,600
+  don't), and such a buffer has no syntax tree, so no highlighting and no unwrapped lines: it
+  wraps everything, as before.
 
 ### Limitations
 

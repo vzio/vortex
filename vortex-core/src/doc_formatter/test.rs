@@ -1,3 +1,6 @@
+// the unwrapped lines are lists of ranges, one range or more
+#![allow(clippy::single_range_in_vec_init)]
+
 use crate::doc_formatter::{DocumentFormatter, TextFormat};
 use crate::text_annotations::{InlineAnnotation, Overlay, TextAnnotations};
 

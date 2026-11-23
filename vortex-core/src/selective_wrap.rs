@@ -115,6 +115,8 @@ pub fn unwrapped_lines(syntax: &Syntax, text: RopeSlice, kinds: &[String]) -> Un
 }
 
 #[cfg(test)]
+// the line ranges are lists, one range or more
+#[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
 
@@ -212,11 +214,11 @@ mod tests {
         };
         // a lone row isn't a table yet
         assert!(lines(&syntax, &text).is_empty());
-        let mut edit = |syntax: &mut Syntax,
-                        text: &mut Rope,
-                        at: usize,
-                        insert: Option<&str>,
-                        delete: usize| {
+        let edit = |syntax: &mut Syntax,
+                    text: &mut Rope,
+                    at: usize,
+                    insert: Option<&str>,
+                    delete: usize| {
             let old = text.clone();
             let transaction = Transaction::change(
                 text,
@@ -252,4 +254,3 @@ mod tests {
         assert!(lines(&syntax, &text).is_empty());
     }
 }
-

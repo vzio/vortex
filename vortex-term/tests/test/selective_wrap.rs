@@ -448,7 +448,10 @@ async fn the_paragraph_wraps_and_the_table_and_the_code_do_not() {
         assert!(lines[line].chars().count() > width + 40);
         let (x0, _) = page.area();
         let cell = page.cell(x0 + width - 1, page.row_of_line(line));
-        assert_eq!(cell.symbol.as_str(), lines[line].chars().nth(width - 1).unwrap().to_string());
+        assert_eq!(
+            cell.symbol.as_str(),
+            lines[line].chars().nth(width - 1).unwrap().to_string()
+        );
     }
     let code = page.line_of("kestrel");
     assert!(lines[code].chars().count() > width + 20);
@@ -555,7 +558,11 @@ async fn a_click_on_the_table_lands_right_without_an_offset() {
     for (word, skip) in [("Blank", 0), ("Blank", 3), ("indent", 1), ("Spaces", 2)] {
         let (column, row) = page.cell_of(word);
         page.click(column + skip, row).await;
-        assert_eq!(page.cursor_char(), page.char_of(word) + skip, "{word}+{skip}");
+        assert_eq!(
+            page.cursor_char(),
+            page.char_of(word) + skip,
+            "{word}+{skip}"
+        );
         assert_eq!(page.offset(), 0);
     }
     // the code block as well
@@ -625,36 +632,44 @@ async fn selections_are_drawn_on_the_shifted_cells() {
     page.click(column, row).await;
     page.keys("miw").await;
     assert_eq!(page.selected(), "tabs");
-    let word = page.selected();
-    assert!(!word.is_empty());
-    let drawn = page.cells_with_bg(PRIMARY);
-    assert_eq!(drawn.len(), word.chars().count(), "{word:?} {drawn:?}");
-    let row = drawn[0].1;
-    let drawn_text: String = drawn
-        .iter()
-        .map(|&(column, row)| page.symbol(column, row))
-        .collect();
-    assert_eq!(drawn_text, word);
-    assert!(drawn.iter().all(|&(_, r)| r == row));
-    assert_eq!(row, page.row_of_line(page.line_of("indent")));
+    // (the cursor's cell, at the end of the word, has the cursor's style on top)
+    let cursor = page.cursor().0;
+    assert_eq!(cursor, *page.cells_of("tabs").last().unwrap());
+    let mut drawn = page.cells_with_bg(PRIMARY);
+    drawn.push(cursor);
+    drawn.sort();
+    assert_eq!(drawn, page.cells_of("tabs"));
+    assert_eq!(drawn[0].1, page.row_of_line(page.line_of("indent")));
+    let text: String = drawn.iter().map(|&(c, r)| page.symbol(c, r)).collect();
+    assert_eq!(text, "tabs");
 
     // a search: the match
     page.keys("/osprey<ret>").await;
     assert!(page.offset() > 0);
     assert_eq!(page.selected(), "osprey");
-    assert_eq!(page.cells_with_bg(PRIMARY), page.cells_of("osprey"));
-    assert!(page.cells_with_bg(SELECTION).is_empty());
+    let mut drawn = page.cells_with_bg(PRIMARY);
+    drawn.push(page.cursor().0);
+    drawn.sort();
+    assert_eq!(drawn, page.cells_of("osprey"));
+    // (the cursor's cell is drawn with the selection's plain style)
+    assert_eq!(page.cells_with_bg(SELECTION), [page.cursor().0]);
 
-    // several: the primary has its style, the others theirs
+    // several: the primary has its style, the others theirs (and their cursors, theirs on top)
     page.keys("%s(heron|plover|osprey)<ret>").await;
     let primary = page.selected();
     let mut others: Vec<&str> = vec!["heron", "plover", "osprey"];
     others.retain(|word| *word != primary);
-    assert_eq!(page.cells_with_bg(PRIMARY), page.cells_of(&primary));
+    let mut drawn = page.cells_with_bg(PRIMARY);
+    drawn.push(page.cursor().0);
+    drawn.sort();
+    assert_eq!(drawn, page.cells_of(&primary));
+    // the other words, and the cursor of the primary one
     let mut secondary = page.cells_with_bg(SELECTION);
+    let mut expected = vec![page.cursor().0];
+    for word in &others {
+        expected.extend(page.cells_of(word));
+    }
     secondary.sort();
-    let mut expected: Vec<(usize, usize)> =
-        others.iter().flat_map(|word| page.cells_of(word)).collect();
     expected.sort();
     assert_eq!(secondary, expected);
     page.close().await;
@@ -697,7 +712,10 @@ async fn jump_labels_are_on_the_shifted_words() {
     // typing the label of a word in a shifted row jumps to it
     page.keys(&labels[1]).await;
     assert_eq!(page.selected(), "osprey");
-    assert_eq!(page.cursor_char(), page.char_of("osprey") + "osprey".len() - 1);
+    assert_eq!(
+        page.cursor_char(),
+        page.char_of("osprey") + "osprey".len() - 1
+    );
     // again, for the code
     let (column, row) = page.cell_of("kestrel");
     page.keys("gw").await;
@@ -744,8 +762,14 @@ fn inline_diagnostics(config: &mut Config) {
 }
 
 async fn with_diagnostic(word: &str, message: &str) -> Page {
-    let mut page = Page::open_with(&document(), ".md", None, DIAGNOSTIC_THEME, inline_diagnostics)
-        .await;
+    let mut page = Page::open_with(
+        &document(),
+        ".md",
+        None,
+        DIAGNOSTIC_THEME,
+        inline_diagnostics,
+    )
+    .await;
     let start = page.char_of(word);
     let line = page.line_of(word);
     let diagnostic = diagnostic(start, start + word.chars().count(), line, message);
@@ -768,12 +792,12 @@ fn underlined(page: &Page) -> Vec<(usize, usize)> {
     cells
 }
 
-/// The column where the message of the diagnostic starts, relative to the start of its word,
-/// and its row relative to the row of the word.
-fn ghost(page: &Page, word: (usize, usize), message: &str) -> (usize, usize) {
-    let (column, row) = page.cell_of(message);
-    assert!(row > word.1, "the message is below the row:\n{}", page.rows().join("\n"));
-    (column - word.0, row - word.1)
+/// The ghost text of a diagnostic: its connector is on the row below the word, in the column
+/// where the word starts, and the message is on the next row.
+fn assert_ghost(page: &Page, word: (usize, usize), message: &str) {
+    let rows = page.rows().join("\n");
+    assert_eq!(page.symbol(word.0, word.1 + 1), "┘", "{rows}");
+    assert_eq!(page.cell_of(message).1, word.1 + 2, "{rows}");
 }
 
 /// Without an offset, the diagnostic of a word of a table row underlines it and has its ghost
@@ -786,8 +810,7 @@ async fn diagnostics_follow_the_shifted_cells() {
     assert_eq!(page.offset(), 0);
     let word = page.cell_of("Blank");
     assert_eq!(underlined(&page), page.cells_of("Blank"));
-    println!("{}", page.rows().join("\n"));
-    let unshifted = ghost(&page, word, "no blanks allowed");
+    assert_ghost(&page, word, "no blanks allowed");
     page.close().await;
 
     // with an offset: the same relation to the word, at the shifted column
@@ -800,8 +823,7 @@ async fn diagnostics_follow_the_shifted_cells() {
     assert_eq!(underlined(&page), page.cells_of("plover"));
     let (x0, _) = page.area();
     assert_eq!(word.0, x0 + page.text_column("plover") - offset);
-    println!("{}", page.rows().join("\n"));
-    assert_eq!(ghost(&page, word, "birds are not allowed"), unshifted);
+    assert_ghost(&page, word, "birds are not allowed");
 
     // moving the cursor to a paragraph (the offset is 0): the word is past the edge, so
     // nothing is underlined, the table is not drawn shifted
@@ -812,7 +834,8 @@ async fn diagnostics_follow_the_shifted_cells() {
 }
 
 /// The diagnostic at the end of a row is drawn after the end of the row's text, where the
-/// row's end is on the screen once it's scrolled.
+/// row's end is on the screen once it's scrolled; a row that ends left of the offset (the
+/// delimiter row) has its message scrolled out of view, without a panic.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_end_of_line_diagnostic_follows_the_shifted_row() {
     let text = format!(
@@ -827,25 +850,45 @@ async fn the_end_of_line_diagnostic_follows_the_shifted_row() {
     .await;
     let start = page.char_of("heron");
     let line = page.line_of("heron");
-    let diagnostic = diagnostic(start, start + "heron".len(), line, "ok");
-    doc_mut!(page.session.app.editor).replace_diagnostics([diagnostic], &[], None);
+    let diagnostic_on_heron = diagnostic(start, start + "heron".len(), line, "ok");
+    let delimiter = page.char_of("|---|---|---|");
+    let diagnostic_on_delimiter = diagnostic(delimiter, delimiter + 4, line - 1, "short");
+    doc_mut!(page.session.app.editor).replace_diagnostics(
+        [diagnostic_on_delimiter, diagnostic_on_heron],
+        &[],
+        None,
+    );
     let (x0, width) = page.area();
     let end = page.lines()[line].chars().count();
-    assert!(end > width && end < width + 30, "the row is a little wider than the view");
+    assert!(
+        end > width && end < width + 30,
+        "the row is a little wider than the view"
+    );
 
     page.goto_line(line).await;
     page.keys("gl").await;
     let offset = page.offset();
-    assert!(offset > 0);
+    assert!(
+        offset > "|---|---|---|".len(),
+        "the delimiter row ends left of the view"
+    );
     // the end of the row is on the screen, the word is underlined on its shifted cells
     assert_eq!(underlined(&page), page.cells_of("heron"));
+    assert!(!page.on_screen("short"));
     // the message is on the row of the line, after the end of its text
     let row = page.row_of_line(line);
-    println!("{}", page.rows().join("\n"));
     let (column, message_row) = page.cell_of("ok");
     assert_eq!(message_row, row);
-    assert!(column > x0 + end - offset, "message at {column}, the row ends at {}", x0 + end - offset);
-    assert!(column <= x0 + end - offset + 3, "message at {column}, the row ends at {}", x0 + end - offset);
+    assert!(
+        column > x0 + end - offset,
+        "message at {column}, the row ends at {}",
+        x0 + end - offset
+    );
+    assert!(
+        column <= x0 + end - offset + 3,
+        "message at {column}, the row ends at {}",
+        x0 + end - offset
+    );
     page.close().await;
 }
 
@@ -993,11 +1036,14 @@ async fn the_cursor_column_is_the_screen_column_of_the_cursor() {
 
     for keys in ["gl", "20h", "gl"] {
         page.keys(keys).await;
-        let ((column, row), _) = page.cursor();
-        assert_eq!(page.cell(column, row).bg, COLUMN);
+        let ((column, _), _) = page.cursor();
+        // (the cursor's own cell has the selection's style on top)
         let cells = page.cells_with_bg(COLUMN);
         assert!(cells.len() > 5, "{cells:?}");
         assert!(cells.iter().all(|&(c, _)| c == column), "{cells:?}");
+        // down the paragraphs and the table alike
+        let paragraph = page.row_of_line(page.line_of("readable"));
+        assert!(cells.contains(&(column, paragraph)), "{cells:?}");
     }
     assert!(page.offset() > 0);
     page.close().await;
@@ -1005,7 +1051,8 @@ async fn the_cursor_column_is_the_screen_column_of_the_cursor() {
 
 // 10. Edits
 
-const LONE_ROW: &str = "| name | a very long description of what the name means and how it is used | x |";
+const LONE_ROW: &str =
+    "| name | a very long description of what the name means and how it is used | x |";
 
 /// Typing the delimiter row under a row makes a table of it, and the row stops wrapping; deleting
 /// it makes the row wrap again.
