@@ -22,6 +22,9 @@ pub mod parse;
 pub mod table;
 pub mod wrap;
 
+#[cfg(test)]
+mod tests;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1226,6 +1229,14 @@ pub fn help() -> KeyHelp {
                     ("] / [", "next / previous heading"),
                     ("t", "the outline: jump to a heading"),
                     ("/  n / N", "search the page, next / previous"),
+                ],
+            ),
+            (
+                "code blocks",
+                vec![
+                    ("h / l", "scroll the reading line's block sideways"),
+                    ("H / L", "half its width"),
+                    ("gh / gl", "its start / its end"),
                 ],
             ),
             (

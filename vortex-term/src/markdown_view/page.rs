@@ -533,29 +533,3 @@ fn truncate(text: &str, width: usize) -> String {
     out.push('>');
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The page of `source` at `width` as text, for the tests.
-    pub fn render(source: &str, width: usize) -> Vec<String> {
-        let theme = Theme::default();
-        let loader = vortex_core::config::default_lang_loader();
-        Page::new(source, width, &theme, &loader)
-            .lines
-            .iter()
-            .map(|line| line.text().trim_end().to_string())
-            .collect()
-    }
-
-    #[test]
-    #[ignore]
-    fn show() {
-        let source = std::fs::read_to_string(std::env::var("MD").unwrap()).unwrap();
-        let width = std::env::var("W").map_or(60, |w| w.parse().unwrap());
-        for line in render(&source, width) {
-            println!("|{line}");
-        }
-    }
-}
