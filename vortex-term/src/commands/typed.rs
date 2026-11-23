@@ -2879,9 +2879,9 @@ fn watch_stop(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
     if event != PromptEvent::Validate {
         return Ok(());
     }
-    match crate::watch::end(cx.editor) {
+    match crate::watch::stop(cx.editor) {
         Some(count) => cx.editor.set_status(crate::watch::ended_message(count)),
-        None => bail!("watch mode is off"),
+        None => bail!("no watch session to stop"),
     }
     Ok(())
 }
@@ -2894,7 +2894,7 @@ fn watch_clear(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-    let watching = cx.editor.watch.is_active();
+    let watching = cx.editor.watch.live().is_some();
     crate::watch::clear(cx.editor);
     cx.editor.set_status(if watching {
         "Watch ended and its changes forgotten"
@@ -4408,7 +4408,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "watch",
         aliases: &[],
-        doc: "Watch mode: follow the changes made to the working tree as they happen (an agent at work). Moving pauses following, n/N go through the changes, any other action ends it. Again to stop.",
+        doc: "Watch mode: follow the changes made to the working tree as they happen (an agent at work). Again (or Esc) leaves it and the session goes on recording; then it comes back to it where it was.",
         fun: watch,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4430,7 +4430,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "watch-stop",
         aliases: &[],
-        doc: "End watch mode. Its changes stay marked, n/N go through them, until :watch-clear.",
+        doc: "Stop the watch session for good. Its changes stay marked, n/N go through them, until :watch-clear.",
         fun: watch_stop,
         completer: CommandCompleter::none(),
         signature: Signature {

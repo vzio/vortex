@@ -183,24 +183,28 @@ pub struct Flash {
     pub start: Instant,
 }
 
-/// Where `n`/`N` go when they reach an end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Wrapped {
-    No,
-    /// Past the newest, to the oldest.
-    ToFirst,
-    /// Before the oldest, to the newest.
-    ToLast,
+/// Where `n`/`N` go from where you are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    /// To this hunk.
+    To(Target),
+    /// Nowhere: `n` from the newest hunk, which stays where it is (no wrapping around).
+    AtNewest,
+    /// Nowhere: `N` from the oldest hunk.
+    AtOldest,
 }
 
-/// A watch session: started by `:watch`, it watches while it is active; its changes stay after
-/// it ends, until the next watch or `:watch-clear`.
+/// A watch session: started by `:watch`, it watches the working tree until it is stopped
+/// (`:watch-stop`), whether watch mode is on or was left with `Esc` (then it records the changes
+/// without following them, and entering again resumes it). Its changes stay after it is stopped,
+/// until the next watch or `:watch-clear`.
 pub struct Session {
     /// Distinguishes the batches of the watcher of this session from a previous one's.
     pub id: u64,
-    /// Watch mode is on: the working tree is watched.
+    /// Watch mode is on: its keys and its bar, and changes are followed while `following`.
     pub active: bool,
     /// Changes are followed: opened, jumped to and flashed. Otherwise you are looking around.
+    /// Kept while watch mode is left, for when it is entered again.
     pub following: bool,
     pub baseline: Arc<Baseline>,
     files: HashMap<PathBuf, SessionFile>,
@@ -400,11 +404,11 @@ impl Session {
             .map(|hunk| hunk.seq)
     }
 
-    /// The hunk `n` (`forward`) or `N` goes to from the cursor at `line` of `path`: the next
-    /// (previous) one in the order they changed, around at the ends. From inside a hunk of the
-    /// session it goes on from that hunk, else from the one gone to last; without either, `n`
-    /// goes to the oldest and `N` to the newest.
-    pub fn step(&self, cursor: Option<(&Path, u32)>, forward: bool) -> Option<(Target, Wrapped)> {
+    /// Where `n` (`forward`) or `N` goes from the cursor at `line` of `path`: the next (previous)
+    /// hunk in the order they changed, stopping at the ends. From inside a hunk of the session it
+    /// goes on from that hunk, else from the one gone to last; without either, `n` goes to the
+    /// oldest and `N` to the newest. `None` when the session has no hunks.
+    pub fn step(&self, cursor: Option<(&Path, u32)>, forward: bool) -> Option<Step> {
         let hunks = self.hunks_in_order();
         let from = cursor
             .and_then(|(path, line)| self.hunk_at(path, line))
@@ -422,7 +426,7 @@ impl Session {
         };
         let Some(from) = from else {
             let target = if forward { first } else { last };
-            return Some((target.clone(), Wrapped::No));
+            return Some(Step::To(target.clone()));
         };
         let found = if forward {
             hunks.iter().find(|hunk| hunk.seq > from)
@@ -430,9 +434,9 @@ impl Session {
             hunks.iter().rev().find(|hunk| hunk.seq < from)
         };
         Some(match found {
-            Some(target) => (target.clone(), Wrapped::No),
-            None if forward => (first.clone(), Wrapped::ToFirst),
-            None => (last.clone(), Wrapped::ToLast),
+            Some(target) => Step::To(target.clone()),
+            None if forward => Step::AtNewest,
+            None => Step::AtOldest,
         })
     }
 
@@ -465,11 +469,28 @@ impl Session {
         self.following = false;
     }
 
-    /// Ends watch mode: stops watching and following; the changes stay.
-    pub fn end(&mut self) {
+    /// Leaves watch mode (`Esc`): the working tree is still watched and the changes recorded,
+    /// not followed; where you are and whether you were following stay for [`Session::resume`].
+    pub fn leave(&mut self) {
+        self.active = false;
+    }
+
+    /// Enters watch mode again, where it was left.
+    pub fn resume(&mut self) {
+        self.active = true;
+    }
+
+    /// Stops the session for good (`:watch-stop`): no more watching nor following; the changes
+    /// stay.
+    pub fn stop(&mut self) {
         self.active = false;
         self.following = false;
         self.watcher = None;
+    }
+
+    /// The working tree is watched: the session wasn't stopped.
+    pub fn is_live(&self) -> bool {
+        self.watcher.is_some()
     }
 
     /// The number of changes of the session: hunks of text files, and other files whole.
@@ -501,6 +522,11 @@ impl WatchState {
 
     pub fn is_active(&self) -> bool {
         self.session.as_ref().is_some_and(|session| session.active)
+    }
+
+    /// A session that wasn't stopped, watch mode on or not.
+    pub fn live(&mut self) -> Option<&mut Session> {
+        self.session.as_mut().filter(|session| session.is_live())
     }
 }
 
@@ -627,49 +653,87 @@ mod tests {
         assert_eq!(session.new_count(), 2);
 
         // from the hunk followed last, in the order they changed
-        let (target, wrapped) = session.step(None, true).unwrap();
-        assert_eq!((target.lines.start, wrapped), (8, Wrapped::No));
+        let target = to(session.step(None, true));
+        assert_eq!(target.lines.start, 8);
         assert!(!session.went_to(&target));
         assert_eq!(session.new_count(), 1);
-        let (target, _) = session.step(None, true).unwrap();
+        let target = to(session.step(None, true));
         assert_eq!(target.path, PathBuf::from("/repo/b"));
         assert!(session.went_to(&target));
         assert!(session.following);
         assert_eq!(session.new_count(), 0);
-        // on to an older one: reading, following pauses
-        let (target, wrapped) = session.step(None, true).unwrap();
-        assert_eq!(wrapped, Wrapped::ToFirst);
+        // at the newest, n goes nowhere
+        assert_eq!(session.step(None, true), Some(Step::AtNewest));
+        // back to an older one: reading, following pauses
+        let target = to(session.step(None, false));
+        assert!(!session.went_to(&target));
+        assert!(!session.following);
+    }
+
+    fn to(step: Option<Step>) -> Target {
+        match step {
+            Some(Step::To(target)) => target,
+            step => panic!("expected a hunk, got {step:?}"),
+        }
+    }
+
+    #[test]
+    fn n_goes_on_from_the_hunk_under_the_cursor_and_stops_at_the_ends() {
+        let mut session = Session::new(1, baseline());
+        session.apply(vec![update("/repo/a", vec![hunk(1..3, 1)], 1)]);
+        session.apply(vec![update("/repo/b", vec![hunk(4..5, 2)], 2)]);
+        let a = PathBuf::from("/repo/a");
+        assert_eq!(to(session.step(Some((&a, 2)), true)).lines.start, 4);
+        // no wrapping around: N from the oldest, n from the newest go nowhere
+        assert_eq!(session.step(Some((&a, 2)), false), Some(Step::AtOldest));
+        let b = PathBuf::from("/repo/b");
+        assert_eq!(session.step(Some((&b, 4)), true), Some(Step::AtNewest));
+        assert_eq!(to(session.step(Some((&b, 4)), false)).lines.start, 1);
+        // outside the hunks, nothing gone to yet: n to the oldest, N to the newest
+        assert_eq!(to(session.step(Some((&a, 9)), true)).lines.start, 1);
+        assert_eq!(to(session.step(Some((&a, 9)), false)).lines.start, 4);
+        // no hunks at all
+        assert_eq!(Session::new(2, baseline()).step(None, true), None);
+    }
+
+    #[test]
+    fn stopping_keeps_the_changes() {
+        let mut session = Session::new(1, baseline());
+        session.apply(vec![update("/repo/a", vec![hunk(1..3, 1)], 1)]);
+        session.stop();
+        assert!(!session.active && !session.following && !session.is_live());
+        let target = to(session.step(None, true));
+        // no following once stopped
         assert!(!session.went_to(&target));
         assert!(!session.following);
     }
 
     #[test]
-    fn n_goes_on_from_the_hunk_under_the_cursor_and_around_the_ends() {
+    fn leaving_keeps_following_and_the_place_for_resuming() {
         let mut session = Session::new(1, baseline());
-        session.apply(vec![update("/repo/a", vec![hunk(1..3, 1)], 1)]);
+        session.watcher = Some(Box::new(()));
+        let applied = session.apply(vec![update("/repo/a", vec![hunk(1..3, 1)], 1)]);
+        session.followed(&applied.to_follow[0]);
+        session.leave();
+        assert!(!session.active && session.following && session.is_live());
+        // changes while away are recorded, unseen
         session.apply(vec![update("/repo/b", vec![hunk(4..5, 2)], 2)]);
-        let a = PathBuf::from("/repo/a");
-        let (target, wrapped) = session.step(Some((&a, 2)), true).unwrap();
-        assert_eq!((target.lines.start, wrapped), (4, Wrapped::No));
-        let (target, wrapped) = session.step(Some((&a, 2)), false).unwrap();
-        assert_eq!((target.lines.start, wrapped), (4, Wrapped::ToLast));
-        let b = PathBuf::from("/repo/b");
-        let (target, wrapped) = session.step(Some((&b, 4)), true).unwrap();
-        assert_eq!((target.lines.start, wrapped), (1, Wrapped::ToFirst));
-        // outside the hunks, nothing gone to yet: n to the oldest, N to the newest
-        assert_eq!(session.step(Some((&a, 9)), true).unwrap().0.lines.start, 1);
-        assert_eq!(session.step(Some((&a, 9)), false).unwrap().0.lines.start, 4);
-    }
-
-    #[test]
-    fn ending_keeps_the_changes() {
-        let mut session = Session::new(1, baseline());
-        session.apply(vec![update("/repo/a", vec![hunk(1..3, 1)], 1)]);
-        session.end();
-        assert!(!session.active && !session.following);
-        let (target, _) = session.step(None, true).unwrap();
-        // no following once ended
+        assert_eq!(session.new_count(), 1);
+        // n/N while away move nothing of the mode's state
+        let target = to(session.step(None, true));
         assert!(!session.went_to(&target));
+        assert!(session.following);
+        session.resume();
+        assert!(session.active && session.following);
+        assert_eq!(
+            session.at.as_ref().map(|(path, _)| path),
+            Some(&PathBuf::from("/repo/b"))
+        );
+
+        // looking around is kept the same way
+        session.pause();
+        session.leave();
+        session.resume();
         assert!(!session.following);
     }
 }

@@ -44,8 +44,8 @@ pub fn enter(editor: &mut Editor) {
     if editor.debug.mode_on() {
         return;
     }
-    // one mode at a time: watch mode's changes stay, as when it ends
-    crate::watch::end(editor);
+    // one mode at a time: watch mode is left as with `Esc` (its session goes on recording)
+    crate::watch::leave_mode(editor);
     let session = bar::has_session(editor);
     editor.debug.mode = Some(DebugMode {
         viewing: !session,

@@ -754,6 +754,7 @@ async fn the_command_line_keeps_following_and_esc_leaves() {
     // Esc, in the text, leaves watch mode
     session.keys("<esc>").await;
     assert!(!session.watching());
+    assert!(session.app.editor.watch.live().is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -770,7 +771,7 @@ async fn a_typed_command_other_than_the_watch_commands_leaves_watch_mode() {
     assert_eq!(focus(&session.app), at("c.txt", 2));
     session.keys(":open other.txt<ret>").await;
     assert!(!session.watching());
-    assert!(session.app.editor.watch.session.is_some());
+    assert!(session.app.editor.watch.live().is_some());
     assert_eq!(focus(&session.app).0, "other.txt");
 }
 
@@ -784,16 +785,19 @@ async fn n_and_n_go_through_the_changes_in_the_order_they_happened() {
     let mut session = Session::new();
     session.three_changes().await;
 
-    // n from the newest wraps around to the oldest and looks
+    // n at the newest change stays there (no wrap around), following goes on
     session.keys("n").await;
-    assert_eq!(focus(&session.app), at("a.txt", 1));
-    assert_eq!(session.activity(), "wrapped around to the first change");
-    assert!(!session.following());
+    assert_eq!(focus(&session.app), at("c.txt", 7));
+    assert_eq!(session.activity(), "at the newest change");
+    assert!(session.following());
     assert!(session.watching());
     session.assert_quiet("after n");
-    // the newest changes are counted as new again? no: they were seen when followed
     assert_eq!(session.new_count(), 0);
 
+    // N goes back to the oldest, looking
+    session.keys("NN").await;
+    assert_eq!(focus(&session.app), at("a.txt", 1));
+    assert!(!session.following());
     session.keys("n").await;
     assert_eq!(focus(&session.app), at("b.txt", 4));
     assert!(!session.following());
@@ -811,8 +815,13 @@ async fn n_and_n_go_through_the_changes_in_the_order_they_happened() {
     assert!(!session.following());
     session.keys("N").await;
     assert_eq!(focus(&session.app), at("a.txt", 1));
-    // N from the oldest wraps to the newest, which follows again
+    // N at the oldest change stays there
     session.keys("N").await;
+    assert_eq!(focus(&session.app), at("a.txt", 1));
+    assert_eq!(session.activity(), "at the oldest change");
+    assert!(!session.following());
+    session.assert_quiet("after N at the oldest change");
+    session.keys("nn").await;
     assert_eq!(focus(&session.app), at("c.txt", 7));
     assert!(session.following());
 
@@ -854,8 +863,8 @@ async fn n_from_the_middle_of_a_file_goes_to_the_next_change_not_the_next_line()
 // 8. Keys that edit or open something are held, Esc leaves, the changes stay
 
 /// Three changes, then `keys`, which would edit or open something: nothing happened, watch
-/// mode is on and the bar says that `Esc` leaves it first. Then `Esc`: watch mode is over, the
-/// changes are still there.
+/// mode is on and the bar says that `Esc` leaves it first. Then `Esc`: watch mode is left, the
+/// session and its changes are still there.
 async fn held_then_left(keys: &str) -> Session {
     let mut session = Session::new();
     session.three_changes().await;
@@ -875,7 +884,7 @@ async fn held(session: &mut Session, keys: &str) {
         session.following(),
     );
     session.keys(keys).await;
-    assert!(session.watching(), "{keys} ended watch mode");
+    assert!(session.watching(), "{keys} left watch mode");
     assert_eq!(session.following(), following, "{keys} changed following");
     assert_eq!(session.text(), text, "{keys} changed the text");
     assert_eq!(session.selection(), cursor);
@@ -890,18 +899,19 @@ async fn held(session: &mut Session, keys: &str) {
     session.assert_quiet(&format!("after {keys}"));
 }
 
-/// Three changes, then `keys`: watch mode is over, the changes are still there.
-async fn ended_by(keys: &str) -> Session {
+/// Three changes, then `keys`: watch mode is left, the session and its changes are still there.
+async fn leaving(keys: &str) -> Session {
     let mut session = Session::new();
     session.three_changes().await;
     session.keys(keys).await;
-    assert!(!session.watching(), "{keys} didn't end watch mode");
+    assert!(!session.watching(), "{keys} didn't leave watch mode");
     kept(session)
 }
 
-/// Watch mode is over: its changes and gutter markers stay.
-fn kept(session: Session) -> Session {
+/// Watch mode is left: the session stays live, its changes and gutter markers stay.
+fn kept(mut session: Session) -> Session {
     assert!(session.app.editor.watch.session.is_some());
+    assert!(session.app.editor.watch.live().is_some());
     assert_eq!(session_of(&session.app).hunks_in_order().len(), 3);
     assert!(!session.on_screen("WATCH"));
     // the gutter markers stay
@@ -914,23 +924,27 @@ fn kept(session: Session) -> Session {
     session
 }
 
-/// From where watch mode ended, n and N go through the session; `:watch-clear` forgets it.
-async fn changes_stay_after_the_end(mut session: Session) {
-    // (the cursor isn't in a hunk or is in the newest: n goes around to the oldest)
+/// From where watch mode was left, n and N go through the session; `:watch-clear` forgets it.
+async fn changes_stay_after_leaving(mut session: Session) {
+    // the newest change is where it was left: n stays, and says nothing
+    let before = focus(&session.app);
     session.keys("n").await;
+    assert_eq!(focus(&session.app), before);
+    session.assert_quiet("after n at the newest change");
+    session.keys("NN").await;
     assert_eq!(focus(&session.app), at("a.txt", 1));
-    // watch mode is over: it doesn't follow again
-    assert!(!session.following());
+    // watch mode is off: it doesn't follow again
     assert!(!session.watching());
     session.keys("n").await;
     assert_eq!(focus(&session.app), at("b.txt", 4));
     session.keys("n").await;
     assert_eq!(focus(&session.app), at("c.txt", 7));
-    assert!(!session.following());
-    // and back: N from the oldest wraps to the newest, with its message
-    session.keys("NN").await;
+    assert!(!session.watching());
+    // and back: N at the oldest change stays there, without a message
+    session.keys("NNN").await;
     assert_eq!(focus(&session.app), at("a.txt", 1));
-    session.keys("N").await;
+    session.assert_quiet("after N at the oldest change");
+    session.keys("nn").await;
     assert_eq!(focus(&session.app), at("c.txt", 7));
 
     // the picker still lists them
@@ -961,19 +975,19 @@ async fn typing_text_is_held_until_esc_leaves_watch_mode() {
         return;
     };
     let session = held_then_left("i").await;
-    changes_stay_after_the_end(session).await;
+    changes_stay_after_leaving(session).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn opening_a_file_with_a_typed_command_ends_watch_mode_but_keeps_the_changes() {
+async fn opening_a_file_with_a_typed_command_leaves_watch_mode_but_the_session_stays() {
     let Some(_) =
-        enter("opening_a_file_with_a_typed_command_ends_watch_mode_but_keeps_the_changes")
+        enter("opening_a_file_with_a_typed_command_leaves_watch_mode_but_the_session_stays")
     else {
         return;
     };
-    let session = ended_by(":open other.txt<ret>").await;
+    let session = leaving(":open other.txt<ret>").await;
     assert_eq!(focus(&session.app).0, "other.txt");
-    changes_stay_after_the_end(session).await;
+    changes_stay_after_leaving(session).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -982,7 +996,7 @@ async fn a_picker_is_held_until_esc_leaves_watch_mode() {
         return;
     };
     let session = held_then_left("<space>f").await;
-    changes_stay_after_the_end(session).await;
+    changes_stay_after_leaving(session).await;
 }
 
 /// Edit and open keys, in both states: held, and `Esc` is the way out.
@@ -1002,6 +1016,7 @@ async fn edit_keys_are_held(looking: bool) {
     assert_eq!(session.following(), !looking);
     session.keys("<esc>").await;
     assert!(!session.watching());
+    assert!(session.app.editor.watch.live().is_some());
     // now the keys are the editor's
     session.keys("ix<esc>").await;
     assert!(session.text().contains('x'));
@@ -1024,8 +1039,9 @@ async fn edit_keys_are_held_while_looking() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn esc_leaves_watch_mode_and_keeps_the_changes_and_says_nothing() {
-    let Some(_) = enter("esc_leaves_watch_mode_and_keeps_the_changes_and_says_nothing") else {
+async fn esc_leaves_watch_mode_and_the_session_goes_on_recording_and_says_nothing() {
+    let Some(_) = enter("esc_leaves_watch_mode_and_the_session_goes_on_recording_and_says_nothing")
+    else {
         return;
     };
     let mut session = Session::new();
@@ -1037,12 +1053,19 @@ async fn esc_leaves_watch_mode_and_keeps_the_changes_and_says_nothing() {
     assert_eq!(session_of(&session.app).hunks_in_order().len(), 3);
     assert!(!session.on_screen("WATCH"));
     assert!(!session.on_screen(" v  look"));
-    // the files are no longer watched
+    // the files are still watched: a change is recorded, but not followed
+    assert!(session.app.editor.watch.live().is_some());
     let before = focus(&session.app);
     edit("other.txt", 3, "o3 agent");
-    session.run_for(Duration::from_millis(800)).await;
-    assert!(file(&session.app, "other.txt").is_none());
+    session
+        .wait_watch("other.txt in the session", |app| {
+            file(app, "other.txt").is_some()
+        })
+        .await;
+    session.run_for(Duration::from_millis(300)).await;
     assert_eq!(focus(&session.app), before);
+    assert_eq!(session_of(&session.app).hunks_in_order().len(), 4);
+    session.assert_quiet("after a change out of watch mode");
     // the keys of the editor are back, `v` is select mode again
     session.keys("v").await;
     assert_eq!(session.app.editor.mode(), Mode::Select);
@@ -1050,14 +1073,15 @@ async fn esc_leaves_watch_mode_and_keeps_the_changes_and_says_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn watch_stop_ends_watch_mode_and_the_files_are_no_longer_watched() {
-    let Some(_) = enter("watch_stop_ends_watch_mode_and_the_files_are_no_longer_watched") else {
+async fn watch_stop_stops_the_session_and_the_files_are_no_longer_watched() {
+    let Some(_) = enter("watch_stop_stops_the_session_and_the_files_are_no_longer_watched") else {
         return;
     };
     let mut session = Session::new();
     session.three_changes().await;
     session.keys(":watch-stop<ret>").await;
     assert!(!session.watching());
+    assert!(!session_of(&session.app).is_live());
     assert_eq!(status(&session.app), "Watch ended: 3 changes");
     let before = focus(&session.app);
     edit("other.txt", 3, "o3 agent");
@@ -1067,8 +1091,191 @@ async fn watch_stop_ends_watch_mode_and_the_files_are_no_longer_watched() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn after_a_search_made_once_watch_mode_ended_n_repeats_the_search() {
-    let Some(_) = enter("after_a_search_made_once_watch_mode_ended_n_repeats_the_search") else {
+async fn n_and_n_stop_at_the_newest_and_the_oldest_change() {
+    let Some(_) = enter("n_and_n_stop_at_the_newest_and_the_oldest_change") else {
+        return;
+    };
+    let mut session = Session::new();
+    session.three_changes().await;
+    session.keys("n").await;
+    assert_eq!(focus(&session.app), at("c.txt", 7));
+    assert_eq!(session.activity(), "at the newest change");
+    session.wait_for_screen_text("at the newest change").await;
+    assert!(session.following());
+    session.assert_quiet("after n at the newest change");
+
+    session.keys("NN").await;
+    assert_eq!(focus(&session.app), at("a.txt", 1));
+    session.keys("N").await;
+    assert_eq!(focus(&session.app), at("a.txt", 1));
+    assert_eq!(session.activity(), "at the oldest change");
+    session.wait_for_screen_text("at the oldest change").await;
+    assert!(!session.following());
+    session.assert_quiet("after N at the oldest change");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn esc_then_watch_resumes_in_the_same_place_following() {
+    let Some(_) = enter("esc_then_watch_resumes_in_the_same_place_following") else {
+        return;
+    };
+    let mut session = Session::new();
+    session.three_changes().await;
+    session.keys("N").await;
+    session.keys("n").await;
+    assert_eq!(focus(&session.app), at("c.txt", 7));
+    assert!(session.following());
+    let seen_at = session_of(&session.app).at.clone();
+
+    session.keys("<esc>").await;
+    assert!(!session.watching());
+    session.keys(":watch<ret>").await;
+    assert!(session.watching());
+    assert!(session.following());
+    assert_eq!(focus(&session.app), at("c.txt", 7));
+    assert_eq!(session_of(&session.app).at, seen_at);
+    assert_eq!(session.activity(), "back: nothing changed meanwhile");
+    assert_eq!(session_of(&session.app).hunks_in_order().len(), 3);
+    session.assert_quiet("after resuming");
+    session.wait_for_screen_text("WATCH ● following").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn esc_then_watch_resumes_looking_around_where_you_were() {
+    let Some(_) = enter("esc_then_watch_resumes_looking_around_where_you_were") else {
+        return;
+    };
+    let mut session = Session::new();
+    session.three_changes().await;
+    session.keys("v").await;
+    assert!(!session.following());
+    session.keys("N").await;
+    assert_eq!(focus(&session.app), at("b.txt", 4));
+    assert!(!session.following());
+    let seen_at = session_of(&session.app).at.clone();
+
+    session.keys("<esc>").await;
+    assert!(!session.watching());
+    assert!(!session.following());
+    session.keys(":watch<ret>").await;
+    assert!(session.watching());
+    assert!(!session.following());
+    assert_eq!(focus(&session.app), at("b.txt", 4));
+    assert_eq!(session_of(&session.app).at, seen_at);
+    session.wait_for_screen_text("WATCH ◌ looking").await;
+    session.assert_quiet("after resuming");
+    // n goes on from where it was
+    session.keys("n").await;
+    assert_eq!(focus(&session.app), at("c.txt", 7));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changes_made_out_of_watch_mode_are_recorded_not_followed_and_counted_on_return() {
+    let Some(_) =
+        enter("changes_made_out_of_watch_mode_are_recorded_not_followed_and_counted_on_return")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.three_changes().await;
+    session.keys("<esc>").await;
+    assert!(!session.watching());
+    let before = focus(&session.app);
+
+    // a.txt is open and clean: it is reloaded and gets its second marker
+    edit("a.txt", 6, "a6 agent");
+    session
+        .wait_watch("the new hunk of a.txt", |app| {
+            file(app, "a.txt").is_some_and(|file| file.hunks.len() == 2)
+        })
+        .await;
+    session.run_for(Duration::from_millis(300)).await;
+    assert_eq!(hunks(&session.app, "a.txt"), [(1, 2), (5, 6)]);
+    assert_eq!(session_of(&session.app).hunks_in_order().len(), 4);
+    // nothing was followed
+    assert_eq!(focus(&session.app), before);
+    assert!(!session.watching());
+    assert!(!session.on_screen("WATCH"));
+    session.assert_quiet("after a change out of watch mode");
+    let doc = session
+        .app
+        .editor
+        .document_by_path(cwd().join("a.txt"))
+        .expect("a.txt is open");
+    assert_eq!(doc.watch_diff().expect("a watch gutter").load().len(), 2);
+
+    // back: the change is new, and nothing moves
+    session.keys(":watch<ret>").await;
+    assert!(session.watching());
+    assert_eq!(session.new_count(), 1);
+    assert_eq!(session.activity(), "back: 1 new change meanwhile");
+    assert_eq!(focus(&session.app), before);
+    session.wait_for_screen_text("1 new").await;
+    // n reaches it, and it is seen
+    session.keys("n").await;
+    assert_eq!(focus(&session.app), at("a.txt", 5));
+    assert_eq!(session.new_count(), 0);
+    assert!(session.following());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_stop_after_esc_stops_the_session_and_watch_starts_a_fresh_one() {
+    let Some(_) = enter("watch_stop_after_esc_stops_the_session_and_watch_starts_a_fresh_one")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.three_changes().await;
+    session.keys("<esc>").await;
+    assert!(session.app.editor.watch.live().is_some());
+    session.keys(":watch-stop<ret>").await;
+    assert!(!session.watching());
+    assert!(!session_of(&session.app).is_live());
+    assert!(session.app.editor.watch.live().is_none());
+    assert_eq!(status(&session.app), "Watch ended: 3 changes");
+    // the changes stay until the next :watch
+    assert_eq!(session_of(&session.app).hunks_in_order().len(), 3);
+    // nothing is recorded any more
+    edit("other.txt", 3, "o3 agent");
+    session.run_for(Duration::from_millis(800)).await;
+    assert!(file(&session.app, "other.txt").is_none());
+
+    session.keys(":watch<ret>").await;
+    assert!(session.watching());
+    assert!(session_of(&session.app).is_live());
+    assert!(session_of(&session.app).hunks_in_order().is_empty());
+    assert!(file(&session.app, "a.txt").is_none());
+    assert!(session.following());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn entering_debug_mode_leaves_watch_mode_with_the_session_live_and_watch_comes_back() {
+    let Some(_) =
+        enter("entering_debug_mode_leaves_watch_mode_with_the_session_live_and_watch_comes_back")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.three_changes().await;
+    let before = focus(&session.app);
+    session.keys(":debug-mode<ret>").await;
+    assert!(session.app.editor.debug.mode_on());
+    assert!(!session.watching());
+    assert!(session.app.editor.watch.live().is_some());
+    assert_eq!(session_of(&session.app).hunks_in_order().len(), 3);
+
+    session.keys(":watch<ret>").await;
+    assert!(session.watching());
+    assert!(!session.app.editor.debug.mode_on());
+    assert!(session.following());
+    assert_eq!(focus(&session.app), before);
+    assert_eq!(session.activity(), "back: nothing changed meanwhile");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn after_a_search_made_once_the_session_was_stopped_n_repeats_the_search() {
+    let Some(_) = enter("after_a_search_made_once_the_session_was_stopped_n_repeats_the_search")
+    else {
         return;
     };
     let mut session = Session::new();
@@ -1098,14 +1305,16 @@ async fn while_watching_a_search_does_not_take_n() {
     let mut session = Session::new();
     session.start_watch().await;
     session.change_and_follow("a.txt", 4, "a4 agent").await;
+    std::thread::sleep(MTIME_GAP);
+    session.change_and_follow("a.txt", 8, "a8 agent").await;
     // looking around: the search moves the cursor
     session.keys("v/a<ret>").await;
     assert!(!session.following());
     assert!(session.watching());
-    // n is still the session's: the only change is the hunk at line 4
-    session.keys("n").await;
+    // N is still the session's: the change before the newest, at line 4
+    session.keys("N").await;
     assert_eq!(focus(&session.app), at("a.txt", 3));
-    assert!(session.following());
+    assert!(!session.following());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1145,7 +1354,7 @@ async fn a_buffer_with_unsaved_edits_is_never_overwritten_nor_followed() {
         .unwrap()
         .is_modified());
     assert_eq!(focus(&session.app).0, "other.txt");
-    // (watch mode starts after the edit: typing ends it)
+    // (watch mode starts after the edit: typing leaves it)
     session.start_watch().await;
 
     edit("a.txt", 6, "a6 agent");
@@ -1342,11 +1551,12 @@ async fn clicking_a_badge_runs_its_command() {
     assert_eq!(focus(&session.app), at("c.txt", 7));
 
     // the key of a badge works as well as its label
-    session.click_on(" n  next", 1).await;
-    assert_eq!(focus(&session.app), at("a.txt", 1));
+    session.click_on(" N  previous", 1).await;
+    assert_eq!(focus(&session.app), at("b.txt", 4));
     assert!(!session.following());
-    session.click_on(" N  previous", 6).await;
+    session.click_on(" n  next", 5).await;
     assert_eq!(focus(&session.app), at("c.txt", 7));
+    assert!(session.following());
 
     // leave
     session.click_on(" Esc  leave", 7).await;
@@ -1544,32 +1754,45 @@ async fn watch_starts_promptly_with_a_remote_that_cannot_be_reached() {
 // 13. Commands
 
 #[tokio::test(flavor = "multi_thread")]
-async fn watch_twice_toggles_and_watch_stop_says_when_it_is_not_watching() {
-    let Some(_) = enter("watch_twice_toggles_and_watch_stop_says_when_it_is_not_watching") else {
+async fn watch_twice_leaves_and_resumes_and_watch_stop_says_when_there_is_nothing_to_stop() {
+    let Some(_) =
+        enter("watch_twice_leaves_and_resumes_and_watch_stop_says_when_there_is_nothing_to_stop")
+    else {
         return;
     };
     let mut session = Session::new();
     session.keys(":watch-stop<ret>").await;
     assert!(
-        is_error(&session.app).is_some_and(|error| error.ends_with("watch mode is off")),
+        is_error(&session.app).is_some_and(|error| error.ends_with("no watch session to stop")),
         "{:?}",
         is_error(&session.app)
     );
     session.start_watch().await;
     session.change_and_follow("a.txt", 4, "a4 agent").await;
+    // :watch again leaves watch mode, and says nothing
     session.keys(":watch<ret>").await;
     assert!(!session.watching());
+    assert!(session.app.editor.watch.live().is_some());
+    assert_eq!(status(&session.app), "");
+    // and once more resumes the same session
+    session.keys(":watch<ret>").await;
+    assert!(session.watching());
+    assert_eq!(hunks(&session.app, "a.txt"), [(3, 4)]);
+    assert_eq!(status(&session.app), "");
+    // :watch-stop stops it for good
+    session.keys(":watch-stop<ret>").await;
+    assert!(!session.watching());
     assert_eq!(status(&session.app), "Watch ended: 1 change");
-    assert!(session.app.editor.watch.session.is_some());
     session.keys(":watch-stop<ret>").await;
     assert!(
-        is_error(&session.app).is_some_and(|error| error.ends_with("watch mode is off")),
+        is_error(&session.app).is_some_and(|error| error.ends_with("no watch session to stop")),
         "{:?}",
         is_error(&session.app)
     );
-    // :watch again starts a session
+    // :watch again starts a fresh session
     session.keys(":watch<ret>").await;
     assert!(session.watching());
+    assert!(session_of(&session.app).is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1688,7 +1911,7 @@ async fn following_and_n_record_no_history_jumps() {
     assert_eq!(history_len(&session.app), 0);
 
     // nor are n and N through the session's changes, across files
-    session.keys("n").await;
+    session.keys("NN").await;
     assert_eq!(focus(&session.app), at("a.txt", 1));
     session.keys("nN").await;
     assert_eq!(focus(&session.app), at("a.txt", 1));
@@ -1701,7 +1924,7 @@ async fn following_and_n_record_no_history_jumps() {
     assert!(!session.watching());
     assert_eq!(focus(&session.app), at("a.txt", 1));
 
-    // n after the end still goes through the session's changes, without recording either
+    // n after leaving still goes through the session's changes, without recording either
     session.keys("n").await;
     assert_eq!(focus(&session.app), at("b.txt", 4));
     assert_eq!(history_len(&session.app), 0);
@@ -1734,7 +1957,7 @@ async fn ga_is_held_until_esc_leaves_watch_mode() {
         return;
     };
     let session = held_then_left("ga").await;
-    changes_stay_after_the_end(session).await;
+    changes_stay_after_leaving(session).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1743,7 +1966,7 @@ async fn going_round_the_bookmarks_is_held_until_esc_leaves_watch_mode() {
         return;
     };
     let session = held_then_left("<C-i>").await;
-    changes_stay_after_the_end(session).await;
+    changes_stay_after_leaving(session).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1752,5 +1975,5 @@ async fn the_bookmark_picker_is_held_until_esc_leaves_watch_mode() {
         return;
     };
     let session = held_then_left("<space>j").await;
-    changes_stay_after_the_end(session).await;
+    changes_stay_after_leaving(session).await;
 }
