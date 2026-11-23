@@ -93,6 +93,7 @@ git blame FILE
 - [`x` on an empty line](#x-on-an-empty-line)
 - [Move lines](#move-lines)
 - [Soft wrap for Markdown](#soft-wrap-for-markdown)
+- [Markdown render mode](#markdown-render-mode)
 - [`gw` with case](#gw-with-case)
 - [Yank `file:lines`](#yank-filelines)
 - [Terminal panel](#terminal-panel)
@@ -135,6 +136,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | `gw` with case | `label_index` and `label_target` in `vortex-term/src/commands.rs` (`jump_to_label`), `vortex-term/tests/test/goto_word.rs` |
 | Yank `file:lines` | `vortex-term/src/yank_place.rs` (the places and the clipboard); the commands in `vortex-term/src/commands.rs`, `Space :` in `keymap/default.rs`; `C-y` in the lists of changes (`commands/changes.rs`), the line history (`commands/git_log.rs`, `LineRow::places` in `commands/line_history.rs`), the bookmark and history pickers (`vortex-term/src/history.rs`) and the file tree (`ui/explorer.rs`); tests in `vortex-term/tests/test/yank_place.rs` |
 | Soft wrap for Markdown | the markdown entry of `languages.toml`, `vortex-term/tests/test/soft_wrap.rs` |
+| Markdown render mode | `vortex-term/src/markdown_view.rs` (the view: when it is up, the reading line, the keys and the commands it takes over, links, search, the outline, code blocks scrolled sideways, going back to the source, the drawing), `vortex-term/src/markdown_view/` (`parse.rs` Markdown to styled blocks, `page.rs` the layout of the page and its headings, links and code blocks, `wrap.rs` wrapping styled text, `table.rs` the tables' columns and cells, `tests.rs` and `snapshots/` the rendering tests), `vortex-term/tests/test/markdown_view.rs` |
 | Terminal panel | `vortex-terminal/` (the shell: pty, emulator, OSC 133, bash/zsh integration), `vortex-view/src/terminal.rs` (panel state, `[editor.terminal]`), `vortex-term/src/terminal/` (drawing, focus, input encoding, the `vx` shim), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
 | API browser (in progress) | `vortex-term/src/api/` (`mod.rs` the browser: the tree, its tasks and their cancellation; `load.rs` the providers; `node.rs` the nodes; `temp.rs` temporary documents; `tags.rs` the tree-sitter skeleton; `picker.rs` `:api-browse`), `Client::cancellable_call` and `Client::set_config_overlay` in `vortex-lsp/src/client.rs`, `HiddenDocuments` in `vortex-lsp/src/lib.rs`, `vortex-term/tests/fake_lsp/main.rs` (a scripted fake language server), `vortex-term/tests/test/fake_lsp.rs`, `vortex-term/tests/test/api_browser.rs`, `vortex-term/tests/test/api_report.rs` (the measurements against real servers) |
@@ -357,6 +359,18 @@ The dashboard's startup changes core files: `dashboard` is a `DashboardStartup` 
 The command palette's recent commands change core files: `Editor::recent_commands` and
 `remember_command` (`vortex-view/src/editor.rs`), called by `command_palette` (`commands.rs`) and
 `execute_command` (`typed.rs`).
+
+The Markdown render mode changes core files: the `markdown`, `markdown_positions` and
+`markdown_focus` fields of `EditorView`, its keys before the hex view's, the commands of the keymap
+it takes over (`handle_keymap_event`, whose `execute_command` now takes the context), the mouse,
+its drawing after the dashboard's and no cursor, in `ui/editor.rs`; `ScreenKind::Markdown` and the
+cover rule of `Editor::place` (normal mode, a modified buffer allowed) in `vortex-view/src/history.rs`,
+and showing it again and leaving it for its own text in `vortex-term/src/history.rs`;
+`markdown-view` (`MarkdownViewStartup`) and `markdown-width` in `vortex-view/src/editor.rs`; a file
+named on the command line opening rendered in `Application::new`; the file tree's `open_selected`
+(`ui/explorer.rs`); `markdown_view` in `commands.rs` and `V` in `keymap/default.rs`;
+`:markdown-view` in `typed.rs`; `ui::markdown` made public for `highlighted_code_block`; the
+Markdown scopes and `ui.markdown.*` in `theme.toml` and `matrix_theme.toml`.
 
 To build: `cargo install --path vortex-term --locked`.
 
@@ -1473,6 +1487,120 @@ soft-wrap = { enable = false }
 ```
 
 Tested in `vortex-term/tests/test/soft_wrap.rs`.
+
+## Markdown render mode
+
+Markdown is fine for editing and poor for reading: long prose, tables that break when wrapped,
+markers everywhere. The render mode shows a Markdown buffer as a rendered, read-only page, like a
+README on GitHub, one key away from its source. Browsing shows the page; editing is one key away.
+
+```
+ V              the page, or back to the source (also :markdown-view)
+```
+
+### What it renders
+
+CommonMark and GitHub's extensions, with `pulldown-cmark`:
+
+- **Headings** in the theme's style for their level, levels 1 to 3 on a band across the page; the
+  `#` markers hidden.
+- **Emphasis, strong, strikethrough, inline code**, their markers hidden.
+- **Paragraphs** wrapped to the reading width.
+- **Lists**, nested, with bullets (`•`, `◦`, `▪` by depth) or right-aligned numbers and hanging
+  indents; task lists as `☐` and `☑`. A loose list keeps a blank line between its items.
+- **Block quotes** behind a bar (`▎`); GitHub's alerts (`> [!NOTE]`...) with their name on the first
+  line. **Rules** as a line across the page.
+- **Code blocks** on their own background, highlighted by their language (tree-sitter, as in hover
+  popups), never wrapped. A block whose lines are too long for the page scrolls sideways on its own,
+  like GitHub's: a cut line shows `>` in the block's last cell, and `<` on the left once it is
+  scrolled.
+- **Tables** with box-drawing borders, aligned columns (`:---`, `:---:`, `---:`) and a bold header.
+  When the table is wider than the page, each cell wraps inside its own column, so a table stays a
+  table at any width: each column first gets its widest word (or all its text, if shorter), and
+  what is left goes to the columns in proportion to what they still lack; when even the widest words
+  don't fit, words are cut. Rows of several lines are separated by a rule.
+- **Links** as styled text with their address dimmed after it in parentheses; none for an autolink
+  (already an address) or a link to a heading of the page.
+- **Footnotes** as `[1]` where they are referenced, numbered in the order of the references, and
+  listed at the end of the page under a short rule.
+- What a terminal can't show stays readable, dimmed: images as `[image: alt]`, HTML as it is, math
+  (`$x$`, `$$...$$`) as code, diagrams (```` ```mermaid ````) as their code blocks, front matter as a
+  YAML block.
+
+**The reading width**: the window less a cell on each side, capped at `markdown-width` (100 by
+default; `0` for no cap) and centered on wider windows.
+
+### Keys
+
+The page has a **reading line**, highlighted (and marked `▏` in the margin), which moving, headings,
+search and links move: it is the line edit keys and `Enter` act on, and where `V` lands in the
+source.
+
+```
+ j  k           the reading line down, up (the page follows)
+ C-d  C-u       half a page; C-f  C-b a page
+ gg  ge         the top, the end
+ ]  [           the next, previous heading, at the top of the screen
+ t              the outline: a picker of the headings
+ /  n  N        search the page's text (a regex, case-insensitive unless it has capitals)
+ Tab  S-Tab     the next, previous link (selected)
+ Enter          follows the selected link, or the reading line's first
+ h  l           scroll the reading line's code block sideways (a count goes further)
+ H  L           by half its width; gh  gl to its start, its end
+ ?              the keys
+ V  Esc         back to the source
+```
+
+- **Links**: a local file opens (a Markdown file rendered, at its `#heading` if the link has one;
+  another file in the editor, at its `#L12` line); `#heading` jumps to that heading (anchors as
+  GitHub makes them); a footnote's `[1]` jumps to the footnote, and the footnote's own `[1]` back.
+  A web link (any address with a scheme but `file:`) is **yanked to the clipboard**, never opened:
+  `yanked https://...` in the status line.
+- **Back to the source** (`V`, `Esc`): the cursor on the source line of the reading line, and the
+  source's view starting at the source line of the page's top line. `V` from the source opens the
+  page at the cursor's line, the page's top at the view's top.
+- **Edit keys switch to editing at once**, like GitHub's pencil but instant: any other key goes to
+  the source with its cursor put on the reading line's source line (on its first character that isn't
+  a space), and does what it does there. `i` inserts there, `o` opens a line below it, `c` changes
+  its first character, `x` then `d` delete it; the page vanishes as soon as the buffer is edited or
+  normal mode is left. `:`, `space` and the other menus work as usual.
+- **Each code block remembers how far it is scrolled** while the page is up; going to the source and
+  back starts at 0 again. Nothing is saved.
+- **History** (`ga`) treats the page like the other screens: opening it with `V` is a jump, `ga`
+  from it goes back, and a link followed to another file comes back to the page with `ga`.
+- The mouse: the wheel scrolls the page (sideways over a code block that scrolls), a click puts the
+  reading line there and selects the link under it.
+
+### When it opens rendered
+
+`markdown-view` under `[editor]`:
+
+- `"browse"` (the default): a Markdown file opened from the file tree (`space e`, `space E`), named
+  on the command line (`vx README.md`, any path) or followed from a link in the render mode opens
+  rendered; anywhere else (the file picker, `:open`, a buffer already open, search results, the
+  fork's pickers) it opens as text.
+- `"always"`: whenever the focus comes to a Markdown buffer (opened, switched to, its split focused).
+- `"never"`: never by itself. `V` and `:markdown-view` work with any setting.
+
+"Markdown" is the language of the buffer (`markdown` in `languages.toml`), not the file's extension.
+
+```toml
+[editor]
+markdown-view = "browse"   # "always", "never"
+markdown-width = 100       # 0: the window's width
+```
+
+### Limitations
+
+- One page at a time: it is drawn over the whole editor area (all the splits), for the focused
+  view's buffer.
+- No images, no HTML layout, no math typesetting: what a terminal can't show stays as text.
+- Search matches whole lines of the page's text: a match across a line break isn't found. Lines of
+  a table are searched as drawn (with their borders).
+- Links are followed by line: `Enter` on a line with several links takes the first unless `Tab`
+  selected another. Following a link to a folder is an error.
+- The page is laid out again on each change of the buffer, the width or the theme; a very long
+  document takes a moment then (the parser is fast, the code blocks' highlighting less so).
 
 ## `gw` with case
 

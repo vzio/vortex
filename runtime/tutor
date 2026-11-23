@@ -81,7 +81,7 @@
   :new           a new empty buffer
 
  Try it: :o README.md (or any file), then ga twice: ga goes back
- to where you came from, and back again (section 5).
+ to where you came from, and back again (section 6).
 
 
 
@@ -140,7 +140,38 @@
 
 
 =================================================================
-=               5 HISTORY AND BOOKMARKS (FORK)                  =
+=                5 READING MARKDOWN (FORK)                      =
+=================================================================
+
+ A Markdown file opened from the file tree or the command line
+ (vx README.md) opens rendered, as a read-only page: headings,
+ lists, tables, code blocks, links. Elsewhere it opens as text.
+
+  V              the rendered page, or back to the source
+  :markdown-view the same
+
+ On the page:
+
+  j  k           move the reading line (the highlighted one)
+  ]  [           next or previous heading
+  t              the outline: jump to a heading
+  /  n  N        search the page
+  Tab  Enter     select a link, follow it: a file opens, a
+                 heading is jumped to, a web link is yanked
+  h  l           scroll a code block sideways (H L: by half)
+  ?              list the keys
+
+ Edit keys switch to the source at the reading line: i, a, o,
+ c... do there what they do in normal mode. V or Esc go back to
+ the source at the same place.
+
+ Set markdown-view = "always" or "never" under [editor] to
+ change when Markdown opens rendered.
+
+
+
+=================================================================
+=               6 HISTORY AND BOOKMARKS (FORK)                  =
 =================================================================
 
  History is automatic: each teleport remembers where it left.
@@ -193,7 +224,7 @@
 
 
 =================================================================
-=                       6 GOING PLACES                          =
+=                       7 GOING PLACES                          =
 =================================================================
 
   12G  or  :12   line 12
@@ -225,7 +256,7 @@
 
 
 =================================================================
-=                     7 SCROLLING THE VIEW                      =
+=                     8 SCROLLING THE VIEW                      =
 =================================================================
 
   C-d  C-u       half a page down and up, with the cursor
@@ -244,7 +275,7 @@
 
 
 =================================================================
-=                          8 SPLITS                             =
+=                          9 SPLITS                             =
 =================================================================
 
  The screen can show several buffers, or one buffer twice. C-w
@@ -270,7 +301,7 @@
 
 
 =================================================================
-=                   9 THE SYSTEM CLIPBOARD                      =
+=                   10 THE SYSTEM CLIPBOARD                     =
 =================================================================
 
  y and p use Vortex's own register. Space puts the system
@@ -298,7 +329,7 @@
 
 
 =================================================================
-=                     10 LANGUAGE SERVERS                       =
+=                     11 LANGUAGE SERVERS                       =
 =================================================================
 
  With a language server for the language (see vx --health),
@@ -333,7 +364,7 @@
 
 
 =================================================================
-=                            11 GIT                             =
+=                            12 GIT                             =
 =================================================================
 
  The gutter marks the lines changed since the last commit.
@@ -396,7 +427,7 @@
 
 
 =================================================================
-=                       12 THE SHELL                            =
+=                       13 THE SHELL                            =
 =================================================================
 
  :practice has | (pipe through a command). There are more:
@@ -413,7 +444,7 @@
 
 
 =================================================================
-=                     13 BACK IN TIME                           =
+=                     14 BACK IN TIME                           =
 =================================================================
 
  u and U go one change at a time. To go by time:
@@ -431,7 +462,7 @@
 
 
 =================================================================
-=                    14 SETTINGS AND HELP                       =
+=                    15 SETTINGS AND HELP                       =
 =================================================================
 
   :set OPTION VALUE    change an option for this session,
@@ -456,7 +487,7 @@
 
 
 =================================================================
-=                        15 THE DEBUGGER                        =
+=                        16 THE DEBUGGER                        =
 =================================================================
 
  With a debug adapter for the language (see vx --health; Vortex
@@ -519,7 +550,7 @@
 
 
 =================================================================
-=                       16 SPECTATOR MODE                       =
+=                       17 SPECTATOR MODE                       =
 =================================================================
 
  Watch the program like a video: it plays line by line at a
@@ -567,7 +598,7 @@
 
 
 =================================================================
-=                     17 THE TERMINAL PANEL                     =
+=                     18 THE TERMINAL PANEL                     =
 =================================================================
 
  A shell runs in a panel below your splits. It keeps running
@@ -593,7 +624,7 @@
 
 
 =================================================================
-=                        18 THE HEX VIEW                        =
+=                        19 THE HEX VIEW                        =
 =================================================================
 
  A binary file (an image, an executable...) opens in the hex
@@ -620,7 +651,7 @@
 
 
 =================================================================
-=                      19 MORE EDITING KEYS                     =
+=                      20 MORE EDITING KEYS                     =
 =================================================================
 
  These keys change text or selections too, but :practice has no
