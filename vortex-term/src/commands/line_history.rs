@@ -39,6 +39,19 @@ pub(crate) struct LineRow {
 }
 
 impl LineRow {
+    /// What `C-y` yanks: `src/main.rs:12-14`, one place per range of the lines followed.
+    pub(crate) fn places(&self) -> Vec<String> {
+        let path = crate::yank_place::shown_path(&self.path, false);
+        self.lines
+            .iter()
+            .filter(|range| !range.is_empty())
+            .map(|range| {
+                let lines = crate::yank_place::lines(range.start as usize, range.end as usize - 1);
+                format!("{path}:{lines}")
+            })
+            .collect()
+    }
+
     /// The change of the file from the first parent of `oldest` (`self`) to `newest`.
     fn change(&self, newest: &LineRow) -> FileChange {
         let from = self.old_path.as_ref().unwrap_or(&self.path);

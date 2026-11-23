@@ -94,6 +94,7 @@ git blame FILE
 - [Move lines](#move-lines)
 - [Soft wrap for Markdown](#soft-wrap-for-markdown)
 - [`gw` with case](#gw-with-case)
+- [Yank `file:lines`](#yank-filelines)
 - [Terminal panel](#terminal-panel)
 - [The debugger](#the-debugger)
 - [API browser (in progress)](#api-browser-in-progress)
@@ -131,6 +132,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | `x` on an empty line | `vortex-term/src/handlers/line_select.rs` |
 | Move lines | `vortex-term/src/commands/move_lines.rs` |
 | `gw` with case | `label_index` and `label_target` in `vortex-term/src/commands.rs` (`jump_to_label`), `vortex-term/tests/test/goto_word.rs` |
+| Yank `file:lines` | `vortex-term/src/yank_place.rs` (the places and the clipboard); the commands in `vortex-term/src/commands.rs`, `Space :` in `keymap/default.rs`; `C-y` in the lists of changes (`commands/changes.rs`), the line history (`commands/git_log.rs`, `LineRow::places` in `commands/line_history.rs`), the bookmark and history pickers (`vortex-term/src/history.rs`) and the file tree (`ui/explorer.rs`); tests in `vortex-term/tests/test/yank_place.rs` |
 | Soft wrap for Markdown | the markdown entry of `languages.toml`, `vortex-term/tests/test/soft_wrap.rs` |
 | Terminal panel | `vortex-terminal/` (the shell: pty, emulator, OSC 133, bash/zsh integration), `vortex-view/src/terminal.rs` (panel state, `[editor.terminal]`), `vortex-term/src/terminal/` (drawing, focus, input encoding, the `vx` shim), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
@@ -1491,6 +1493,33 @@ of the label adds options, with no new keys:
 - The labels are drawn as before, in lowercase; Shift is the only difference.
 
 Code: `label_index` and `label_target` next to `jump_to_label` in `vortex-term/src/commands.rs`.
+
+## Yank `file:lines`
+
+`Space :` yanks to the clipboard where the selections are, as a place other tools understand:
+`src/main.rs:42` for a cursor, `src/main.rs:12-14` for a selection over several lines. Paste it
+in a chat, an issue, a terminal (`vx src/main.rs:42` opens it there).
+
+- **The path** is relative to the workspace root (the folder with `.git`, `.jj`, `.svn` or
+  `.vortex` above the working directory, as the file picker's), whatever the working directory
+  is; a file outside the workspace gets its absolute path. A buffer with no file says so in the
+  status line and yanks nothing.
+- **Several selections** give one place per line, in the order of the selections, without
+  repeats (two cursors on one line are one place).
+- **The lines** are those the selection covers: a whole line selected with `x` is that line, not
+  the next one too. Lines count from 1.
+- **Two variants without a key**, in the command palette (`Space ?`): `yank_place_absolute`
+  (the absolute path) and `yank_place_column` (`src/main.rs:42:7`, the line and column of each
+  cursor, columns counting from 1 in characters).
+- **In the pickers that list places**, `C-y` yanks the place of the row under the cursor and
+  keeps the picker open: the lists of changes (a hunk is `src/main.rs:12-14`, a file's divider
+  the file), the line history (one place per range of the lines followed, in that commit's
+  file), the bookmarks and the history pickers (`file:line`; a screen in the history has no file
+  and says so) and the file tree (the path of the file or directory). It is in each one's `?`
+  help. `C-y` because a letter would be typed in the filter, and `C-y` is free in all of them.
+- The status line says what was yanked: `yanked src/main.rs:12-14`, or `yanked 3 places`.
+
+`Space :` was free; `:` reads as the separator of `file:line`.
 
 ## Terminal panel
 

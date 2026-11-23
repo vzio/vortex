@@ -64,6 +64,7 @@ fn key_help() -> crate::ui::keyhelp::KeyHelp {
                     ("d", "delete"),
                     ("R", "refresh"),
                     ("H", "show/hide git-ignored"),
+                    ("C-y", "yank the path"),
                 ],
             ),
             (
@@ -391,6 +392,14 @@ impl ExplorerPicker {
     }
 
     /// Opens the selected file, and closes the tree when `close`.
+    /// `C-y`: the selected file or directory's path to the clipboard (this fork: yank places).
+    fn yank_place(&self, editor: &mut Editor) {
+        if let Some(entry) = self.selected() {
+            let path = crate::yank_place::shown_path(&entry.node.path, false);
+            crate::yank_place::yank(editor, vec![path]);
+        }
+    }
+
     fn open_selected(&mut self, editor: &mut Editor, action: Action, close: bool) -> EventResult {
         let Some(entry) = self.selected().filter(|entry| !entry.node.is_dir) else {
             return EventResult::Consumed(None);
@@ -446,6 +455,7 @@ impl ExplorerPicker {
             ctrl!('s') => return self.open_selected(cx.editor, Action::HorizontalSplit, true),
             ctrl!('v') => return self.open_selected(cx.editor, Action::VerticalSplit, true),
             ctrl!('c') => return close_callback(),
+            ctrl!('y') => self.yank_place(cx.editor),
             _ => {
                 self.picker.handle_event(&Event::Key(key), cx);
                 self.query_changed(cx.editor);
@@ -527,6 +537,7 @@ impl ExplorerPicker {
                 self.flip_hidden = !self.flip_hidden;
                 self.rebuild(cx.editor, Select::Keep);
             }
+            ctrl!('y') => self.yank_place(cx.editor),
             key!('?') => return EventResult::Consumed(Some(key_help().push())),
             key!(Esc) if !self.query.is_empty() => self.clear_query(cx.editor),
             key!(Esc) | key!('q') | ctrl!('c') => return close_callback(),

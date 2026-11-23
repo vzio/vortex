@@ -16,7 +16,7 @@ use vortex_view::{
 use crate::{
     commands::Context,
     compositor::Compositor,
-    job,
+    ctrl, job,
     ui::{self, diff_view::DiffView, overlay::overlaid, Picker, PickerColumn},
 };
 
@@ -304,13 +304,26 @@ pub fn open_history_picker(compositor: &mut Compositor, editor: &mut Editor, her
         "History",
         vec![(
             "history",
-            vec![("Enter", "go there"), ("ga", "(outside) one back")],
+            vec![
+                ("Enter", "go there"),
+                ("C-y", "yank file:line"),
+                ("ga", "(outside) one back"),
+            ],
         )],
     )
     .with_initial_cursor(cursor)
     .with_preview(|_editor, row: &HistoryRow| {
         row.preview
             .map(|(doc, line)| (doc.into(), Some((line, line))))
+    })
+    .with_stacked_key_handler(ctrl!('y'), |cx, row: &HistoryRow| {
+        match row
+            .preview
+            .and_then(|(doc, line)| crate::yank_place::doc_place(cx.editor, doc, line))
+        {
+            Some(place) => crate::yank_place::yank(cx.editor, vec![place]),
+            None => cx.editor.set_error("No file at this place"),
+        }
     });
     compositor.push(Box::new(overlaid(picker)));
 }
@@ -557,6 +570,7 @@ fn open_picker(compositor: &mut Compositor, editor: &mut Editor, cursor: u32) {
                 ("Enter", "go to it"),
                 ("C-s C-v", "in a split"),
                 ("C-x", "remove it"),
+                ("C-y", "yank file:line"),
             ],
         )],
     )
@@ -564,6 +578,20 @@ fn open_picker(compositor: &mut Compositor, editor: &mut Editor, cursor: u32) {
     .with_preview(|_editor, row: &Row| match &row.bookmark.at {
         At::Buffer { doc, line } => Some(((*doc).into(), Some((*line, *line)))),
         At::File { path, line } => Some((path.as_path().into(), Some((*line, *line)))),
+    })
+    .with_stacked_key_handler(ctrl!('y'), |cx, row: &Row| {
+        let place = match &row.bookmark.at {
+            At::Buffer { doc, line } => crate::yank_place::doc_place(cx.editor, *doc, *line),
+            At::File { path, line } => Some(format!(
+                "{}:{}",
+                crate::yank_place::shown_path(path, false),
+                line + 1
+            )),
+        };
+        match place {
+            Some(place) => crate::yank_place::yank(cx.editor, vec![place]),
+            None => cx.editor.set_error("This buffer has no file"),
+        }
     })
     .with_stacked_key_handler(
         vortex_view::input::KeyEvent {

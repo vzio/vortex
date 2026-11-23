@@ -285,6 +285,16 @@
  register _ throws away what goes into it: "_d deletes and
  keeps the yank.
 
+ To point someone at code, yank where it is rather than what
+ it is (this fork):
+
+  space :        yank file:lines, as src/main.rs:12-14
+
+ One place per selection, the path from the workspace root.
+ In the lists of changes, the line history, the bookmark and
+ history pickers and the file tree, C-y yanks the row's place.
+ The palette has yank_place_absolute and yank_place_column.
+
 
 
 =================================================================

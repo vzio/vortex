@@ -20,6 +20,7 @@ pub mod practice;
 pub mod terminal;
 pub mod ui;
 pub mod watch;
+pub mod yank_place;
 
 use std::env::var_os;
 
