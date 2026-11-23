@@ -1,0 +1,6 @@
+Run it:
+
+ fn main() {
+     let message = "a very long line of code that does not fit in the page and is never wrapped";
+     println!("{message}");
+ }

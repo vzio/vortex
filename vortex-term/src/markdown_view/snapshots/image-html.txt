@@ -1,0 +1,8 @@
+[image: the logo]
+
+Text with <kbd>Ctrl</kbd> inline.
+
+<details>
+<summary>More</summary>
+Hidden text
+</details>

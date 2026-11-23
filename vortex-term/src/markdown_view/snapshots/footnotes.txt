@@ -1,0 +1,7 @@
+Vortex[1] keeps the keymap of its parent[2].
+
+More text after the references.
+
+────────────────────
+[1] A fork, with its own features.
+[2] Upstream is credited in the README.

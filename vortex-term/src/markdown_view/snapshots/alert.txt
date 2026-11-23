@@ -1,0 +1,6 @@
+▎ Note
+▎ Useful information that users should know.
+
+▎ Warning
+▎ Urgent info that needs immediate attention to
+▎ avoid problems.

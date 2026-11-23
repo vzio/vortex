@@ -1343,9 +1343,7 @@ impl Application {
 
     /// The Markdown render mode when it is up, and the editor, for integration tests.
     #[cfg(feature = "integration")]
-    pub fn markdown(
-        &mut self,
-    ) -> Option<(&mut crate::markdown_view::MarkdownView, &mut Editor)> {
+    pub fn markdown(&mut self) -> Option<(&mut crate::markdown_view::MarkdownView, &mut Editor)> {
         let view = self.compositor.find::<ui::EditorView>()?;
         let markdown = view.live_markdown(&self.editor)?;
         Some((markdown, &mut self.editor))

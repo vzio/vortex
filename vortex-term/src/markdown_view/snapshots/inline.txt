@@ -1,0 +1,3 @@
+Some emphasis, some strong text, a removed word,
+inline_code() and both at once. Underscores work too: this
+and that.

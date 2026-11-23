@@ -126,6 +126,8 @@ fn ordered_lists_align_their_numbers_on_the_right() {
 10. Tenth step, which is long enough to wrap onto a second line of the page
 11. Eleventh step
 
+A second list starts over:
+
 1. Install
 2. Configure
    1. Edit the config
@@ -400,7 +402,11 @@ fn code_block_lines_have_the_background_of_the_theme() {
     let block = theme.get("markup.raw.block");
     assert!(block.bg.is_some());
     let page = themed("Before\n\n```\none\ntwo\n```\n\nAfter\n", 40, "vortex");
-    let code: Vec<_> = page.lines.iter().filter(|line| line.code.is_some()).collect();
+    let code: Vec<_> = page
+        .lines
+        .iter()
+        .filter(|line| line.code.is_some())
+        .collect();
     assert_eq!(code.len(), 2);
     for line in code {
         let (_, fill) = line.fill.expect("a fill");
@@ -451,7 +457,10 @@ fn headings_have_the_anchors_of_github() {
     assert_ne!(anchors[0], anchors[2], "{anchors:?}");
     assert_eq!(page.anchor("hello-world"), Some(0));
     assert_eq!(page.anchor("Hello-World"), Some(0));
-    assert_eq!(page.anchor("the-v-key-markdown"), Some(page.headings[1].line));
+    assert_eq!(
+        page.anchor("the-v-key-markdown"),
+        Some(page.headings[1].line)
+    );
     assert_eq!(page.anchor("%C3%9Cn%C3%AFcode-%26-more_stuff"), None);
     assert_eq!(page.anchor("nothing"), None);
     assert_eq!(page.headings[1].text, "The V key (Markdown)");
