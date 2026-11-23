@@ -18,6 +18,8 @@ use crate::LogEntry;
 pub(super) struct Section {
     pub(super) label: String,
     pub(super) hide: Vec<ObjectId>,
+    /// Whether these commits are on no remote, see [`crate::Divider::unpushed`].
+    pub(super) unpushed: bool,
 }
 
 /// The id of the commit `name` points to, if there is such a reference.
@@ -105,6 +107,14 @@ fn upstream(repo: &Repository, name: &FullName) -> Option<(String, String)> {
     Some((format!("refs/remotes/{remote}/{branch}"), remote))
 }
 
+/// The commit the base branch of the branch `name` points to, found as the log's sections find
+/// it (the remote of its upstream if one is configured, else `origin`).
+pub(super) fn base_of(repo: &Repository, name: &FullName) -> Option<ObjectId> {
+    let remote = upstream(repo, name).map_or_else(|| "origin".to_string(), |(_, remote)| remote);
+    let current = name.as_bstr().to_string();
+    base_branch(repo, &remote, Some(&current)).map(|(_, id)| id)
+}
+
 /// The sections of the log of HEAD, in the order they are listed.
 pub(super) fn sections(repo: &Repository) -> Result<(ObjectId, Vec<Section>)> {
     let head_id = repo.head_id()?.detach();
@@ -121,25 +131,32 @@ pub(super) fn sections(repo: &Repository) -> Result<(ObjectId, Vec<Section>)> {
     let remote = remote.unwrap_or_else(|| "origin".to_string());
     let base = base_branch(repo, &remote, current.as_deref());
 
-    let own = branch.unwrap_or_else(|| "HEAD (detached)".to_string());
     let hide_base = || base.iter().map(|(_, id)| *id);
+    // A branch without an upstream has pushed nothing: its own commits are all unpushed. A
+    // detached HEAD's are only not on the base branch: they may well be on a remote (a tag, a
+    // remote branch checked out).
+    let (label, unpushed) = match (&branch, upstream) {
+        (Some(branch), Some(_)) => (format!("{branch} (unpushed)"), true),
+        (Some(branch), None) => (format!("{branch} (unpushed · no upstream)"), true),
+        (None, _) => ("HEAD (detached)".to_string(), false),
+    };
     let mut sections = vec![Section {
-        label: match (&current, upstream) {
-            (Some(_), Some(_)) => format!("{own} (unpushed)"),
-            _ => own.clone(),
-        },
+        label,
         hide: upstream.into_iter().chain(hide_base()).collect(),
+        unpushed,
     }];
-    if upstream.is_some() {
+    if let (Some(branch), Some(_)) = (branch, upstream) {
         sections.push(Section {
-            label: own,
+            label: branch,
             hide: hide_base().collect(),
+            unpushed: false,
         });
     }
     if let Some((label, _)) = base {
         sections.push(Section {
             label,
             hide: Vec::new(),
+            unpushed: false,
         });
     }
     Ok((head_id, sections))
@@ -182,7 +199,11 @@ pub fn for_each_log_entry(
             }
             if !started {
                 started = true;
-                if !f(Ok(LogEntry::Divider(section.label.clone()))) {
+                let divider = crate::Divider {
+                    label: section.label.clone(),
+                    unpushed: section.unpushed,
+                };
+                if !f(Ok(LogEntry::Divider(divider))) {
                     return Ok(());
                 }
             }

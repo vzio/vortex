@@ -137,7 +137,9 @@ impl Repo {
         super::for_each_line_commit(self.path(), true, &self.abs(file), ranges, |event| {
             match event {
                 LineEvent::Searched(n) => walk.searched = n,
-                LineEvent::Divider(label) => walk.events.push(Event::Divider(label.to_string())),
+                LineEvent::Divider(divider) => {
+                    walk.events.push(Event::Divider(divider.label.clone()))
+                }
                 LineEvent::Commit(commit) => walk.events.push(Event::Commit(Row {
                     summary: commit.info.summary.clone(),
                     added: commit.added,
@@ -485,7 +487,7 @@ fn the_walk_stops_when_asked_to() {
     super::for_each_line_commit(repo.path(), true, &repo.abs(FILE), vec![1..2], |event| {
         let (name, keep_going) = match event {
             LineEvent::Searched(n) => (format!("searched {n}"), n < 2),
-            LineEvent::Divider(label) => (format!("divider {label}"), true),
+            LineEvent::Divider(divider) => (format!("divider {}", divider.label), true),
             LineEvent::Commit(commit) => (commit.info.summary.clone(), true),
         };
         events.push(name);
@@ -494,7 +496,12 @@ fn the_walk_stops_when_asked_to() {
     .unwrap();
     assert_eq!(
         events,
-        ["searched 1", "divider main", "edit 2", "searched 2"]
+        [
+            "searched 1",
+            "divider main (unpushed · no upstream)",
+            "edit 2",
+            "searched 2"
+        ]
     );
 }
 

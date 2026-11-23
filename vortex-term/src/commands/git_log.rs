@@ -13,7 +13,7 @@ use tui::{
 };
 use vortex_core::{movement::Direction, Position};
 use vortex_event::status;
-use vortex_vcs::{CommitInfo, LogEntry};
+use vortex_vcs::{CommitInfo, Divider, LogEntry};
 use vortex_view::{
     editor::ChangesConfig,
     graphics::{CursorKind, Rect},
@@ -212,15 +212,15 @@ pub(crate) struct LogRow {
 pub(crate) enum RowKind {
     /// The changes of the working tree since HEAD: always the first row.
     Uncommitted,
-    /// The label of the section that follows.
-    Divider(String),
+    /// The divider of the section that follows.
+    Divider(Divider),
     Commit(CommitInfo),
 }
 
 impl LogRow {
     fn new(pos: usize, entry: LogEntry) -> Self {
         let kind = match entry {
-            LogEntry::Divider(title) => RowKind::Divider(title),
+            LogEntry::Divider(divider) => RowKind::Divider(divider),
             LogEntry::Commit(commit) => RowKind::Commit(commit),
         };
         Self {
@@ -240,10 +240,10 @@ impl LogRow {
     }
 
     /// The divider of a section of the line history.
-    pub(crate) fn divider(pos: usize, label: String) -> Self {
+    pub(crate) fn divider(pos: usize, divider: Divider) -> Self {
         Self {
             pos,
-            kind: RowKind::Divider(label),
+            kind: RowKind::Divider(divider),
             line: None,
         }
     }
@@ -455,7 +455,16 @@ impl CommitLog {
             },
         )
         .with_dividers(|row, _| match &row.kind {
-            RowKind::Divider(title) => Some(title.as_str().into()),
+            RowKind::Divider(divider) => Some(divider.label.as_str().into()),
+            _ => None,
+        })
+        // the commits on no remote stand out, as "unpushed" does on the dashboard
+        .with_divider_style(|row, _, theme| match &row.kind {
+            RowKind::Divider(divider) if divider.unpushed => Some(
+                theme
+                    .try_get_exact("ui.picker.divider.unpushed")
+                    .unwrap_or_else(|| theme.get("warning")),
+            ),
             _ => None,
         })
         .with_marked_rows({

@@ -369,10 +369,10 @@ fn start(editor: &Editor, log: &CommitLog, walk: Walk, search: Arc<Search>) {
                     search.searched.store(searched, Ordering::Relaxed);
                     !injector.is_shut_down()
                 }
-                LineEvent::Divider(label) => {
+                LineEvent::Divider(divider) => {
                     pos += 1;
                     injector
-                        .push(LogRow::divider(pos - 1, label.to_string()))
+                        .push(LogRow::divider(pos - 1, divider.clone()))
                         .is_ok()
                 }
                 LineEvent::Commit(commit) => {
