@@ -411,6 +411,8 @@
 
   :set OPTION VALUE    change an option for this session,
                        e.g. :set soft-wrap.enable true
+                       (Markdown wraps by default; turn it off
+                       in your languages.toml)
   :toggle OPTION       switch an option on or off
   :theme NAME          try a theme (Tab lists them)
   :theme matrix        phosphor green on black, with effects:
