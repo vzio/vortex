@@ -24,6 +24,7 @@ pub mod object;
 mod position;
 pub mod search;
 pub mod selection;
+pub mod selective_wrap;
 pub mod snippets;
 pub mod surround;
 pub mod syntax;
@@ -56,8 +57,9 @@ pub type Tendril = SmartString<smartstring::LazyCompact>;
 pub use {regex, tree_house::tree_sitter};
 
 pub use position::{
-    char_idx_at_visual_offset, coords_at_pos, pos_at_coords, softwrapped_dimensions,
-    visual_offset_from_anchor, visual_offset_from_block, Position, VisualOffsetError,
+    char_idx_at_screen_offset, char_idx_at_visual_offset, coords_at_pos, pos_at_coords,
+    softwrapped_dimensions, visual_offset_from_anchor, visual_offset_from_block, Position,
+    VisualOffsetError,
 };
 #[allow(deprecated)]
 pub use position::{pos_at_visual_coords, visual_coords_at_pos};

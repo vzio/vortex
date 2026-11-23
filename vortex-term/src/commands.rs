@@ -6378,12 +6378,13 @@ fn align_view_middle(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     let inner_width = view.inner_width(doc);
     let text_fmt = doc.text_format(inner_width, None);
-    // there is no horizontal position when softwrap is enabled
-    if text_fmt.soft_wrap {
-        return;
-    }
     let doc_text = doc.text().slice(..);
     let pos = doc.selection(view.id).primary().cursor(doc_text);
+    // a line that wraps has no sideways position: only the lines that don't wrap (all of them
+    // with soft wrap off) scroll sideways
+    if text_fmt.wraps(doc_text.char_to_line(pos)) {
+        return;
+    }
     let pos = visual_offset_from_block(
         doc_text,
         doc.view_offset(view.id).anchor,

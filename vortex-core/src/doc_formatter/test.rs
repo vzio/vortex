@@ -1,3 +1,6 @@
+// the unwrapped lines are lists of ranges, one range or more
+#![allow(clippy::single_range_in_vec_init)]
+
 use crate::doc_formatter::{DocumentFormatter, TextFormat};
 use crate::text_annotations::{InlineAnnotation, Overlay, TextAnnotations};
 
@@ -13,6 +16,7 @@ impl TextFormat {
             // use a prime number to allow lining up too often with repeat
             viewport_width: 17,
             soft_wrap_at_text_width: false,
+            unwrapped: Default::default(),
         }
     }
 }
@@ -210,4 +214,113 @@ fn annotation_and_overlay() {
         .collect_to_str(),
         "fooo  bar "
     );
+}
+
+/// The visual lines of `text` with soft wrap on except on `unwrapped` lines (this fork: selective
+/// soft wrap), each with its document line.
+fn selective_rows(text: &str, unwrapped: Vec<std::ops::Range<usize>>) -> Vec<(usize, String)> {
+    let mut text_fmt = TextFormat::new_test(true);
+    text_fmt.unwrapped = crate::selective_wrap::UnwrappedLines::new(unwrapped);
+    let annotations = TextAnnotations::default();
+    let mut rows: Vec<(usize, String)> = Vec::new();
+    for grapheme in
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
+    {
+        let row = grapheme.visual_pos.row;
+        if rows.len() <= row {
+            rows.resize(row + 1, (grapheme.line_idx, String::new()));
+            rows[row].1 = ".".repeat(grapheme.visual_pos.col);
+        }
+        rows[row].1.push_str(&grapheme.raw.to_string());
+    }
+    rows.into_iter()
+        .map(|(line, row)| (line, row.trim_end().to_string()))
+        .collect()
+}
+
+const PROSE: &str = "the quick brown fox jumps over";
+const ROW: &str = "| alpha | beta | gamma | delta |";
+
+#[test]
+fn unwrapped_lines_stay_one_visual_line() {
+    let text = format!("{PROSE}\n{ROW}\n{ROW}\n{PROSE}\n");
+    assert_eq!(
+        selective_rows(&text, vec![1..3]),
+        [
+            (0, "the quick brown".into()),
+            (0, ".fox jumps over".into()),
+            (1, ROW.into()),
+            (2, ROW.into()),
+            (3, "the quick brown".into()),
+            (3, ".fox jumps over".into()),
+            (4, "".into()),
+        ]
+    );
+}
+
+#[test]
+fn every_line_wraps_without_unwrapped_lines() {
+    let text = format!("{PROSE}\n{ROW}\n");
+    let rows = selective_rows(&text, vec![]);
+    assert_eq!(rows.iter().filter(|(line, _)| *line == 1).count(), 2);
+    assert!(rows.iter().all(|(_, row)| row.chars().count() <= 17));
+}
+
+#[test]
+fn unwrapped_lines_at_the_start_and_the_end() {
+    // at the start: the formatter starts on an unwrapped line
+    let text = format!("{ROW}\n{PROSE}\n{ROW}");
+    let rows = selective_rows(&text, vec![0..1, 2..3]);
+    assert_eq!(rows[0], (0, ROW.into()));
+    assert_eq!(rows[1], (1, "the quick brown".into()));
+    assert_eq!(rows[2], (1, ".fox jumps over".into()));
+    // at the end, without a final newline: the EOF cell follows the row
+    assert_eq!(rows[3], (2, ROW.into()));
+    assert_eq!(rows.len(), 4);
+}
+
+#[test]
+fn a_line_that_wraps_after_an_unwrapped_one_wraps_as_usual() {
+    // an indented line after an unwrapped one wraps exactly as after a line that wraps
+    let indented = format!("  {PROSE}\n");
+    let after_wrapped = selective_rows(&format!("x\n{indented}"), vec![]);
+    let after_unwrapped = selective_rows(&format!("{ROW}\n{indented}"), vec![0..1]);
+    assert_eq!(after_unwrapped[0], (0, ROW.into()));
+    assert_eq!(after_unwrapped[1..], after_wrapped[1..]);
+    assert_eq!(after_wrapped[2], (1, "... fox jumps".into()));
+}
+
+#[test]
+fn starting_inside_unwrapped_lines() {
+    // a formatter starting at a later block (as the renderer does at the view's anchor)
+    let text = format!("{PROSE}\n{ROW}\n{ROW}\n{PROSE}\n");
+    let mut text_fmt = TextFormat::new_test(true);
+    text_fmt.unwrapped = crate::selective_wrap::UnwrappedLines::new(vec![1..3]);
+    let annotations = TextAnnotations::default();
+    let start = PROSE.len() + 1 + ROW.len() + 1; // the second row
+    let rows: Vec<_> = DocumentFormatter::new_at_prev_checkpoint(
+        text.as_str().into(),
+        &text_fmt,
+        &annotations,
+        start,
+    )
+    .filter(|g| g.visual_pos.col == 0)
+    .map(|g| (g.line_idx, g.visual_pos.row))
+    .collect();
+    assert_eq!(rows, [(2, 0), (3, 1), (3, 2), (4, 3)]);
+}
+
+#[test]
+fn col_offset_applies_to_the_lines_that_dont_wrap() {
+    let mut text_fmt = TextFormat::new_test(true);
+    text_fmt.unwrapped = crate::selective_wrap::UnwrappedLines::new(vec![1..3]);
+    assert_eq!(text_fmt.col_offset(0, 7), 0);
+    assert_eq!(text_fmt.col_offset(1, 7), 7);
+    assert_eq!(text_fmt.col_offset(2, 7), 7);
+    assert_eq!(text_fmt.col_offset(3, 7), 0);
+    assert!(text_fmt.is_selective());
+    // soft wrap off: every line shares the offset, as before this fork
+    text_fmt.soft_wrap = false;
+    assert_eq!(text_fmt.col_offset(0, 7), 7);
+    assert!(!text_fmt.is_selective());
 }

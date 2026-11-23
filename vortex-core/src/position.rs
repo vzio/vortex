@@ -359,9 +359,46 @@ pub fn pos_at_visual_coords(text: RopeSlice, coords: Position, tab_width: usize)
 /// the previous char_index is returned, together with the remaining vertical offset (`virtual_lines`)
 pub fn char_idx_at_visual_offset(
     text: RopeSlice,
+    anchor: usize,
+    row_offset: isize,
+    column: usize,
+    text_fmt: &TextFormat,
+    annotations: &TextAnnotations,
+) -> (usize, usize) {
+    char_idx_at_shifted_offset(text, anchor, row_offset, column, 0, text_fmt, annotations)
+}
+
+/// [`char_idx_at_visual_offset`] for a cell of a view scrolled `horizontal_offset` columns
+/// sideways: `column` counts from the view's left edge, and the sideways offset of the line on
+/// the targeted visual line ([`TextFormat::col_offset`]) is added to it. With soft wrap off that's
+/// `horizontal_offset` for every line; with selective soft wrap (this fork) only the lines that
+/// don't wrap are scrolled sideways.
+pub fn char_idx_at_screen_offset(
+    text: RopeSlice,
+    anchor: usize,
+    row_offset: isize,
+    column: usize,
+    horizontal_offset: usize,
+    text_fmt: &TextFormat,
+    annotations: &TextAnnotations,
+) -> (usize, usize) {
+    char_idx_at_shifted_offset(
+        text,
+        anchor,
+        row_offset,
+        column,
+        horizontal_offset,
+        text_fmt,
+        annotations,
+    )
+}
+
+fn char_idx_at_shifted_offset(
+    text: RopeSlice,
     mut anchor: usize,
     mut row_offset: isize,
     column: usize,
+    horizontal_offset: usize,
     text_fmt: &TextFormat,
     annotations: &TextAnnotations,
 ) -> (usize, usize) {
@@ -387,11 +424,12 @@ pub fn char_idx_at_visual_offset(
         anchor -= 1;
     }
 
-    char_idx_at_visual_block_offset(
+    char_idx_at_shifted_block_offset(
         text,
         anchor,
         row_offset as usize,
         column,
+        horizontal_offset,
         text_fmt,
         annotations,
     )
@@ -416,6 +454,18 @@ pub fn char_idx_at_visual_block_offset(
     text_fmt: &TextFormat,
     annotations: &TextAnnotations,
 ) -> (usize, usize) {
+    char_idx_at_shifted_block_offset(text, anchor, row, column, 0, text_fmt, annotations)
+}
+
+fn char_idx_at_shifted_block_offset(
+    text: RopeSlice,
+    anchor: usize,
+    row: usize,
+    column: usize,
+    horizontal_offset: usize,
+    text_fmt: &TextFormat,
+    annotations: &TextAnnotations,
+) -> (usize, usize) {
     let mut formatter =
         DocumentFormatter::new_at_prev_checkpoint(text, text_fmt, annotations, anchor);
     let mut last_char_idx = formatter.next_char_pos();
@@ -424,6 +474,7 @@ pub fn char_idx_at_visual_block_offset(
     for grapheme in &mut formatter {
         match grapheme.visual_pos.row.cmp(&row) {
             Ordering::Equal => {
+                let column = column + text_fmt.col_offset(grapheme.line_idx, horizontal_offset);
                 if grapheme.visual_pos.col + grapheme.width() > column {
                     if !grapheme.is_virtual() {
                         return (grapheme.char_idx, 0);

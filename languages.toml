@@ -2233,7 +2233,8 @@ language-servers = [ "marksman", "markdown-oxide", "rumdl" ]
 indent = { tab-width = 2, unit = "  " }
 block-comment-tokens = { start = "<!--", end = "-->" }
 word-completion.trigger-length = 4
-soft-wrap = { enable = true }
+# prose wraps; tables, code, HTML and front matter keep their lines (this fork: selective soft wrap)
+soft-wrap = { enable = true, except = ["pipe_table", "fenced_code_block", "indented_code_block", "html_block", "minus_metadata", "plus_metadata"] }
 
 [language.auto-pairs]
 '(' = ')'
