@@ -1,0 +1,20 @@
+┌─────┬────────────┬─────────┐
+│ Key │  Command   │ Meaning │
+├─────┼────────────┼─────────┤
+│ V   │ markdown_v │  Toggle │
+│     │    iew     │     the │
+│     │            │ rendere │
+│     │            │  d page │
+├─────┼────────────┼─────────┤
+│ ]   │ next_headi │    Next │
+│     │     ng     │ heading │
+├─────┼────────────┼─────────┤
+│ t   │  outline   │     The │
+│     │            │ outline │
+│     │            │  of the │
+│     │            │   page, │
+│     │            │    as a │
+│     │            │  picker │
+│     │            │ you can │
+│     │            │  filter │
+└─────┴────────────┴─────────┘

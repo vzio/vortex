@@ -172,6 +172,177 @@ const ROWS: &[Row] = &[
     ),
 ];
 
+const MARKDOWN_ROWS: &[Row] = &[
+    (
+        "heading 1 on its band",
+        ("markup.heading.1", Fg),
+        ("markup.heading.1", Bg),
+        4.5,
+    ),
+    (
+        "heading 2 on its band",
+        ("markup.heading.2", Fg),
+        ("markup.heading.2", Bg),
+        4.5,
+    ),
+    (
+        "heading 3 on its band",
+        ("markup.heading.3", Fg),
+        ("markup.heading.3", Bg),
+        4.5,
+    ),
+    (
+        "heading 4 on its background",
+        ("markup.heading.4", Fg),
+        ("markup.heading.4", Bg),
+        4.5,
+    ),
+    (
+        "heading 5 on its background",
+        ("markup.heading.5", Fg),
+        ("markup.heading.5", Bg),
+        4.5,
+    ),
+    (
+        "heading 6 on its background",
+        ("markup.heading.6", Fg),
+        ("markup.heading.6", Bg),
+        4.5,
+    ),
+    (
+        "heading 1 band vs background",
+        ("markup.heading.1", Bg),
+        ("ui.background", Bg),
+        1.15,
+    ),
+    (
+        "heading 2 band vs background",
+        ("markup.heading.2", Bg),
+        ("ui.background", Bg),
+        1.15,
+    ),
+    (
+        "heading 3 band vs background",
+        ("markup.heading.3", Bg),
+        ("ui.background", Bg),
+        1.15,
+    ),
+    (
+        "bold on its background",
+        ("markup.bold", Fg),
+        ("markup.bold", Bg),
+        4.5,
+    ),
+    (
+        "italic on its background",
+        ("markup.italic", Fg),
+        ("markup.italic", Bg),
+        4.5,
+    ),
+    (
+        "strikethrough on its background",
+        ("markup.strikethrough", Fg),
+        ("markup.strikethrough", Bg),
+        4.5,
+    ),
+    (
+        "unnumbered list on its background",
+        ("markup.list.unnumbered", Fg),
+        ("markup.list.unnumbered", Bg),
+        4.5,
+    ),
+    (
+        "numbered list on its background",
+        ("markup.list.numbered", Fg),
+        ("markup.list.numbered", Bg),
+        4.5,
+    ),
+    (
+        "checked item on its background",
+        ("markup.list.checked", Fg),
+        ("markup.list.checked", Bg),
+        4.5,
+    ),
+    (
+        "unchecked item on its background",
+        ("markup.list.unchecked", Fg),
+        ("markup.list.unchecked", Bg),
+        4.5,
+    ),
+    (
+        "quote on its background",
+        ("markup.quote", Fg),
+        ("markup.quote", Bg),
+        4.5,
+    ),
+    (
+        "link text on its background",
+        ("markup.link.text", Fg),
+        ("markup.link.text", Bg),
+        4.5,
+    ),
+    (
+        "link url on its background",
+        ("markup.link.url", Fg),
+        ("markup.link.url", Bg),
+        4.5,
+    ),
+    (
+        "link label on its background",
+        ("markup.link.label", Fg),
+        ("markup.link.label", Bg),
+        4.5,
+    ),
+    (
+        "inline code on its background",
+        ("markup.raw.inline", Fg),
+        ("markup.raw.inline", Bg),
+        4.5,
+    ),
+    (
+        "code block on its background",
+        ("markup.raw.block", Fg),
+        ("markup.raw.block", Bg),
+        4.5,
+    ),
+    (
+        "inline code bg vs background",
+        ("markup.raw.inline", Bg),
+        ("ui.background", Bg),
+        1.15,
+    ),
+    (
+        "code block bg vs background",
+        ("markup.raw.block", Bg),
+        ("ui.background", Bg),
+        1.15,
+    ),
+    (
+        "render dim on background",
+        ("ui.markdown.dim", Fg),
+        ("ui.background", Bg),
+        3.0,
+    ),
+    (
+        "render border on background",
+        ("ui.markdown.border", Fg),
+        ("ui.background", Bg),
+        2.0,
+    ),
+    (
+        "reading line vs background",
+        ("ui.markdown.reading", Bg),
+        ("ui.background", Bg),
+        1.1,
+    ),
+    (
+        "text on reading line",
+        ("ui.text", Fg),
+        ("ui.markdown.reading", Bg),
+        7.0,
+    ),
+];
+
 fn color_of(theme: &Theme, (scope, part): (&str, Part)) -> Color {
     match part {
         Fg => fg(theme, scope),
@@ -179,10 +350,10 @@ fn color_of(theme: &Theme, (scope, part): (&str, Part)) -> Color {
     }
 }
 
-/// Each row of [`ROWS`] on `theme`: its description, the ratio, the minimum, and whether the
+/// Each row of `rows` on `theme`: its description, the ratio, the minimum, and whether the
 /// ratio reaches it.
-fn report(theme: &Theme) -> Vec<(String, f64, f64, bool)> {
-    ROWS.iter()
+fn report(theme: &Theme, rows: &[Row]) -> Vec<(String, f64, f64, bool)> {
+    rows.iter()
         .map(|&(description, a, b, minimum)| {
             let ratio = ratio(color_of(theme, a), color_of(theme, b));
             (description.to_string(), ratio, minimum, ratio >= minimum)
@@ -190,10 +361,10 @@ fn report(theme: &Theme) -> Vec<(String, f64, f64, bool)> {
         .collect()
 }
 
-fn print_report(theme: &Theme) {
+fn print_report(theme: &Theme, rows: &[Row]) {
     println!("contrast of the {} theme", theme.name());
     println!("{:<32} {:>7} {:>5}  result", "pair", "ratio", "min");
-    for (description, ratio, minimum, pass) in report(theme) {
+    for (description, ratio, minimum, pass) in report(theme, rows) {
         let result = if pass { "PASS" } else { "SHORT" };
         println!("{description:<32} {ratio:>7.2} {minimum:>5.1}  {result}");
     }
@@ -212,8 +383,8 @@ fn the_wcag_formula_matches_known_values() {
 #[test]
 fn contrast_of_the_matrix_theme_meets_its_minimums() {
     let theme = Loader::new(&[]).load(MATRIX_THEME_NAME).unwrap();
-    print_report(&theme);
-    let short: Vec<_> = report(&theme)
+    print_report(&theme, ROWS);
+    let short: Vec<_> = report(&theme, ROWS)
         .into_iter()
         .filter(|(_, _, _, pass)| !pass)
         .map(|(description, ratio, minimum, _)| format!("{description}: {ratio:.2} < {minimum}"))
@@ -225,6 +396,22 @@ fn contrast_of_the_matrix_theme_meets_its_minimums() {
 #[test]
 fn contrast_of_the_vortex_theme_is_reported() {
     let theme = Loader::new(&[]).load(DEFAULT_THEME_NAME).unwrap();
-    print_report(&theme);
-    assert_eq!(report(&theme).len(), ROWS.len());
+    print_report(&theme, ROWS);
+    assert_eq!(report(&theme, ROWS).len(), ROWS.len());
+}
+
+#[test]
+fn contrast_of_markdown_is_enough_in_both_themes() {
+    for name in [DEFAULT_THEME_NAME, MATRIX_THEME_NAME] {
+        let theme = Loader::new(&[]).load(name).unwrap();
+        print_report(&theme, MARKDOWN_ROWS);
+        let short: Vec<_> = report(&theme, MARKDOWN_ROWS)
+            .into_iter()
+            .filter(|(_, _, _, pass)| !pass)
+            .map(|(description, ratio, minimum, _)| {
+                format!("{description}: {ratio:.2} < {minimum}")
+            })
+            .collect();
+        assert!(short.is_empty(), "{name}: too little contrast: {short:#?}");
+    }
 }

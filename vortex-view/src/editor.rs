@@ -346,6 +346,18 @@ impl<'de> Deserialize<'de> for Ignored {
     }
 }
 
+/// When a Markdown buffer opens in the render mode (fork feature, see FORK.md, "Markdown render
+/// mode"): when browsing (the file tree, the command line, a link in the render mode), always, or
+/// never (the toggle still works).
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MarkdownViewStartup {
+    #[default]
+    Browse,
+    Always,
+    Never,
+}
+
 /// When `vx` opens on the dashboard (fork feature): `"auto"`, `true` or `false`.
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub enum DashboardStartup {
@@ -641,6 +653,13 @@ pub struct Config {
     /// file picker (fork feature): `"auto"` (in a local terminal, not under SSH nor on the Linux
     /// console), `true` or `false`. `:dashboard` shows it either way. Defaults to `"auto"`.
     pub dashboard: DashboardStartup,
+    /// When Markdown buffers open in the render mode, rendered and read-only (fork feature):
+    /// `"browse"` (from the file tree, the command line and links in the render mode), `"always"`
+    /// or `"never"`. `V` and `:markdown-view` toggle it either way. Defaults to `"browse"`.
+    pub markdown_view: MarkdownViewStartup,
+    /// The widest the render mode's page gets, centered on wider windows (fork feature); `0` for
+    /// the window's width. Defaults to `100`.
+    pub markdown_width: u16,
     /// The animated vortex behind the dashboard (fork feature): `on` (spins while the dashboard
     /// is up), `load` (spins while it loads, then slows down to a stop), `static` (one still
     /// frame) or `off`. Defaults to `on`.
@@ -1479,6 +1498,8 @@ impl Default for Config {
             file_explorer: FileExplorerConfig::default(),
             explorer: ExplorerConfig::default(),
             dashboard: DashboardStartup::Auto,
+            markdown_view: MarkdownViewStartup::Browse,
+            markdown_width: 100,
             dashboard_background: DashboardBackground::default(),
             dashboard_title: true,
             inline_blame: InlineBlameConfig::default(),

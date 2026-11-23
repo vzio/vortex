@@ -1,0 +1,6 @@
+- First, a paragraph of its own.
+
+- Second, with more to say than fits in
+  one line of the page.
+
+- Third.

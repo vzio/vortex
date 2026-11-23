@@ -35,6 +35,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "E" => move_next_long_word_end,
 
         "v" => select_mode,
+        "V" => markdown_view,
         "G" => goto_line,
         "g" => { "Goto"
             ["in the file"]

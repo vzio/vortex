@@ -1,0 +1,7 @@
+Vortex is a modal editor for the
+terminal. It keeps what makes its parent
+fast, selections before actions, and
+adds a rendered view of Markdown, a git
+log, and a trainer.
+
+A second paragraph, shorter.

@@ -2281,6 +2281,29 @@ fn dashboard(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> a
     Ok(())
 }
 
+/// `:markdown-view` (this fork): the Markdown render mode of the buffer, or back to its source.
+fn markdown_view(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let callback = async move {
+        let call: job::Callback = job::Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                if let Some(view) = compositor.find::<ui::EditorView>() {
+                    view.toggle_markdown(editor);
+                }
+            },
+        ));
+        Ok(call)
+    };
+    cx.jobs.callback(callback);
+    Ok(())
+}
+
 /// `:vortex` (this fork): only the dashboard's vortex, without its blocks.
 fn vortex(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
@@ -4148,6 +4171,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         aliases: &[],
         doc: "Show the dashboard: the project, its languages and the keys to start with.",
         fun: dashboard,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "markdown-view",
+        aliases: &[],
+        doc: "Toggle the Markdown render mode: the buffer rendered as a read-only page, or its source.",
+        fun: markdown_view,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),

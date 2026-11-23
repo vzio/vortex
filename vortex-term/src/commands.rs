@@ -558,6 +558,7 @@ impl MappableCommand {
         history_back, "Go one jump back in history",
         history_forward, "Go one jump forward in history, after going back",
         history_picker, "Open the history picker: the jumps, newest first",
+        markdown_view, "Toggle the Markdown render mode: the buffer rendered, read-only",
         toggle_bookmark, "Set or remove a bookmark on the cursor's line",
         next_bookmark, "Go to the next bookmark",
         prev_bookmark, "Go to the previous bookmark",
@@ -6133,6 +6134,16 @@ fn match_brackets(cx: &mut Context) {
 }
 
 //
+
+/// `V` (this fork): the Markdown render mode of the buffer, or back to its source (the render
+/// mode takes this command over while it is up).
+fn markdown_view(cx: &mut Context) {
+    cx.callback.push(Box::new(|compositor, cx| {
+        if let Some(view) = compositor.find::<ui::EditorView>() {
+            view.toggle_markdown(cx.editor);
+        }
+    }));
+}
 
 fn history_back(cx: &mut Context) {
     crate::history::back(cx);

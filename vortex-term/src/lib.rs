@@ -15,6 +15,7 @@ pub mod history;
 pub mod job;
 pub mod keymap;
 pub mod logging;
+pub mod markdown_view;
 pub mod modes;
 pub mod practice;
 pub mod terminal;

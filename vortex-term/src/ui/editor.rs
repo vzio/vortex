@@ -33,6 +33,7 @@ use vortex_view::{
     keyboard::{KeyCode, KeyModifiers},
     Document, Editor, Theme, View,
 };
+use vortex_view::{DocumentId, ViewId};
 
 use tui::{buffer::Buffer as Surface, text::Span};
 
@@ -55,6 +56,14 @@ pub struct EditorView {
     diagnostic_cells: std::cell::RefCell<Vec<(u16, u16)>>,
     /// The mode bar as last drawn (this fork), for clicks on its badges.
     modebar: Option<crate::ui::modebar::Drawn>,
+    /// The Markdown render mode, drawn over the focused view's buffer while it is up (this
+    /// fork).
+    markdown: Option<crate::markdown_view::MarkdownView>,
+    /// Where the render mode was in each buffer, for history to show it there again.
+    markdown_positions: crate::markdown_view::Positions,
+    /// The focused view and buffer at the last frame: `markdown-view = "always"` renders a
+    /// Markdown buffer when the focus comes to it.
+    markdown_focus: Option<(ViewId, DocumentId)>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +98,112 @@ impl EditorView {
             diagnostic_glitch: Default::default(),
             diagnostic_cells: Default::default(),
             modebar: None,
+            markdown: None,
+            markdown_positions: Default::default(),
+            markdown_focus: None,
+        }
+    }
+
+    /// Opens the Markdown render mode over the focused view's buffer (this fork), at `start`;
+    /// `record` makes it a jump of history (the toggle), not when the buffer was just opened
+    /// rendered (that opening is the jump). Says why not when it can't.
+    pub fn open_markdown(
+        &mut self,
+        editor: &mut Editor,
+        start: crate::markdown_view::Start,
+        record: bool,
+    ) -> bool {
+        match crate::markdown_view::MarkdownView::open(editor, start) {
+            Ok(markdown) => {
+                let from = editor.place();
+                self.dashboard = None;
+                if record {
+                    editor.record_jump(vortex_view::history::Jump::Screen, from);
+                }
+                crate::history::cover(
+                    editor,
+                    vortex_view::history::ScreenKind::Markdown(markdown.doc),
+                );
+                self.markdown = Some(markdown);
+                true
+            }
+            Err(err) => {
+                editor.set_error(err);
+                false
+            }
+        }
+    }
+
+    /// Back to the source (this fork): `sync` puts its cursor at the reading line and its top at
+    /// the page's top (the toggle, `Esc`), not when history shows another place of the buffer.
+    pub fn close_markdown(&mut self, editor: &mut Editor, sync: bool) {
+        if let Some(mut markdown) = self.markdown.take() {
+            if sync && markdown.covers(editor) {
+                markdown.sync_source(editor, true);
+            }
+            self.markdown_positions
+                .insert(markdown.doc, markdown.position());
+        }
+        if editor.screen_cover.is_some_and(|cover| {
+            matches!(cover.kind, vortex_view::history::ScreenKind::Markdown(_))
+        }) {
+            editor.screen_cover = None;
+        }
+    }
+
+    /// `V`, `:markdown-view` (this fork): the render mode of the focused Markdown buffer, or back
+    /// to its source.
+    pub fn toggle_markdown(&mut self, editor: &mut Editor) {
+        if self.live_markdown(editor).is_some() {
+            self.close_markdown(editor, true);
+        } else {
+            self.open_markdown(editor, crate::markdown_view::Start::Source, true);
+        }
+    }
+
+    /// The render mode of `doc`, shown again by history where it was.
+    pub fn show_markdown_again(&mut self, editor: &mut Editor, doc: DocumentId) {
+        let start = match self.markdown_positions.get(&doc) {
+            Some(&(top, reading)) => crate::markdown_view::Start::Page { top, reading },
+            None => crate::markdown_view::Start::Source,
+        };
+        self.open_markdown(editor, start, false);
+    }
+
+    /// The render mode, if it is still up; it is dropped as soon as it isn't (an edit, insert
+    /// mode, another buffer), its position kept for history.
+    pub fn live_markdown(
+        &mut self,
+        editor: &Editor,
+    ) -> Option<&mut crate::markdown_view::MarkdownView> {
+        if self
+            .markdown
+            .as_ref()
+            .is_some_and(|markdown| !markdown.covers(editor))
+        {
+            let markdown = self.markdown.take().unwrap();
+            self.markdown_positions
+                .insert(markdown.doc, markdown.position());
+        }
+        self.markdown.as_mut()
+    }
+
+    /// `markdown-view = "always"` (this fork): a Markdown buffer the focus just came to opens
+    /// rendered.
+    fn markdown_follow_focus(&mut self, editor: &mut Editor) {
+        let view = editor.tree.get(editor.tree.focus);
+        let focus = (view.id, view.doc);
+        if self.markdown_focus == Some(focus) {
+            return;
+        }
+        self.markdown_focus = Some(focus);
+        let doc = &editor.documents[&focus.1];
+        if editor.config().markdown_view == vortex_view::editor::MarkdownViewStartup::Always
+            && crate::markdown_view::is_markdown(doc)
+            && editor.mode() == Mode::Normal
+            && self.live_markdown(editor).is_none()
+        {
+            self.open_markdown(editor, crate::markdown_view::Start::Source, false);
         }
     }
 
@@ -1179,7 +1294,8 @@ impl EditorView {
         let key_result = self.keymaps.get(mode, event);
         cxt.editor.autoinfo = self.keymaps.sticky().map(|node| node.infobox());
 
-        let mut execute_command = |command: &commands::MappableCommand| {
+        let mut execute_command = |command: &commands::MappableCommand,
+                                   cxt: &mut commands::Context| {
             command.execute(cxt);
             vortex_event::dispatch(PostCommand { command, cx: cxt });
 
@@ -1204,17 +1320,46 @@ impl EditorView {
             last_mode = current_mode;
         };
 
+        // the Markdown render mode (this fork) runs its own version of some commands, and the
+        // others on the source at its reading line
+        let markdown = &mut self.markdown;
+        let mut close_markdown = false;
+        let mut through_markdown =
+            |command: &commands::MappableCommand, cxt: &mut commands::Context| -> bool {
+                use crate::markdown_view::CommandResult;
+                match markdown
+                    .as_mut()
+                    .filter(|markdown| markdown.covers(cxt.editor))
+                {
+                    Some(markdown) => match markdown.command(command, cxt) {
+                        CommandResult::Taken => false,
+                        CommandResult::Close => {
+                            close_markdown = true;
+                            false
+                        }
+                        CommandResult::Run => true,
+                    },
+                    None => true,
+                }
+            };
         match &key_result {
             KeymapResult::Matched(command) => {
-                execute_command(command);
+                if through_markdown(command, cxt) {
+                    execute_command(command, cxt);
+                }
             }
             KeymapResult::Pending(node) => cxt.editor.autoinfo = Some(node.infobox()),
             KeymapResult::MatchedSequence(commands) => {
                 for command in commands {
-                    execute_command(command);
+                    if through_markdown(command, cxt) {
+                        execute_command(command, cxt);
+                    }
                 }
             }
             KeymapResult::NotFound | KeymapResult::Cancelled(_) => return Some(key_result),
+        }
+        if close_markdown {
+            self.close_markdown(cxt.editor, true);
         }
         None
     }
@@ -1448,6 +1593,13 @@ impl EditorView {
 
         if let Some(result) = self.click_modebar(event, cxt) {
             return result;
+        }
+
+        // the Markdown render mode (this fork) takes the mouse over its page
+        if let Some(markdown) = self.live_markdown(cxt.editor) {
+            if markdown.handle_mouse(event, cxt.editor) {
+                return EventResult::Consumed(None);
+            }
         }
 
         if let Some(result) = commands::hex::handle_mouse(cxt.editor, event) {
@@ -1863,6 +2015,36 @@ impl Component for EditorView {
                     }
                 }
 
+                // the Markdown render mode (this fork) takes its own keys first (a count for `]`)
+                if !layer_handled
+                    && self.keymaps.pending().is_empty()
+                    && self.pseudo_pending.is_empty()
+                    && self.on_next_key.is_none()
+                {
+                    let result = match self.live_markdown(cx.editor) {
+                        Some(markdown) => markdown.handle_key(key, &mut cx),
+                        None => crate::markdown_view::KeyResult::Ignored,
+                    };
+                    if result == crate::markdown_view::KeyResult::Close {
+                        self.close_markdown(cx.editor, true);
+                    }
+                    if result != crate::markdown_view::KeyResult::Ignored {
+                        let callbacks = take(&mut cx.callback);
+                        let callback: Option<crate::compositor::Callback> = (!callbacks.is_empty())
+                            .then(|| {
+                                Box::new(
+                                    move |compositor: &mut crate::compositor::Compositor,
+                                          cx: &mut Context| {
+                                        for callback in callbacks {
+                                            callback(compositor, cx)
+                                        }
+                                    },
+                                ) as crate::compositor::Callback
+                            });
+                        return EventResult::Consumed(callback);
+                    }
+                }
+
                 // a document in the hex view (this fork) takes its keys first
                 // (not while a sticky menu is open)
                 let hex_handled = layer_handled
@@ -2082,6 +2264,11 @@ impl Component for EditorView {
         if let Some(dashboard) = self.live_dashboard(cx.editor) {
             dashboard.render(cx.editor, editor_area, surface);
         }
+        // the Markdown render mode (this fork), the same way
+        self.markdown_follow_focus(cx.editor);
+        if let Some(markdown) = self.live_markdown(cx.editor) {
+            markdown.render(cx.editor, editor_area, surface);
+        }
 
         crate::practice::render(cx.editor, editor_area, surface);
 
@@ -2187,9 +2374,14 @@ impl Component for EditorView {
         if let Some((pos, kind)) = crate::terminal::cursor(editor) {
             return (Some(pos), kind);
         }
-        // the hex view draws its own cursor, and the dashboard and the debug panel have none
+        // the hex view draws its own cursor, and the dashboard, the Markdown render mode and the
+        // debug panel have none
         if editor.debug.is_focused()
             || doc!(editor).is_hex()
+            || self
+                .markdown
+                .as_ref()
+                .is_some_and(|markdown| markdown.covers(editor))
             || self
                 .dashboard
                 .as_ref()

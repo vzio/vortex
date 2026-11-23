@@ -1,0 +1,7 @@
+┌─────┬───────────────┬─────────────────────────────────────────────────────┐
+│ Key │    Command    │                                             Meaning │
+├─────┼───────────────┼─────────────────────────────────────────────────────┤
+│ V   │ markdown_view │                            Toggle the rendered page │
+│ ]   │ next_heading  │                                        Next heading │
+│ t   │    outline    │ The outline of the page, as a picker you can filter │
+└─────┴───────────────┴─────────────────────────────────────────────────────┘

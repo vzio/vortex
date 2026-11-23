@@ -406,6 +406,17 @@ impl ExplorerPicker {
         };
         let path = entry.node.path.clone();
         match editor.open(&path, action) {
+            // browsing: a Markdown file opens rendered (this fork)
+            Ok(_) if crate::markdown_view::opens_rendered(editor, doc!(editor), true) => {
+                EventResult::Consumed(Some(Box::new(move |compositor: &mut Compositor, cx| {
+                    if close {
+                        compositor.remove(ID);
+                    }
+                    if let Some(view) = compositor.find::<crate::ui::EditorView>() {
+                        view.open_markdown(cx.editor, crate::markdown_view::Start::Source, false);
+                    }
+                })))
+            }
             Ok(_) if close => close_callback(),
             Ok(_) => EventResult::Consumed(None),
             Err(err) => {

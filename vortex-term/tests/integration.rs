@@ -36,6 +36,7 @@ mod test {
     mod inline_blame;
     mod language_theme;
     mod line_history;
+    mod markdown_view;
     mod menus;
     mod modes;
     mod move_lines;

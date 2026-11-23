@@ -147,6 +147,8 @@ impl Application {
                 _ => false,
             };
 
+        // a Markdown file named on the command line opens rendered (this fork)
+        let files_named = !args.load_tutor && !args.files.is_empty();
         if args.load_tutor {
             let path = vortex_loader::runtime_file(Path::new("tutor"));
             editor.open(&path, Action::VerticalSplit)?;
@@ -243,6 +245,10 @@ impl Application {
         if dashboard {
             if let Some(view) = compositor.find::<ui::EditorView>() {
                 view.open_dashboard(&mut editor);
+            }
+        } else if files_named && crate::markdown_view::opens_rendered(&editor, doc!(editor), true) {
+            if let Some(view) = compositor.find::<ui::EditorView>() {
+                view.open_markdown(&mut editor, crate::markdown_view::Start::Source, false);
             }
         }
 
@@ -1333,6 +1339,14 @@ impl Application {
     #[cfg(feature = "integration")]
     pub fn screen(&self) -> &tui::buffer::Buffer {
         self.terminal.backend().buffer()
+    }
+
+    /// The Markdown render mode when it is up, and the editor, for integration tests.
+    #[cfg(feature = "integration")]
+    pub fn markdown(&mut self) -> Option<(&mut crate::markdown_view::MarkdownView, &mut Editor)> {
+        let view = self.compositor.find::<ui::EditorView>()?;
+        let markdown = view.live_markdown(&self.editor)?;
+        Some((markdown, &mut self.editor))
     }
 
     /// The kind of the cursor of the terminal, which is hidden when no component shows one.

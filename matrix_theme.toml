@@ -69,14 +69,29 @@
 "special" = { fg = "bright", modifiers = ["bold"] } # fuzzy highlight
 
 "markup.heading" = { fg = "bright", modifiers = ["bold"] }
+"markup.heading.marker" = { fg = "line", modifiers = ["bold"] }
+"markup.heading.1" = { fg = "bright", bg = "g_3", modifiers = ["bold"] }
+"markup.heading.2" = { fg = "text", bg = "g_2", modifiers = ["bold"] }
+"markup.heading.3" = { fg = "mid", bg = "g_1", modifiers = ["bold"] }
+"markup.heading.4" = { fg = "dim_up", modifiers = ["bold"] }
+"markup.heading.5" = { fg = "dim", modifiers = ["bold"] }
+"markup.heading.6" = { fg = "soft", modifiers = ["italic"] }
 "markup.list" = "mid"
-"markup.bold" = { modifiers = ["bold"] }
-"markup.italic" = { modifiers = ["italic"] }
+"markup.list.unnumbered" = "mid"
+"markup.list.numbered" = "mid"
+"markup.list.checked" = "dim"
+"markup.list.unchecked" = { fg = "bright", modifiers = ["bold"] }
+"markup.bold" = { fg = "bright", modifiers = ["bold"] }
+"markup.italic" = { fg = "text", modifiers = ["italic"] }
+"markup.strikethrough" = { fg = "dim", modifiers = ["crossed_out"] }
 "markup.link" = "text"
-"markup.link.url" = { fg = "text", modifiers = ["italic", "underlined"] }
+"markup.link.url" = { fg = "dim", modifiers = ["italic", "underlined"] }
 "markup.link.text" = "bright"
-"markup.raw" = { fg = "text", bg = "g_2" }
+"markup.link.label" = { fg = "mid", modifiers = ["italic"] }
 "markup.quote" = { fg = "dim_up", modifiers = ["italic"] }
+"markup.raw" = { fg = "text", bg = "g_1" }
+"markup.raw.inline" = { fg = "text", bg = "g_2" }
+"markup.raw.block" = { fg = "text", bg = "g_1" }
 
 "diff.plus" = { fg = "bright", modifiers = ["bold"] }
 "diff.minus" = "dim"
@@ -143,6 +158,11 @@
 
 "ui.cursorline.primary" = { bg = "g_1" }
 "ui.cursorline" = { bg = "g_1" }
+
+# Markdown render mode (this fork): table borders and rules, what a terminal can't show, the reading line
+"ui.markdown.border" = "line"
+"ui.markdown.dim" = { fg = "dim", modifiers = ["italic"] }
+"ui.markdown.reading" = { bg = "reading" }
 
 "ui.highlight" = { fg = "bright", bg = "g_2", underline = { color = "bright", style = "line" }, modifiers = ["bold"] }
 
@@ -309,9 +329,11 @@ faint = "#0f4a22"         # 2.0  indent guides, tracks (decor)
 line = "#17692f"          # 3.1  separators, whitespace (decor)
 dim = "#2fa84f"           # 6.8  comments, inactive, line numbers
 dim_up = "#34b457"        # 7.8  doc comments, punctuation
+soft = "#279a45"          # 5.8  Markdown heading 6
 mid = "#22bb55"           # 8.3  secondary cursors, operators
 text = "#33dd66"          # 11.7 normal text; also the terminal phosphor
 bright = "#7dff9b"        # 16.7 keywords, functions, primary cursor
+reading = "#051409"       # 1.11 the reading line in the Markdown render mode (fill)
 phosphor = "#33dd66"      # 11.7 the terminal panel's green
 
 # Errors, the only other hue

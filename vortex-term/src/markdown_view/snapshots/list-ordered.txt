@@ -1,0 +1,12 @@
+ 8. Eighth step
+ 9. Ninth step
+10. Tenth step, which is long enough to wrap onto
+    a second line of the page
+11. Eleventh step
+
+A second list starts over:
+
+1. Install
+2. Configure
+   1. Edit the config
+   2. Reload it

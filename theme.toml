@@ -67,14 +67,29 @@
 "special" = "purple_light" # fuzzy highlight
 
 "markup.heading" = { fg = "purple_light", modifiers = ["bold"] }
-"markup.list" = "red_dusty"
-"markup.bold" = { modifiers = ["bold"] }
-"markup.italic" = { modifiers = ["italic"] }
+"markup.heading.marker" = { fg = "n_6", modifiers = ["bold"] }
+"markup.heading.1" = { fg = "purple_light", bg = "band_purple", modifiers = ["bold"] }
+"markup.heading.2" = { fg = "red_light", bg = "band_red", modifiers = ["bold"] }
+"markup.heading.3" = { fg = "purple_soft", bg = "band_grey", modifiers = ["bold"] }
+"markup.heading.4" = { fg = "purple_mid", modifiers = ["bold"] }
+"markup.heading.5" = { fg = "red_faded", modifiers = ["bold"] }
+"markup.heading.6" = { fg = "n_8", modifiers = ["italic"] }
+"markup.list" = "red_faded"
+"markup.list.unnumbered" = "red_faded"
+"markup.list.numbered" = "red_light"
+"markup.list.checked" = "n_7"
+"markup.list.unchecked" = "red_light"
+"markup.bold" = { fg = "n_11", modifiers = ["bold"] }
+"markup.italic" = { fg = "n_10", modifiers = ["italic"] }
+"markup.strikethrough" = { fg = "n_7", modifiers = ["crossed_out"] }
 "markup.link" = "red_faded"
-"markup.link.url" = { fg = "red_faded", modifiers = ["italic", "underlined"] }
+"markup.link.url" = { fg = "n_7", modifiers = ["italic", "underlined"] }
 "markup.link.text" = "red_light"
-"markup.raw" = { fg = "n_10", bg = "n_2" }
+"markup.link.label" = "purple_soft"
 "markup.quote" = { fg = "n_8", modifiers = ["italic"] }
+"markup.raw" = { fg = "n_10", bg = "code_block" }
+"markup.raw.inline" = { fg = "n_10", bg = "code" }
+"markup.raw.block" = { fg = "n_10", bg = "code_block" }
 
 "diff.plus" = "purple_light"
 "diff.minus" = "red"
@@ -141,6 +156,11 @@
 
 "ui.cursorline.primary" = { bg = "n_1" }
 "ui.cursorline" = { bg = "deep" }
+
+# Markdown render mode (this fork): table borders and rules, what a terminal can't show, the reading line
+"ui.markdown.border" = "n_5"
+"ui.markdown.dim" = { fg = "n_6", modifiers = ["italic"] }
+"ui.markdown.reading" = { bg = "reading" }
 
 "ui.highlight" = { fg = "purple_light", bg = "n_1", underline = { color = "purple", style = "line" }, modifiers = ["bold"] }
 
@@ -310,6 +330,15 @@ plum = "#3a1d4c"          #      insert mode
 selection = "#211234"     #      secondary selections
 selection_primary = "#2c1745" # primary selection
 deep = "#131313"
+
+# Markdown: heading bands (fills behind levels 1 to 3), code backgrounds, the reading line;
+# contrast of each against the background in comments
+band_purple = "#2a1658"   # 1.24 heading 1
+band_red = "#3a1016"      # 1.16 heading 2
+band_grey = "#26222f"     # 1.23 heading 3
+code = "#222223"          # 1.21 inline code
+code_block = "#1f1f20"    # 1.16 code blocks
+reading = "#1b1b1e"       # 1.12 the reading line in the render mode
 
 # Neutral greys, no tint (n_1 darkest)
 text = "#b1b1b3"

@@ -1,0 +1,4 @@
+Read the guide (https://example.com/guide) first, then see below or
+https://example.com/auto and a local page (docs/setup.md).
+
+Details
