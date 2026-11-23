@@ -1623,9 +1623,9 @@ nothing: a theme without the table draws and idles exactly as one with no effect
 [effects]
 dashboard-charset = "ascii"     # "blocks" (default) or "ascii"
 dashboard-logo = "classic"      # "runes" (default) or "classic"
-glitch-logo = 0.6               # chances per cell per second, 0 (default, off) to 10
+glitch-logo = 0.06              # chances per cell per second, 0 (default, off) to 10
 glitch-background = 0.004
-glitch-diagnostics = 0.01
+glitch-diagnostics = 0.02
 terminal-phosphor = "phosphor"  # a color: a palette name, "#rrggbb" or 0-255; default off
 ```
 
@@ -1638,8 +1638,8 @@ terminal-phosphor = "phosphor"  # a color: a palette name, "#rrggbb" or 0-255; d
 | `glitch-diagnostics` | 0 to 10 | 0 | The glitch rate of the ghost text of error diagnostics |
 | `terminal-phosphor` | a color | off | The terminal panel drawn through a phosphor filter of that color |
 
-The rates are chances per cell per second: `glitch-diagnostics = 0.01` gives each character of an
-error's ghost text a 1% chance a second to glitch.
+The rates are chances per cell per second: `glitch-diagnostics = 0.02` gives each character of an
+error's ghost text a 2% chance a second to glitch.
 
 The table is read once, when the theme loads, and inherited through `inherits` key by key, like
 the palette: a theme that inherits from `matrix` and sets only `dashboard-logo = "runes"` keeps the
@@ -1650,29 +1650,31 @@ default: the theme still loads.
 
 ### The glitch
 
-A glitched cell shows a random character for 100 ms, then goes back to what it was. One
+A glitched cell keeps glitching for 0.4 s: it shows four different random characters, one every
+0.1 s, then goes back to what it was. One
 component does it (`vortex-term/src/ui/glitch.rs`), for any set of cells on screen: the title,
 the vortex and error diagnostics use it now, each with its own rate and duration.
 
 - **When.** Glitches are a Poisson process over the cells on screen: with `n` cells at a rate `r`,
   the time to the next glitch is drawn from an exponential distribution of rate `n × r`, and it
-  lands on one of the cells at random. At any moment about `r × 0.1 s` of the cells are glitched:
-  the Matrix's `glitch-logo = 0.6` keeps about 7 of the classic title's 126 letter cells changing
-  at once, its `glitch-background = 0.004` about 2 of a 160 × 50 vortex's 5,000 cells.
+  lands on one of the cells at random. At any moment about `r × 0.4 s` of the cells are glitched:
+  the Matrix's `glitch-logo = 0.06` keeps about 3 of the classic title's 126 letter cells changing
+  at once, its `glitch-background = 0.004` about 8 of a 160 × 50 vortex's 5,000 cells.
 - **What.** ASCII letters, digits and `@#$%&*+=-:;/\|<>?!`, one column each, in the cell's own
   color: no other Unicode, nothing double-width, so every terminal and font shows it.
 - **No constant redraws.** After a frame, the glitch asks for one more frame at its next change,
-  a glitch starting or one ending, and nothing else: it schedules a single wake-up, kept until a
+  a glitch starting, showing its next character or ending, and nothing else: it schedules a single wake-up, kept until a
   sooner one is needed. Only cells drawn in the frame count, so a vortex or a diagnostic that is
   off screen (or under a panel) asks for nothing, and with no glitch to come the editor stays
   idle. Measured in a pseudo-terminal (release build), over a
   minute at rest with an error diagnostic on screen, its message 44 characters long: with
-  `glitch-diagnostics = 0.01`, 0.7 frames a second (one to start each glitch and one to end it),
-  50 bytes a second written to the terminal, 0.08% of a CPU; the same file in a theme without
+  `glitch-diagnostics = 0.02`, 3.5 frames a second (under 0.9 glitches a second over its 44
+  characters, five frames each: the start, three more characters, the end), 265 bytes a second
+  written to the terminal, 0.33% of a CPU; the same file in a theme without
   effects, 0 frames and 0%.
-  The Matrix's fast logo glitch is the one that keeps frames coming: on its dashboard (with a
-  `static` vortex) about 75 glitches a second over the classic title's 126 letters draw 24 frames
-  a second, writing 4 KiB/s and taking 3.5% of a CPU. Each of those frames draws the whole
+  The Matrix's dashboard is where frames keep coming: with a `static` vortex, about 20 glitches a
+  second over its 5,000 cells and 8 over the classic title's 126 letters draw 24 frames a second,
+  writing 5.3 KiB/s and taking 2.8% of a CPU. Each of those frames draws the whole
   dashboard, but a still vortex reuses the light of its last frame.
 - **Error diagnostics.** Only the ghost text Vortex draws for diagnostics of severity error, at
   the end of the line and inline under it, over its characters (not the spaces between words);
@@ -1735,7 +1737,7 @@ theme = "matrix"
   panel, the hex view, the commit log, watch mode's markers, bookmarks, line history,
   `:practice`...), so nothing falls back to an unreadable default.
 - Its effects: the ASCII charset and the classic logo on the dashboard (runes and the Matrix
-  don't mix), a fast glitch on the logo (0.6), a slow one on the vortex (0.004), 0.01 on error
+  don't mix), a glitch on the logo (0.06), a slow one on the vortex (0.004), 0.02 on error
   diagnostics, and the terminal panel through a phosphor filter of its text green.
 
 Its contrast is tested (WCAG ratios, `vortex-view/src/contrast_tests.rs`): text on the background at least 7:1,

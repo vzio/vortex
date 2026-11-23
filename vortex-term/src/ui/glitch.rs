@@ -1,5 +1,5 @@
 //! The glitch (this fork, see FORK.md, "Theme effects"): a reusable effect that makes cells of
-//! the screen show a random character for a short time, then go back to what they were. The
+//! the screen show random characters for a short time, then go back to what they were. The
 //! dashboard's title and background and the ghost text of error diagnostics use it, each with
 //! the rate its theme sets (`[effects]`).
 //!
@@ -8,9 +8,11 @@
 //!   exponential distribution of rate `n × r`, and the glitch lands on one of the cells at
 //!   random. The process is memoryless, so when the number of cells changes the time is simply
 //!   drawn again from the frame.
-//! - **Characters**: ASCII only ([`CHARS`]), one column each.
+//! - **Characters**: ASCII only ([`CHARS`]), one column each. A glitch lasts [`DURATION`] and
+//!   shows a different character every [`STEP`]: four distinct ones by default.
 //! - **No constant redraws**: the owner draws a frame, then [`Glitch::schedule`] asks for one
-//!   more frame at the next change, a new glitch or one ending, and nothing else. With no cell on
+//!   more frame at the next change, a new glitch, a glitch's next character or one ending, and
+//!   nothing else. With no cell on
 //!   screen (or a rate of 0) nothing is asked for and the editor stays idle.
 //!
 //! The random source is seeded once per run; nothing is saved.
@@ -27,7 +29,10 @@ pub const CHARS: &[u8] =
     b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#$%&*+=-:;/\\|<>?!";
 
 /// How long a glitch shows, by default.
-pub const DURATION: Duration = Duration::from_millis(100);
+pub const DURATION: Duration = Duration::from_millis(400);
+
+/// How long a glitched cell shows each of its characters: a glitch of [`DURATION`] shows four.
+pub const STEP: Duration = Duration::from_millis(100);
 
 /// A small random source (splitmix64): fast, good enough for looks, seeded per run.
 #[derive(Debug, Clone)]
@@ -59,12 +64,28 @@ fn run_seed() -> u64 {
     hasher.finish()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Active {
     /// The cell, as an index into the owner's cells of the frame.
     cell: usize,
-    c: char,
+    /// The characters it shows, one per [`STEP`], all different.
+    chars: Vec<char>,
+    start: Instant,
     until: Instant,
+}
+
+impl Active {
+    /// The index of the character shown at `now`.
+    fn step_at(&self, now: Instant) -> usize {
+        let steps = now.saturating_duration_since(self.start).as_nanos() / STEP.as_nanos();
+        (steps as usize).min(self.chars.len() - 1)
+    }
+
+    /// When it shows its next character, or ends.
+    fn next_change(&self, now: Instant) -> Instant {
+        let next = self.start + STEP * (self.step_at(now) as u32 + 1);
+        next.min(self.until)
+    }
 }
 
 /// A frame asked for at `at`.
@@ -84,6 +105,8 @@ pub struct Glitch {
     next: Option<Instant>,
     cells: usize,
     active: Vec<Active>,
+    /// The time of the last frame, for the characters shown and the next change.
+    now: Option<Instant>,
     wake: Option<Wake>,
     /// The glitches started so far, for the tests' statistics.
     started: u64,
@@ -104,6 +127,7 @@ impl Glitch {
             next: None,
             cells: 0,
             active: Vec::new(),
+            now: None,
             wake: None,
             started: 0,
         }
@@ -128,6 +152,7 @@ impl Glitch {
     /// Brings the glitches to `now`, for a frame showing `cells` cells (visible ones only):
     /// glitches that ended are gone, those due since the last frame start.
     pub fn advance(&mut self, now: Instant, cells: usize) {
+        self.now = Some(now);
         if cells != self.cells {
             // memoryless: the time to the next glitch is drawn again for the new count
             self.cells = cells;
@@ -154,9 +179,14 @@ impl Glitch {
             let until = next + self.duration;
             if until > now {
                 let cell = self.rng.below(cells);
-                let c = CHARS[self.rng.below(CHARS.len())] as char;
+                let chars = self.distinct_chars(self.char_count());
                 self.active.retain(|glitch| glitch.cell != cell);
-                self.active.push(Active { cell, c, until });
+                self.active.push(Active {
+                    cell,
+                    chars,
+                    start: next,
+                    until,
+                });
                 self.started += 1;
             }
             next += self.gap(cells);
@@ -164,17 +194,44 @@ impl Glitch {
         self.next = Some(next);
     }
 
-    /// The glitched cells of the frame: their index among the frame's cells and the character
-    /// they show.
-    pub fn glitched(&self) -> impl Iterator<Item = (usize, char)> + '_ {
-        self.active.iter().map(|glitch| (glitch.cell, glitch.c))
+    /// How many characters a glitch shows: one per [`STEP`] of its duration, at least one.
+    fn char_count(&self) -> usize {
+        let steps = self.duration.as_nanos().div_ceil(STEP.as_nanos());
+        (steps as usize).clamp(1, CHARS.len())
     }
 
-    /// When the glitches change next: a new one, or one ending. `None` when nothing will.
+    /// `count` different characters of [`CHARS`], in a random order.
+    fn distinct_chars(&mut self, count: usize) -> Vec<char> {
+        let mut chars: Vec<char> = Vec::with_capacity(count);
+        while chars.len() < count {
+            let c = CHARS[self.rng.below(CHARS.len())] as char;
+            if !chars.contains(&c) {
+                chars.push(c);
+            }
+        }
+        chars
+    }
+
+    /// The glitched cells of the frame: their index among the frame's cells and the character
+    /// they show now.
+    pub fn glitched(&self) -> impl Iterator<Item = (usize, char)> + '_ {
+        let now = self.now;
+        self.active.iter().map(move |glitch| {
+            let step = now.map_or(0, |now| glitch.step_at(now));
+            (glitch.cell, glitch.chars[step])
+        })
+    }
+
+    /// When the glitches change next: a new one, a glitch's next character, or one ending.
+    /// `None` when nothing will.
     pub fn next_change(&self) -> Option<Instant> {
+        let now = self.now;
         self.active
             .iter()
-            .map(|glitch| glitch.until)
+            .map(|glitch| match now {
+                Some(now) => glitch.next_change(now),
+                None => glitch.until,
+            })
             .chain(self.next)
             .min()
     }
@@ -346,41 +403,109 @@ mod tests {
         }
     }
 
+    /// A lone glitch on one cell for each seed (no second one before it ends): its start.
+    fn lone_glitches(duration: Duration) -> impl Iterator<Item = (Glitch, Instant)> {
+        (1..=50).filter_map(move |seed| {
+            let mut glitch = Glitch::seeded(0.5, seed).with_duration(duration);
+            let t0 = Instant::now();
+            glitch.advance(t0, 1);
+            assert_eq!(glitch.glitched().count(), 0);
+            let start = glitch.next_change().unwrap();
+            glitch.advance(start, 1);
+            assert_eq!(glitch.glitched().count(), 1);
+            // a second glitch before this one ends would replace it: skip those seeds
+            (glitch.next.unwrap() >= start + duration + Duration::from_millis(5))
+                .then_some((glitch, start))
+        })
+    }
+
     #[test]
-    fn a_glitch_shows_for_its_duration() {
-        for (duration, custom) in [(DURATION, false), (Duration::from_millis(350), true)] {
+    fn a_glitch_lasts_0_4_s_and_shows_a_character_every_0_1_s() {
+        assert_eq!(DURATION, Duration::from_millis(400));
+        assert_eq!(STEP, Duration::from_millis(100));
+        let one = Duration::from_millis(1);
+        let mut checked = 0;
+        for (mut glitch, start) in lone_glitches(DURATION) {
+            checked += 1;
+            let mut shown = Vec::new();
+            for step in 0..4u32 {
+                let from = start + STEP * step;
+                // the same character for the whole step
+                let mut chars = Vec::new();
+                for at in [from, from + one, from + STEP / 2, from + STEP - one] {
+                    glitch.advance(at, 1);
+                    let glitched: Vec<_> = glitch.glitched().collect();
+                    assert_eq!(glitched.len(), 1, "step {step}");
+                    assert_eq!(glitched[0].0, 0);
+                    chars.push(glitched[0].1);
+                }
+                assert!(chars.windows(2).all(|w| w[0] == w[1]), "{chars:?}");
+                // the next frame is asked for at the next step, or at the end
+                assert_eq!(glitch.next_change(), Some(from + STEP));
+                shown.push(chars[0]);
+            }
+            // four characters, all different
+            let mut distinct = shown.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            assert_eq!(distinct.len(), 4, "{shown:?}");
+            glitch.advance(start + DURATION, 1);
+            assert_eq!(glitch.glitched().count(), 0);
+        }
+        assert!(checked > 20, "{checked}");
+    }
+
+    #[test]
+    fn a_custom_duration_shows_a_character_per_started_step() {
+        let one = Duration::from_millis(1);
+        for (duration, count) in [
+            (Duration::from_millis(350), 4),
+            (Duration::from_millis(100), 1),
+            (Duration::from_millis(50), 1),
+            (Duration::from_millis(250), 3),
+        ] {
             let mut checked = 0;
-            for seed in 1..=50 {
-                let mut glitch = Glitch::seeded(0.5, seed);
-                if custom {
-                    glitch = glitch.with_duration(duration);
-                }
-                let t0 = Instant::now();
-                glitch.advance(t0, 1);
-                assert_eq!(glitch.glitched().count(), 0);
-                let start = glitch.next_change().unwrap();
-                glitch.advance(start, 1);
-                assert_eq!(glitch.glitched().count(), 1);
-                // a second glitch before this one ends would replace it: skip those seeds
-                if glitch.next.unwrap() < start + duration + Duration::from_millis(5) {
-                    continue;
-                }
+            for (mut glitch, start) in lone_glitches(duration) {
                 checked += 1;
-                let (cell, c) = glitch.glitched().next().unwrap();
-                assert_eq!(cell, 0);
-                let one = Duration::from_millis(1);
-                for at in [one, duration / 2, duration - one] {
-                    glitch.advance(start + at, 1);
-                    assert_eq!(glitch.glitched().collect::<Vec<_>>(), [(0, c)], "{at:?}");
+                let mut shown = Vec::new();
+                let mut at = start;
+                while at < start + duration {
+                    glitch.advance(at, 1);
+                    let (_, c) = glitch.glitched().next().unwrap();
+                    if shown.last() != Some(&c) {
+                        shown.push(c);
+                    }
+                    at += one;
                 }
+                assert_eq!(shown.len(), count, "{duration:?}: {shown:?}");
+                // the last step is cut short by the end
+                glitch.advance(start + duration - one, 1);
                 assert_eq!(glitch.next_change(), Some(start + duration));
                 glitch.advance(start + duration, 1);
-                assert_eq!(glitch.glitched().count(), 0);
-                glitch.advance(start + duration + one, 1);
-                assert_eq!(glitch.glitched().count(), 0);
+                assert_eq!(glitch.glitched().count(), 0, "{duration:?}");
             }
-            assert!(checked > 20, "{checked}");
+            assert!(checked > 20, "{duration:?}: {checked}");
         }
+    }
+
+    #[test]
+    fn the_characters_of_a_glitch_are_always_distinct() {
+        let mut glitch = Glitch::seeded(5.0, 13);
+        let mut now = Instant::now();
+        let mut glitches = 0;
+        for _ in 0..2000 {
+            glitch.advance(now, 50);
+            for active in &glitch.active {
+                assert_eq!(active.chars.len(), 4);
+                let mut chars = active.chars.clone();
+                chars.sort_unstable();
+                chars.dedup();
+                assert_eq!(chars.len(), 4, "{:?}", active.chars);
+            }
+            now += FRAME;
+        }
+        glitches += glitch.started();
+        assert!(glitches > 1000, "{glitches}");
     }
 
     #[test]
@@ -433,9 +558,10 @@ mod tests {
         let frames = run_on_demand(&mut glitch, Instant::now(), 40, seconds);
         let started = glitch.started() as usize;
         assert!(started > 300, "{started}");
-        // one frame to start each glitch, one to end it, and the first
+        // per glitch, one frame to start it, one for each of its three other characters and one
+        // to end it, and the first; a glitch replaced on its cell before it ends has fewer
         assert!(
-            frames + 5 >= 2 * started && frames <= 2 * started + 5,
+            frames + 5 >= 4 * started && frames <= 5 * started + 5,
             "{frames} frames for {started} glitches"
         );
         assert!(frames < seconds as usize * 30 / 10, "{frames}");

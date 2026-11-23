@@ -290,9 +290,9 @@ hint = { fg = "dim", bg = "g_1", modifiers = ["italic"] }
 [effects]
 dashboard-charset = "ascii"
 dashboard-logo = "classic"
-glitch-logo = 0.6
+glitch-logo = 0.06
 glitch-background = 0.004
-glitch-diagnostics = 0.01
+glitch-diagnostics = 0.02
 terminal-phosphor = "phosphor"
 
 [palette]
