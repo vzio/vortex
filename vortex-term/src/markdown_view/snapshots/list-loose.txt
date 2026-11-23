@@ -1,6 +1,6 @@
-• First, a paragraph of its own.
+- First, a paragraph of its own.
 
-• Second, with more to say than fits in
+- Second, with more to say than fits in
   one line of the page.
 
-• Third.
+- Third.

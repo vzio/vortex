@@ -47,7 +47,8 @@ impl Line {
             let width = piece.width();
             if let Some(link) = piece.link {
                 match links.last_mut() {
-                    Some(last) if last.2 == link && last.1 == column => last.1 += width,
+                    // (a link and its address after it are one link: one stop for `Tab`)
+                    Some(last) if last.2 == link => last.1 = column + width,
                     _ => links.push((column, column + width, link)),
                 }
             }
@@ -224,10 +225,16 @@ impl Page {
             .map(|heading| heading.line)
     }
 
-    /// The line of the page that shows the source's line `source`: the first line from it, or
-    /// else the last line of the body before it.
+    /// The line of the page that shows the source's line `source`: the first line from it with
+    /// text (not the blank line before its block), or else the last line of the body before it.
     pub fn line_of_source(&self, source: usize) -> usize {
-        if let Some(line) = self.lines.iter().position(|line| line.source == source) {
+        let from = |line: &Line| line.source == source;
+        if let Some(line) = self
+            .lines
+            .iter()
+            .position(|line| from(line) && !line.pieces.is_empty())
+            .or_else(|| self.lines.iter().position(from))
+        {
             return line;
         }
         self.lines[..self.body_end]

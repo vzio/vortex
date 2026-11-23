@@ -1,0 +1,13 @@
+Vortex renders a Markdown file as a
+page, and keeps its prose at a
+comfortable width.
+
+┌──────────────────────┬─────────────────────────────────────────────┐
+│ Command              │ What it does                                │
+├──────────────────────┼─────────────────────────────────────────────┤
+│ markdown_view_toggle │ Toggle the rendered page of a Markdown doc  │
+│ goto_next_heading    │ Put the next heading at the top of the page │
+└──────────────────────┴─────────────────────────────────────────────┘
+
+Back to prose, which wraps at the narrow
+width again.

@@ -89,6 +89,37 @@ const CHANGES: &str = "\
 Older things, written long before the render mode existed.
 ";
 
+/// A page with a long paragraph and a table 130 cells wide as it is.
+fn reference() -> String {
+    let command = |i: usize| format!("{:_<30}", format!("reload_{i}"));
+    let what = |i: usize| {
+        format!(
+            "{:.<93}",
+            format!(
+                "Reloads the configuration of the editor and applies it to every open view, step {i}"
+            )
+        )
+    };
+    let mut table = format!("| {:<30} | {:<93} |\n", "Command", "What it does");
+    table += &format!("|{}|{}|\n", "-".repeat(32), "-".repeat(95));
+    for i in 1..=3 {
+        table += &format!("| {} | {} |\n", command(i), what(i));
+    }
+    format!(
+        "\
+# Reference
+
+Welcome to the reference. It describes every command of the editor, one after the other, \
+in the order a newcomer meets them, with what each does and which keys run it. Read it \
+from the top, or jump to the command you need with the outline, and come back to the \
+prose whenever a table gets in the way.
+
+{table}
+Thanks for reading.
+"
+    )
+}
+
 const MAIN: &str = "fn main() {\n    println!(\"vortex\");\n}\n";
 
 struct Fixture {
@@ -96,6 +127,7 @@ struct Fixture {
     guide: PathBuf,
     changes: PathBuf,
     main: PathBuf,
+    reference: PathBuf,
     name: String,
 }
 
@@ -114,6 +146,7 @@ fn fixture() -> Fixture {
         guide: write("guide.md", &guide()),
         changes: write("changes.md", CHANGES),
         main: write("main.rs", MAIN),
+        reference: write("reference.md", &reference()),
         name: dir.path().file_name().unwrap().to_string_lossy().into(),
         _dir: dir,
     }
@@ -127,31 +160,26 @@ fn config(startup: MarkdownViewStartup) -> Config {
 
 fn theme() -> vortex_view::Theme {
     vortex_view::Theme::from(
-        toml::from_str::<toml::Value>(&format!(
+        toml::from_str::<toml::Value>(
             r##"
-"ui.selection" = {{ bg = "#333333" }}
-"ui.markdown.link.selected" = {{ bg = "#ff00ff" }}
-"##
-        ))
+"ui.selection" = { bg = "#333333" }
+"ui.markdown.link.selected" = { bg = "#ff00ff" }
+"##,
+        )
         .unwrap(),
     )
 }
 
 /// A session on `file` named on the command line, after its first frame, in a terminal of
 /// `width` by `height` cells.
-async fn session_with(
-    config: Config,
-    file: &Path,
-    width: u16,
-    height: u16,
-) -> Session {
+async fn session_with(config: Config, file: &Path, width: u16, height: u16) -> Session {
     let app = AppBuilder::new()
         .with_config(config)
         .with_file(file, None)
         .build()
         .unwrap();
     let mut session = Session::with_app(app);
-    session.app.editor.theme = theme();
+    session.app.editor.set_theme(theme()).unwrap();
     session.first_frame().await;
     session.resize(width, height).await;
     session
@@ -222,7 +250,12 @@ fn source_of(session: &mut Session, line: usize) -> usize {
 }
 
 fn offset(session: &mut Session, block: usize) -> usize {
-    session.app.markdown().expect("the render mode").0.offset(block)
+    session
+        .app
+        .markdown()
+        .expect("the render mode")
+        .0
+        .offset(block)
 }
 
 /// The row of the screen with `text`, as text, and its number.
@@ -250,6 +283,13 @@ fn background_at(session: &Session, column: usize, row: usize) -> Color {
         .get(column as u16, row as u16)
         .unwrap()
         .bg
+}
+
+/// The rows of the screen but the last, which has the message of the status line.
+fn body(session: &Session) -> Vec<String> {
+    let mut rows = session.rows();
+    rows.pop();
+    rows
 }
 
 fn path_of(session: &Session) -> PathBuf {
@@ -287,13 +327,7 @@ fn register(session: &Session, name: char) -> Option<Vec<String>> {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_page_is_a_hundred_wide_and_centered() {
     let fixture = fixture();
-    let session = session_with(
-        config(MarkdownViewStartup::Browse),
-        &fixture.guide,
-        160,
-        30,
-    )
-    .await;
+    let session = session_with(config(MarkdownViewStartup::Browse), &fixture.guide, 160, 30).await;
     // (60 cells of margin, half on each side)
     assert_eq!(column_of(&session, "Welcome to Vortex"), 30);
     let (_, row) = row_with(&session, "Welcome to Vortex");
@@ -325,14 +359,108 @@ async fn the_width_can_be_narrower() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_window_narrower_than_the_cap_gives_it_all_but_the_margins() {
     let fixture = fixture();
+    let session = session_with(config(MarkdownViewStartup::Browse), &fixture.guide, 80, 30).await;
+    assert_eq!(column_of(&session, "Welcome to Vortex"), 1);
+}
+
+/// The columns of the table on the screen: its top border, and the rows it takes.
+fn table_on_screen(session: &Session) -> (usize, usize, usize) {
+    let rows = session.rows();
+    let top = rows
+        .iter()
+        .position(|row| row.contains('┌'))
+        .unwrap_or_else(|| panic!("a table: {rows:#?}"));
+    let bottom = rows
+        .iter()
+        .position(|row| row.contains('└'))
+        .unwrap_or_else(|| panic!("the end of the table: {rows:#?}"));
+    let border: Vec<char> = rows[top].chars().collect();
+    let start = border.iter().position(|c| *c == '┌').unwrap();
+    let end = border.iter().position(|c| *c == '┐').unwrap();
+    (start, end - start + 1, bottom - top + 1)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wide_table_breaks_out_of_the_reading_width() {
+    let fixture = fixture();
     let session = session_with(
         config(MarkdownViewStartup::Browse),
-        &fixture.guide,
-        80,
+        &fixture.reference,
+        160,
         30,
     )
     .await;
-    assert_eq!(column_of(&session, "Welcome to Vortex"), 1);
+    // the prose: 100 wide, from the column 30
+    assert_eq!(column_of(&session, "Welcome to the reference"), 30);
+    let (_, first) = row_with(&session, "Welcome to the reference");
+    let first: Vec<char> = first.chars().skip(30).collect();
+    assert!(first.iter().collect::<String>().trim_end().chars().count() <= 100);
+    let rows = session.rows();
+    let continued = rows
+        .iter()
+        .position(|row| row.contains("Welcome to the reference"))
+        .unwrap();
+    assert!(
+        rows[continued + 1].trim().len() > 20,
+        "the paragraph wraps: {rows:#?}"
+    );
+    assert!(rows[continued + 1..continued + 5]
+        .iter()
+        .all(|row| row.chars().take(30).all(|c| c == ' ')));
+
+    // the table: whole, 130 wide, wider than the prose, header + rule + 3 rows + 2 borders
+    let (start, width, height) = table_on_screen(&session);
+    assert_eq!(width, 130);
+    assert_eq!(height, 7);
+    assert!(start < 30, "it comes out on the left: {start}");
+    assert!(start + width <= 160);
+    let rows = session.rows();
+    assert!(rows.iter().any(|row| row.contains("reload_3")));
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("applies it to every open view, step 3")),
+        "no cell wraps: {rows:#?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_table_wraps_when_the_window_is_too_narrow() {
+    let fixture = fixture();
+    let session = session_with(
+        config(MarkdownViewStartup::Browse),
+        &fixture.reference,
+        70,
+        40,
+    )
+    .await;
+    let (start, width, height) = table_on_screen(&session);
+    // all the window but the margins
+    assert_eq!(start, 1);
+    assert_eq!(width, 68);
+    assert!(height > 10, "the cells wrap: {:#?}", session.rows());
+    let rows = session.rows();
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains("applies it to every open view, step 3")),
+        "{rows:#?}"
+    );
+    // (and the prose: all the window but the margins)
+    assert_eq!(column_of(&session, "Welcome to the reference"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_cap_the_prose_fills_the_window_and_the_table_is_whole() {
+    let fixture = fixture();
+    let mut config = config(MarkdownViewStartup::Browse);
+    config.editor.markdown_width = 0;
+    let session = session_with(config, &fixture.reference, 160, 30).await;
+    assert_eq!(column_of(&session, "Welcome to the reference"), 1);
+    let (_, first) = row_with(&session, "Welcome to the reference");
+    let used = first.trim_end().chars().count();
+    assert!(used > 130 && used <= 159, "{used}: {first:?}");
+    let (start, width, height) = table_on_screen(&session);
+    assert_eq!((start, width, height), (1, 130, 7));
 }
 
 // the keys
@@ -386,10 +514,14 @@ async fn brackets_go_to_the_headings() {
     let mut session = rendered(&fixture.guide).await;
     let installing = line_of(&mut session, "Installing");
     let using = line_of(&mut session, "Using it");
+    // the page's last screen: where its top stops
+    session.keys("ge").await;
+    let last_top = top(&mut session);
+    session.keys("gg").await;
     session.keys("]").await;
     assert_eq!(reading(&mut session), installing);
-    // at the top of the screen
-    assert_eq!(top(&mut session), installing);
+    // at the top of the screen (as far as the page allows)
+    assert_eq!(top(&mut session), installing.min(last_top));
     session.keys("]").await;
     assert_eq!(reading(&mut session), using);
     session.keys("[").await;
@@ -464,8 +596,11 @@ async fn a_search_is_case_insensitive_unless_it_has_capitals() {
     session.keys("/credits<ret>").await;
     assert_eq!(reading(&mut session), credits);
     session.keys("gg/CREDITS<ret>").await;
-    // no match: stays where the search started
+    // case-sensitive: nothing matches, so the reading line is back where the search started
+    // (although `C` matched on the way), and there is no `n` to go to
     assert_eq!(reading(&mut session), 0);
+    session.keys("n").await;
+    assert_eq!(status(&session.app), "No matches");
     session.keys("/Thanks<ret>").await;
     assert_eq!(reading(&mut session), credits + 2);
 }
@@ -576,7 +711,10 @@ async fn enter_on_a_local_markdown_file_opens_it_rendered_at_its_heading() {
         .position(|line| line.trim() == "History")
         .unwrap();
     assert_eq!(reading(&mut session), history);
-    assert!(session.rows().iter().any(|row| row.contains("Older things")));
+    assert!(session
+        .rows()
+        .iter()
+        .any(|row| row.contains("Older things")));
 
     // `ga` goes back to the page we left
     session.keys("ga").await;
@@ -607,7 +745,11 @@ async fn question_mark_opens_the_key_help() {
     let mut session = rendered(&fixture.guide).await;
     session.keys("?").await;
     let rows = session.rows();
-    for expected in ["Markdown", "next / previous heading", "next / previous link"] {
+    for expected in [
+        "Markdown",
+        "next / previous heading",
+        "next / previous link",
+    ] {
         assert!(
             rows.iter().any(|row| row.contains(expected)),
             "{expected}: {rows:#?}"
@@ -634,12 +776,15 @@ async fn v_opens_the_page_at_the_cursors_line() {
     assert!(!up(&mut session));
     // "## Using it" is the line 20 (1-based 21) of the source
     let using = guide().lines().position(|l| l == "## Using it").unwrap();
-    session.keys(&format!("{using}j")).await;
+    // (not `j`: the long line of the source wraps, and `j` goes through its rows)
+    session.keys(&format!(":{}<ret>", using + 1)).await;
     assert_eq!(cursor_line(&session), using);
     session.keys("V").await;
     assert!(up(&mut session));
     let reading = reading(&mut session);
     assert_eq!(source_of(&mut session, reading), using);
+    // the heading itself, not the blank line above its block
+    assert_eq!(page(&mut session)[reading].trim(), "Using it");
     assert!(session.rows().iter().any(|row| row.contains("Credits")) || top(&mut session) > 0);
     assert_eq!(session.app.editor.mode(), Mode::Normal);
 }
@@ -724,7 +869,10 @@ async fn the_status_row_names_the_mode_and_the_place() {
     assert!(last.contains("Installing"), "{last:?}");
     let total = page(&mut session).len();
     let reading = reading(&mut session);
-    assert!(last.contains(&format!("{}/{total}", reading + 1)), "{last:?}");
+    assert!(
+        last.contains(&format!("{}/{total}", reading + 1)),
+        "{last:?}"
+    );
 }
 
 // the keys that edit
@@ -893,7 +1041,10 @@ async fn capital_h_and_l_scroll_by_half_and_gh_gl_go_to_the_ends() {
     session.keys("gh").await;
     assert_eq!(offset(&mut session, 0), 0);
     let drawn = long_row(&session, row);
-    assert!(drawn.contains("cargo install") && drawn.contains('>'), "{drawn:?}");
+    assert!(
+        drawn.contains("cargo install") && drawn.contains('>'),
+        "{drawn:?}"
+    );
     assert!(!drawn.contains('<'), "{drawn:?}");
 }
 
@@ -929,12 +1080,12 @@ async fn h_and_l_outside_a_code_block_change_nothing() {
     let fixture = fixture();
     let mut session = rendered(&fixture.guide).await;
     session.resize(120, 40).await;
-    let rows = session.rows();
+    let rows = body(&session);
     for keys in ["l", "h", "L", "H", "gl", "gh", "3l"] {
         session.keys(keys).await;
         assert_eq!(reading(&mut session), 0, "{keys}");
         assert_eq!(offset(&mut session, 0), 0, "{keys}");
-        assert_eq!(session.rows(), rows, "{keys}");
+        assert_eq!(body(&session), rows, "{keys}");
         assert!(up(&mut session), "{keys}");
     }
     // the source cursor did not move either: still on its first line
@@ -953,7 +1104,7 @@ async fn leaving_and_coming_back_resets_the_offsets() {
     session.keys("V").await;
     assert!(up(&mut session));
     assert_eq!(offset(&mut session, 0), 0);
-    let (_, row) = row_with(&session, "cargo install");
+    let (row, _) = row_with(&session, "cargo install");
     assert!(long_row(&session, row).contains('>'));
     assert!(!long_row(&session, row).contains('<'));
 }
@@ -965,8 +1116,13 @@ async fn a_search_scrolls_a_cut_block_to_its_match() {
     session.keys("/directory/destination$<ret>").await;
     // (the line is repeated: the last one is out of sight at the start)
     let _ = reading(&mut session);
-    session.keys("gg/releases/2026/destination/directory$<ret>").await;
-    assert!(offset(&mut session, 0) > 0, "the block scrolled to the match");
+    session
+        .keys("gg/releases/2026/destination/directory$<ret>")
+        .await;
+    assert!(
+        offset(&mut session, 0) > 0,
+        "the block scrolled to the match"
+    );
 }
 
 // when a file opens rendered
@@ -977,7 +1133,8 @@ async fn from_the_tree(session: &mut Session, fixture: &Fixture, name: &str) {
     session.keys(&format!("'{} '{name}", fixture.name)).await;
     session
         .wait_for_screen("the filtered tree", |rows| {
-            rows.iter().any(|row| row.contains(name)) && !rows.iter().any(|row| row.contains("+ contrib/"))
+            rows.iter().any(|row| row.contains(name))
+                && !rows.iter().any(|row| row.contains("+ contrib/"))
         })
         .await;
     session.keys("<ret>").await;
@@ -987,13 +1144,8 @@ async fn from_the_tree(session: &mut Session, fixture: &Fixture, name: &str) {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_markdown_file_opened_from_the_tree_is_rendered() {
     let fixture = fixture();
-    let mut session = session_with(
-        config(MarkdownViewStartup::Browse),
-        &fixture.main,
-        120,
-        16,
-    )
-    .await;
+    let mut session =
+        session_with(config(MarkdownViewStartup::Browse), &fixture.main, 120, 16).await;
     assert!(!up(&mut session));
     from_the_tree(&mut session, &fixture, "guide.md").await;
     assert_eq!(path_of(&session), fixture.guide);
@@ -1004,13 +1156,8 @@ async fn a_markdown_file_opened_from_the_tree_is_rendered() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_source_file_from_the_tree_is_not() {
     let fixture = fixture();
-    let mut session = session_with(
-        config(MarkdownViewStartup::Browse),
-        &fixture.guide,
-        120,
-        16,
-    )
-    .await;
+    let mut session =
+        session_with(config(MarkdownViewStartup::Browse), &fixture.guide, 120, 16).await;
     assert!(up(&mut session));
     from_the_tree(&mut session, &fixture, "main.rs").await;
     assert_eq!(path_of(&session), fixture.main);
@@ -1020,19 +1167,17 @@ async fn a_source_file_from_the_tree_is_not() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_file_picker_and_open_show_the_source() {
     let fixture = fixture();
-    let mut session = session_with(
-        config(MarkdownViewStartup::Browse),
-        &fixture.main,
-        120,
-        16,
-    )
-    .await;
+    let mut session =
+        session_with(config(MarkdownViewStartup::Browse), &fixture.main, 120, 16).await;
     session
         .keys(&format!(":open {}<ret>", fixture.guide.display()))
         .await;
     assert_eq!(path_of(&session), fixture.guide);
     assert!(!up(&mut session), "{:#?}", session.rows());
-    assert!(session.rows().iter().any(|row| row.contains("# Vortex Guide")));
+    assert!(session
+        .rows()
+        .iter()
+        .any(|row| row.contains("# Vortex Guide")));
 
     // the file picker
     session
@@ -1042,7 +1187,8 @@ async fn the_file_picker_and_open_show_the_source() {
     session.keys(&format!("{} changes.md", fixture.name)).await;
     session
         .wait_for_screen("the file picker", |rows| {
-            rows.iter().any(|row| row.contains("changes.md") && row.contains(" > "))
+            rows.iter()
+                .any(|row| row.contains("changes.md") && row.contains(" > "))
         })
         .await;
     session.keys("<ret>").await;
@@ -1054,23 +1200,12 @@ async fn the_file_picker_and_open_show_the_source() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_file_named_on_the_command_line_is_rendered() {
     let fixture = fixture();
-    let mut session = session_with(
-        config(MarkdownViewStartup::Browse),
-        &fixture.guide,
-        120,
-        16,
-    )
-    .await;
+    let mut session =
+        session_with(config(MarkdownViewStartup::Browse), &fixture.guide, 120, 16).await;
     assert!(up(&mut session));
     assert_eq!(path_of(&session), fixture.guide);
     // and a source file is not
-    let session = session_with(
-        config(MarkdownViewStartup::Browse),
-        &fixture.main,
-        120,
-        16,
-    )
-    .await;
+    let session = session_with(config(MarkdownViewStartup::Browse), &fixture.main, 120, 16).await;
     let mut session = session;
     assert!(!up(&mut session));
 }
@@ -1078,26 +1213,16 @@ async fn a_file_named_on_the_command_line_is_rendered() {
 #[tokio::test(flavor = "multi_thread")]
 async fn never_opens_the_source_but_v_works() {
     let fixture = fixture();
-    let mut session = session_with(
-        config(MarkdownViewStartup::Never),
-        &fixture.guide,
-        120,
-        16,
-    )
-    .await;
+    let mut session =
+        session_with(config(MarkdownViewStartup::Never), &fixture.guide, 120, 16).await;
     assert!(!up(&mut session));
     session.keys("V").await;
     assert!(up(&mut session));
     session.keys("V").await;
     assert!(!up(&mut session));
 
-    let mut session = session_with(
-        config(MarkdownViewStartup::Never),
-        &fixture.main,
-        120,
-        16,
-    )
-    .await;
+    let mut session =
+        session_with(config(MarkdownViewStartup::Never), &fixture.main, 120, 16).await;
     from_the_tree(&mut session, &fixture, "guide.md").await;
     assert_eq!(path_of(&session), fixture.guide);
     assert!(!up(&mut session), "{:#?}", session.rows());
@@ -1108,13 +1233,8 @@ async fn never_opens_the_source_but_v_works() {
 #[tokio::test(flavor = "multi_thread")]
 async fn always_renders_what_the_focus_comes_to() {
     let fixture = fixture();
-    let mut session = session_with(
-        config(MarkdownViewStartup::Always),
-        &fixture.main,
-        120,
-        16,
-    )
-    .await;
+    let mut session =
+        session_with(config(MarkdownViewStartup::Always), &fixture.main, 120, 16).await;
     assert!(!up(&mut session));
     // `:open` of a Markdown file
     session
@@ -1169,19 +1289,28 @@ fn the_themes_have_what_the_page_needs() {
     for name in ["vortex", "matrix"] {
         let theme = Loader::new(&[]).load(name).unwrap();
         let strike = theme.try_get("markup.strikethrough").unwrap();
-        assert!(strike.add_modifier.contains(Modifier::CROSSED_OUT), "{name}");
+        assert!(
+            strike.add_modifier.contains(Modifier::CROSSED_OUT),
+            "{name}"
+        );
         let headings: Vec<_> = (1..=6)
             .map(|level| theme.get(&format!("markup.heading.{level}")))
             .collect();
         for (level, heading) in headings.iter().enumerate() {
             assert!(heading.fg.is_some(), "{name}: heading {}", level + 1);
             // a band on the first three levels only
-            assert_eq!(heading.bg.is_some(), level < 3, "{name}: heading {}", level + 1);
+            assert_eq!(
+                heading.bg.is_some(),
+                level < 3,
+                "{name}: heading {}",
+                level + 1
+            );
         }
         for a in 0..6 {
             for b in a + 1..6 {
                 assert_ne!(
-                    headings[a].fg, headings[b].fg,
+                    headings[a].fg,
+                    headings[b].fg,
                     "{name}: headings {} and {} look alike",
                     a + 1,
                     b + 1

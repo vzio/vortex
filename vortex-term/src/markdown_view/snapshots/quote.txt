@@ -3,4 +3,4 @@
 ▎
 ▎ ▎ A nested quote, with a second bar.
 ▎
-▎ • and a list
+▎ - and a list

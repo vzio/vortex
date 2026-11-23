@@ -1,7 +1,7 @@
-• Editors
-  ◦ Modal
-    ▪ Helix
-    ▪ Vim
-  ◦ Modeless
-• Terminals
-  ◦ Fast ones
+- Editors
+  * Modal
+    + Kakoune
+    + Vim
+  * Modeless
+- Terminals
+  * Fast ones

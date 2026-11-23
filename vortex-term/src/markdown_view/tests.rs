@@ -7,11 +7,10 @@
 
 use std::path::Path;
 
-use vortex_view::graphics::Style;
 use vortex_view::theme::{Loader, Modifier};
 use vortex_view::Theme;
 
-use super::page::Page;
+use super::page::{Page, Widths};
 
 fn loader() -> vortex_core::syntax::Loader {
     vortex_core::config::default_lang_loader()
@@ -19,8 +18,12 @@ fn loader() -> vortex_core::syntax::Loader {
 
 /// The page of `source` at `width` as text, for the tests.
 fn render(source: &str, width: usize) -> Vec<String> {
+    render_at(source, Widths::uniform(width))
+}
+
+fn render_at(source: &str, widths: Widths) -> Vec<String> {
     let theme = Theme::default();
-    Page::new(source, width, &theme, &loader())
+    Page::new(source, widths, &theme, &loader())
         .lines
         .iter()
         .map(|line| line.text().trim_end().to_string())
@@ -30,7 +33,7 @@ fn render(source: &str, width: usize) -> Vec<String> {
 /// The page with the theme `name` (a built-in one).
 fn themed(source: &str, width: usize, name: &str) -> Page {
     let theme = Loader::new(&[]).load(name).unwrap();
-    Page::new(source, width, &theme, &loader())
+    Page::new(source, Widths::uniform(width), &theme, &loader())
 }
 
 fn theme_named(name: &str) -> Theme {
@@ -40,7 +43,11 @@ fn theme_named(name: &str) -> Theme {
 /// Compares the page of `source` at `width` with `snapshots/<name>.txt`, or writes it there
 /// when it is missing or `UPDATE_SNAPSHOTS` is set (and then fails when it was missing).
 fn snapshot(name: &str, source: &str, width: usize) {
-    let mut drawn = render(source, width).join("\n");
+    snapshot_at(name, source, Widths::uniform(width));
+}
+
+fn snapshot_at(name: &str, source: &str, widths: Widths) {
+    let mut drawn = render_at(source, widths).join("\n");
     drawn.push('\n');
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/markdown_view/snapshots")
@@ -106,7 +113,7 @@ fn nested_lists_have_a_bullet_per_depth() {
         "\
 - Editors
   - Modal
-    - Helix
+    - Kakoune
     - Vim
   - Modeless
 - Terminals
@@ -332,7 +339,7 @@ fn a_level_one_heading_has_the_band_of_the_theme() {
         assert!(heading.bg.is_some(), "{name} has a band on level 1");
         let page = themed("# Title\n\nBody\n", 40, name);
         let line = &page.lines[0];
-        let (column, fill) = line.fill.expect("the band");
+        let (column, _, fill) = line.fill.expect("the band");
         assert_eq!(column, 0);
         assert_eq!(fill.bg, heading.bg, "{name}");
         for piece in &line.pieces {
@@ -409,7 +416,7 @@ fn code_block_lines_have_the_background_of_the_theme() {
         .collect();
     assert_eq!(code.len(), 2);
     for line in code {
-        let (_, fill) = line.fill.expect("a fill");
+        let (_, _, fill) = line.fill.expect("a fill");
         assert_eq!(fill.bg, block.bg);
         assert_eq!(line.code, Some(0));
     }
@@ -461,7 +468,11 @@ fn headings_have_the_anchors_of_github() {
         page.anchor("the-v-key-markdown"),
         Some(page.headings[1].line)
     );
-    assert_eq!(page.anchor("%C3%9Cn%C3%AFcode-%26-more_stuff"), None);
+    // as written in a link, percent-encoded
+    assert_eq!(
+        page.anchor("%C3%9Cn%C3%AFcode-%26-more_stuff"),
+        Some(page.headings[3].line)
+    );
     assert_eq!(page.anchor("nothing"), None);
     assert_eq!(page.headings[1].text, "The V key (Markdown)");
     assert_eq!(page.headings[1].level, 2);
@@ -482,8 +493,12 @@ fn the_source_lines_map_back_to_the_page() {
     assert_eq!(page.lines[code].text().trim(), "code");
     assert!(page.lines[code].code.is_some());
     // the item
+    // (the blank line before a block has the block's source line: the first line of it)
     let item = page.line_of_source(9);
-    assert!(page.lines[item].text().contains("item"));
+    assert_eq!(page.lines[item].source, 9);
+    assert!(page.lines[item..]
+        .iter()
+        .any(|line| line.text().contains("item")));
     // a source line past the end is the last line of the body
     assert_eq!(page.line_of_source(100), page.body_end - 1);
     // and a line with nothing on the page (the blank one) is the line before it
@@ -512,5 +527,332 @@ fn links_are_listed_by_line() {
     assert_eq!(page.internal_target(&page.links[links[0].2]), None);
 }
 
-#[allow(dead_code)]
-fn unused(_: Style) {}
+// the reading width: prose at its own width, tables and code blocks at the window's
+
+fn width_of(lines: &[String]) -> usize {
+    use vortex_core::unicode::width::UnicodeWidthStr;
+    lines.iter().map(|line| line.width()).max().unwrap_or(0)
+}
+
+fn pages(source: &str, widths: Widths) -> Page {
+    Page::new(source, widths, &Theme::default(), &loader())
+}
+
+const PROSE_AND_TABLE: &str = "\
+Vortex renders a Markdown file as a page, and keeps its prose at a comfortable width.
+
+| Command              | What it does                               |
+|----------------------|--------------------------------------------|
+| markdown_view_toggle | Toggle the rendered page of a Markdown doc |
+| goto_next_heading    | Put the next heading at the top of the page |
+
+Back to prose, which wraps at the narrow width again.
+";
+
+#[test]
+fn a_table_breaks_out_of_the_prose_width() {
+    // as wide as it is
+    let natural = render(PROSE_AND_TABLE, 200);
+    let table: Vec<_> = natural
+        .iter()
+        .filter(|line| line.starts_with(['┌', '│', '├', '└']))
+        .collect();
+    assert_eq!(table.len(), 6, "{natural:#?}");
+    let table_width = width_of(
+        &table
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(table_width, 70, "{natural:#?}");
+
+    let widths = Widths {
+        prose: 40,
+        wide: 100,
+    };
+    let page = pages(PROSE_AND_TABLE, widths);
+    let drawn = render_at(PROSE_AND_TABLE, widths);
+    // the prose wraps at 40, the table is whole
+    for line in &drawn {
+        if !line.starts_with(['┌', '│', '├', '└']) {
+            assert!(line.chars().count() <= 40, "{line:?}");
+        }
+    }
+    let rows: Vec<_> = drawn
+        .iter()
+        .filter(|line| line.starts_with(['┌', '│', '├', '└']))
+        .collect();
+    assert_eq!(rows, table, "the table is the same as with all the room");
+    // 70 columns fit in the right room (100 - 30): no shift
+    assert_eq!(widths.left_room(), 30);
+    assert!(page.lines.iter().all(|line| line.shift == 0));
+    snapshot_at("widths-40-100", PROSE_AND_TABLE, widths);
+}
+
+#[test]
+fn a_table_wider_than_the_right_room_is_shifted_left() {
+    let widths = Widths {
+        prose: 40,
+        wide: 100,
+    };
+    // 70 columns, but only 60 on the right of the prose's left edge
+    let narrow = Widths {
+        prose: 40,
+        wide: 80,
+    };
+    assert_eq!(narrow.left_room(), 20);
+    let page = pages(PROSE_AND_TABLE, narrow);
+    let table: Vec<_> = page
+        .lines
+        .iter()
+        .filter(|line| line.text().starts_with(['┌', '│', '├', '└']))
+        .collect();
+    assert!(!table.is_empty());
+    for line in &table {
+        // extent 70, right room 60: 10 to the left, which the left room has
+        assert_eq!(line.shift, 10, "{:?}", line.text());
+        assert_eq!(line.extent(), 70);
+    }
+    // the prose is not shifted
+    assert!(page
+        .lines
+        .iter()
+        .filter(|line| !line.text().starts_with(['┌', '│', '├', '└']))
+        .all(|line| line.shift == 0));
+    let _ = widths;
+}
+
+#[test]
+fn with_one_width_the_table_wraps_its_cells() {
+    let natural = render(PROSE_AND_TABLE, 200);
+    let wrapped = render(PROSE_AND_TABLE, 40);
+    assert!(wrapped.len() > natural.len());
+    for line in &wrapped {
+        assert!(line.chars().count() <= 40, "{line:?}");
+    }
+    assert!(wrapped.iter().any(|line| line.starts_with('├')));
+    assert!(pages(PROSE_AND_TABLE, Widths::uniform(40))
+        .lines
+        .iter()
+        .all(|line| line.shift == 0));
+    snapshot("widths-uniform-40", PROSE_AND_TABLE, 40);
+}
+
+/// A shell command exactly 80 cells wide.
+fn command_80() -> String {
+    let command = format!("tar czf backup.tar.gz {}", "projects/vortex/".repeat(3));
+    let command = format!("{command}{}", "x".repeat(80 - command.len()));
+    assert_eq!(command.len(), 80);
+    command
+}
+
+#[test]
+fn a_code_block_takes_the_room_of_the_window() {
+    let source = format!(
+        "Run this from the project folder:\n\n```sh\n{}\n```\n",
+        command_80()
+    );
+    let widths = Widths {
+        prose: 40,
+        wide: 100,
+    };
+    let page = pages(&source, widths);
+    let block = &page.code_blocks[0];
+    assert_eq!(block.widest, 80);
+    assert!(!block.scrolls());
+    assert_eq!(block.visible, 80);
+    assert_eq!(block.max_offset(), 0);
+    let line = page.lines.iter().find(|line| line.code.is_some()).unwrap();
+    // its background: the padding, the code, the padding (2 more than the code)
+    let (start, end, _) = line.fill.unwrap();
+    assert_eq!((start, end), (0, 82));
+    // 82 columns, 70 to the right of the prose's left edge: 12 to the left
+    assert_eq!(line.shift, 12);
+    // the paragraph wraps at 40
+    assert!(page.lines[0].text().chars().count() <= 40);
+    assert!(page.lines[1].text().chars().count() <= 40);
+
+    // with one width, it scrolls
+    let page = pages(&source, Widths::uniform(40));
+    let block = &page.code_blocks[0];
+    assert!(block.scrolls());
+    assert_eq!(block.visible, 38);
+    assert_eq!(block.max_offset(), 42);
+    let line = page.lines.iter().find(|line| line.code.is_some()).unwrap();
+    assert_eq!(line.shift, 0);
+    assert_eq!(line.fill.map(|(_, end, _)| end), Some(40));
+}
+
+#[test]
+fn a_code_block_wider_than_the_window_scrolls() {
+    let source = format!("```sh\n{}\n```\n", command_80());
+    // 60 columns in all
+    let page = pages(
+        &source,
+        Widths {
+            prose: 40,
+            wide: 60,
+        },
+    );
+    let block = &page.code_blocks[0];
+    assert!(block.scrolls());
+    assert_eq!(block.visible, 58);
+    let line = &page.lines[0];
+    assert_eq!(line.fill.map(|(_, end, _)| end), Some(60));
+    assert_eq!(line.shift, 10);
+}
+
+// what the page adds to the text is ASCII, or the box-drawing and block characters
+
+const EVERYTHING: &str = "\
+# Heading one
+
+## Heading two with `code`
+
+### Three
+
+#### Four
+
+##### Five
+
+###### Six
+
+Plain text with *emphasis*, **strong**, ~~strike~~, `code`, a [link](https://example.com/a),
+an [anchor](#heading-one), an <https://example.com/auto> autolink, a footnote[^a],
+and an image: ![the logo](logo.svg)
+
+A hard break here\
+and after it.
+
+- bullet one
+  - nested bullet
+    - third level
+      - fourth level
+- bullet two
+
+1. first
+2. second
+   1. nested number
+
+- [x] done
+- [ ] todo
+
+> A quote
+>
+> > nested
+
+> [!NOTE]
+> A note.
+
+> [!TIP]
+> A tip.
+
+> [!IMPORTANT]
+> Important.
+
+> [!WARNING]
+> Careful.
+
+> [!CAUTION]
+> Dangerous.
+
+---
+
+```rust
+fn main() { println!(\"hello\"); }
+```
+
+    indented code
+
+| Left | Center | Right |
+|:-----|:------:|------:|
+| a    | b      | c     |
+| a long cell that wraps when the window is narrow | b | c |
+
+<div>
+raw html
+</div>
+
+Text with <kbd>inline</kbd> html.
+
+[^a]: The footnote text.
+";
+
+fn is_added_char(c: char) -> bool {
+    c.is_ascii() || ('\u{2500}'..='\u{259F}').contains(&c)
+}
+
+#[test]
+fn the_page_adds_only_ascii_and_box_drawing_characters() {
+    assert!(EVERYTHING.is_ascii());
+    for widths in [
+        Widths::uniform(30),
+        Widths::uniform(80),
+        Widths {
+            prose: 40,
+            wide: 100,
+        },
+        Widths {
+            prose: 100,
+            wide: 160,
+        },
+    ] {
+        let page = render_at(EVERYTHING, widths);
+        assert!(page.len() > 40);
+        for line in &page {
+            for c in line.chars() {
+                assert!(
+                    is_added_char(c),
+                    "{c:?} (U+{:04X}) in {line:?} at {widths:?}",
+                    c as u32
+                );
+            }
+        }
+        // (and the constructs are there)
+        let text = page.join("\n");
+        for expected in [
+            "- bullet one",
+            "* nested bullet",
+            "+ third level",
+            "[x] done",
+            "[ ] todo",
+            "▎",
+            "─",
+            "┌",
+        ] {
+            assert!(
+                text.contains(expected),
+                "{expected:?} at {widths:?}:\n{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_documents_own_characters_pass_through() {
+    let source = "\
+# Party time 🎉
+
+Done ✅ with :sob: and :smile: shortcodes, café, 日本語 and `:sob:` in code.
+
+- ❤️ a list item with :tada:
+
+| Mood | Code |
+|------|------|
+| 😭   | :sob: |
+";
+    let page = render(source, 80);
+    let text = page.join("\n");
+    for expected in [
+        "Party time 🎉",
+        "Done ✅ with :sob: and :smile: shortcodes, café, 日本語 and :sob: in code.",
+        "- ❤️ a list item with :tada:",
+        "😭",
+        ":sob:",
+    ] {
+        assert!(text.contains(expected), "{expected:?} in:\n{text}");
+    }
+    // not turned into anything else
+    assert!(!text.contains("😢"));
+    assert!(text.matches(":sob:").count() >= 3);
+}

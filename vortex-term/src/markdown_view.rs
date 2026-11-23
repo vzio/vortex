@@ -427,7 +427,8 @@ impl MarkdownView {
     pub fn handle_key(&mut self, key: KeyEvent, cx: &mut commands::Context) -> KeyResult {
         self.lay_out(cx.editor);
         self.apply_search();
-        let count = cx.count();
+        // (the count typed before the key is the editor's: the context of a key has none yet)
+        let count = cx.editor.count.map_or(cx.count(), |count| count.get());
         let shift_only = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
         match key.code {
             KeyCode::Esc if key.modifiers.is_empty() => return KeyResult::Close,
@@ -812,7 +813,8 @@ impl MarkdownView {
         let query = self.search.borrow().query.clone();
         self.regex = (!query.is_empty()).then(|| compile(&query).ok()).flatten();
         self.find_matches();
-        if aborted {
+        // no match (anymore): back where the search started, as `Esc` does
+        if aborted || self.matches.is_empty() {
             self.reading = from.min(self.len() - 1);
         } else if let Some(&(line, _, _)) = self
             .matches
