@@ -139,10 +139,7 @@ fn walks_lines(name: &str) -> bool {
         return false;
     }
     matches!(name, "search_next" | "search_prev")
-        || matches!(
-            crate::watch::effect_of(name),
-            Effect::Move | Effect::Search
-        )
+        || matches!(crate::watch::effect_of(name), Effect::Move | Effect::Search)
 }
 
 /// After a key with a terminal focused: a command that entered insert mode (`i`, `a`, `c`...)
@@ -257,7 +254,15 @@ pub fn goto_prompt(editor: &mut Editor, forward: bool, count: usize) {
     if !viewing(editor) || without_markers(editor) {
         return;
     }
-    let starts = prompt_starts(editor.terminals.get(doc).unwrap().snapshot.as_ref().unwrap());
+    let starts = prompt_starts(
+        editor
+            .terminals
+            .get(doc)
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap(),
+    );
     let extend = editor.mode() == Mode::Select;
     let document = editor.documents.get_mut(&doc).unwrap();
     let text = document.text().clone();
@@ -298,17 +303,18 @@ pub fn select_output(editor: &mut Editor) {
     if !viewing(editor) || without_markers(editor) {
         return;
     }
-    let snapshot = editor.terminals.get(doc).unwrap().snapshot.as_ref().unwrap();
+    let snapshot = editor
+        .terminals
+        .get(doc)
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap();
     let lines = &snapshot.lines;
     let starts = prompt_starts(snapshot);
     let document = editor.documents.get(&doc).unwrap();
     let text = document.text().clone();
-    let cursor_line = text.char_to_line(
-        document
-            .selection(view)
-            .primary()
-            .cursor(text.slice(..)),
-    );
+    let cursor_line = text.char_to_line(document.selection(view).primary().cursor(text.slice(..)));
     // the output of the prompt starting at `start`: the lines after its prompt lines, to the next
     // prompt, without the blank lines at its end
     let output = |start: usize| {
@@ -327,7 +333,9 @@ pub fn select_output(editor: &mut Editor) {
     };
     let at = starts.iter().rposition(|&start| start <= cursor_line);
     let found = match at {
-        Some(at) => output(starts[at]).or_else(|| at.checked_sub(1).and_then(|at| output(starts[at]))),
+        Some(at) => {
+            output(starts[at]).or_else(|| at.checked_sub(1).and_then(|at| output(starts[at])))
+        }
         None => None,
     };
     let Some(range) = found else {

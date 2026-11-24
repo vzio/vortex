@@ -331,7 +331,12 @@ async fn esc_goes_to_normal_mode_then_to_the_program() -> anyhow::Result<()> {
     assert!(focused_terminal(&h.app).is_some(), "the window stays");
     // the Esc that left insert mode didn't reach the program
     h.pump_for(Duration::from_millis(300)).await;
-    assert_eq!(screen(&h.app).matches("033").count(), 0, "{}", screen(&h.app));
+    assert_eq!(
+        screen(&h.app).matches("033").count(),
+        0,
+        "{}",
+        screen(&h.app)
+    );
     // in normal mode, Esc goes through, as many times as pressed; the mode doesn't change
     h.keys("<esc><esc><esc>").await?;
     assert_eq!(h.app.editor.mode(), Mode::Normal);
@@ -604,4 +609,82 @@ async fn bang_with_space_is_a_popup() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn shell_popup_is_a_popup() -> anyhow::Result<()> {
     popup_command(":shell-popup echo popup<ret>").await
+}
+
+fn bash() -> bool {
+    std::process::Command::new("bash")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+/// The text of the focused terminal's document (view mode's lines) and its primary selection.
+fn view_selection(app: &Application) -> (String, String) {
+    let (view, doc) = current_ref!(app.editor);
+    let text = doc.text().slice(..);
+    let range = doc.selection(view.id).primary();
+    (
+        text.to_string(),
+        text.slice(range.from()..range.to()).to_string(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn smoke_view_mode_prompts_and_edit() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = Harness::with_shell(&["bash"])?;
+    h.keys("<C-t>").await?;
+    h.until("the markers", |app| {
+        scratch(app).is_some_and(|t| t.shell.has_vortex_integration())
+    })
+    .await;
+    h.keys("echo first-out<ret>").await?;
+    h.until("first", |app| screen(app).lines().any(|l| l == "first-out"))
+        .await;
+    h.keys("printf 'a\\nb\\n'<ret>").await?;
+    h.until("b", |app| screen(app).lines().any(|l| l == "b"))
+        .await;
+    h.pump_for(Duration::from_millis(300)).await;
+    // normal mode, then a motion starts view mode
+    h.keys("<esc>k").await?;
+    assert!(
+        vortex_term::terminal::viewing(&h.app.editor),
+        "k starts view mode"
+    );
+    // [ to the previous prompt, o selects its output
+    h.keys("[o").await?;
+    let (text, selected) = view_selection(&h.app);
+    assert_eq!(selected, "a\nb\n", "{text}");
+    // from inside an output, `[` is its own prompt, then the one before
+    h.keys("[[o").await?;
+    assert_eq!(view_selection(&h.app).1, "first-out\n");
+    h.keys("y").await?;
+    assert_eq!(
+        h.app
+            .editor
+            .registers
+            .first('"', &h.app.editor)
+            .map(|s| s.to_string()),
+        Some("first-out\n".to_string())
+    );
+    // Esc back to normal mode, live
+    h.keys("<esc>").await?;
+    assert!(!vortex_term::terminal::viewing(&h.app.editor));
+    assert_eq!(h.app.editor.mode(), Mode::Normal);
+    // edit the command line
+    h.keys("iecho half<esc>e").await?;
+    h.until("the edit buffer", in_editor).await;
+    assert_eq!(doc!(h.app.editor).text().to_string(), "echo half");
+    h.keys("A-done<esc>:wq<ret>").await?;
+    h.until("back in the terminal with the line", |app| {
+        focused_terminal(app).is_some() && screen_contains(app, "echo half-done")
+    })
+    .await;
+    assert_eq!(h.app.editor.mode(), Mode::Insert);
+    h.keys("<ret>").await?;
+    h.until("run", |app| screen(app).lines().any(|l| l == "half-done"))
+        .await;
+    h.finish().await
 }

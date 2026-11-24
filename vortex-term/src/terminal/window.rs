@@ -143,10 +143,7 @@ fn ensure_scratch(editor: &mut Editor) -> Option<DocumentId> {
 /// `C-t`: shows the scratch terminal (starting its shell when none runs) and focuses it, or hides
 /// it when it is shown, wherever the focus is. Hidden, its shell keeps running.
 pub fn toggle_scratch(editor: &mut Editor) {
-    let shown = editor
-        .terminals
-        .scratch
-        .and_then(|doc| editor.view_of(doc));
+    let shown = editor.terminals.scratch.and_then(|doc| editor.view_of(doc));
     match shown {
         Some(view) => {
             // the last window: something to show instead

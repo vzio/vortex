@@ -41,7 +41,16 @@ pub fn render(editor: &Editor, doc: &Document, view: &View, surface: &mut Surfac
         return;
     };
     if let Some(snapshot) = &terminal.snapshot {
-        render_snapshot(editor, doc, view, snapshot, area, base, phosphor.as_ref(), surface);
+        render_snapshot(
+            editor,
+            doc,
+            view,
+            snapshot,
+            area,
+            base,
+            phosphor.as_ref(),
+            surface,
+        );
         return;
     }
     let shell = &terminal.shell;
@@ -86,7 +95,11 @@ fn cursor_style(editor: &Editor, primary: bool) -> Style {
     };
     let style = theme
         .try_get(scope)
-        .or_else(|| primary.then(|| theme.try_get("ui.cursor.primary")).flatten())
+        .or_else(|| {
+            primary
+                .then(|| theme.try_get("ui.cursor.primary"))
+                .flatten()
+        })
         .unwrap_or(base);
     if style.bg.is_none() && style.fg.is_none() && style.add_modifier.is_empty() {
         Style::default().add_modifier(Modifier::REVERSED)
@@ -241,10 +254,16 @@ pub fn cursor(editor: &Editor) -> Option<(Position, CursorKind)> {
     let document = editor.document(doc)?;
     let area = editor.tree.get(view).inner_area(document);
     if editor.mode() != Mode::Insert || terminal.viewing() {
-        return Some((Position::new(area.y as usize, area.x as usize), CursorKind::Hidden));
+        return Some((
+            Position::new(area.y as usize, area.x as usize),
+            CursorKind::Hidden,
+        ));
     }
     let Some(cursor) = terminal.shell.cursor() else {
-        return Some((Position::new(area.y as usize, area.x as usize), CursorKind::Hidden));
+        return Some((
+            Position::new(area.y as usize, area.x as usize),
+            CursorKind::Hidden,
+        ));
     };
     let kind = match cursor.shape {
         CursorShape::Block => CursorKind::Block,

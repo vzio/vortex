@@ -416,11 +416,7 @@ impl Tree {
                         Layout::Horizontal => {
                             let len = container.children.len();
 
-                            let heights = sizes(
-                                &shares,
-                                area.height,
-                                area.height / len as u16,
-                            );
+                            let heights = sizes(&shares, area.height, area.height / len as u16);
 
                             let mut child_y = area.y;
 
@@ -451,11 +447,7 @@ impl Tree {
                             let total_gap = inner_gap * len_u16.saturating_sub(2);
 
                             let used_area = area.width.saturating_sub(total_gap);
-                            let widths = sizes(
-                                &shares,
-                                used_area,
-                                used_area / len_u16,
-                            );
+                            let widths = sizes(&shares, used_area, used_area / len_u16);
 
                             let mut child_x = area.x;
 

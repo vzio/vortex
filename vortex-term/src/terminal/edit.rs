@@ -60,7 +60,10 @@ pub fn command_line(editor: &mut Editor, terminal: DocumentId, line: String) {
     let _ = doc.set_language_by_language_id(language, &loader);
     drop(loader);
     // from the terminal's window: the buffer opens in a split of it
-    if editor.view_of(terminal).is_some_and(|view| view != editor.tree.focus) {
+    if editor
+        .view_of(terminal)
+        .is_some_and(|view| view != editor.tree.focus)
+    {
         editor.show_screen(terminal);
     }
     let doc_id = editor.new_file_from_document(Action::HorizontalSplit, doc);

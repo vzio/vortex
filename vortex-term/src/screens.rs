@@ -38,7 +38,9 @@ pub fn render(
 /// The cursor of the focused screen, if the focus is on one.
 pub fn cursor(editor: &Editor) -> Option<(Option<Position>, CursorKind)> {
     match focused_kind(editor)? {
-        ScreenKind::Terminal => crate::terminal::cursor(editor).map(|(pos, kind)| (Some(pos), kind)),
+        ScreenKind::Terminal => {
+            crate::terminal::cursor(editor).map(|(pos, kind)| (Some(pos), kind))
+        }
     }
 }
 

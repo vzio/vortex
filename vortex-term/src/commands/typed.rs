@@ -397,7 +397,12 @@ fn write_impl(
     options: WriteOptions,
 ) -> anyhow::Result<()> {
     // a terminal's command line (this fork) isn't a file: `:w` sends it back to the shell's line
-    if cx.editor.terminals.edits.contains_key(&doc!(cx.editor).id()) {
+    if cx
+        .editor
+        .terminals
+        .edits
+        .contains_key(&doc!(cx.editor).id())
+    {
         if path.is_some() {
             bail!("a command line isn't a file: it can't be written to one (:w sends it to the shell)");
         }
@@ -2978,7 +2983,11 @@ fn watch_changes(
 }
 
 /// `:terminal`, `:vterminal` (this fork): a new terminal in a horizontal or vertical split.
-fn new_terminal(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+fn new_terminal(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
     }

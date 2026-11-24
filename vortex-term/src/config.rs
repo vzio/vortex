@@ -45,7 +45,10 @@ impl RawKeys {
             merge_layers(layers, HashMap::from([(Layer::Terminal, terminal)]));
         }
         if let Some(terminal_view) = self.terminal_view {
-            merge_layers(layers, HashMap::from([(Layer::TerminalView, terminal_view)]));
+            merge_layers(
+                layers,
+                HashMap::from([(Layer::TerminalView, terminal_view)]),
+            );
         }
     }
 }

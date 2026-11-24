@@ -194,7 +194,7 @@ fn parse_hex(hex: &[u8]) -> Option<String> {
         .copied()
         .filter(|b| !b.is_ascii_whitespace())
         .collect();
-    if digits.len() % 2 != 0 {
+    if !digits.len().is_multiple_of(2) {
         return None;
     }
     let bytes = digits

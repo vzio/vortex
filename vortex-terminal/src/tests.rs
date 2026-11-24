@@ -337,7 +337,12 @@ fn snapshot_knows_the_prompts() {
     h.wait_row("40");
     h.wait_for("the prompt after seq", |h| {
         h.rows().last().map(String::as_str) == Some("$")
-            || h.rows().iter().rev().find(|r| !r.is_empty()).map(String::as_str) == Some("$")
+            || h.rows()
+                .iter()
+                .rev()
+                .find(|r| !r.is_empty())
+                .map(String::as_str)
+                == Some("$")
     });
     let snapshot = h.shell.snapshot();
     // the scrollback is in it

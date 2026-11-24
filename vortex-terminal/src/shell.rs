@@ -758,7 +758,10 @@ impl Shell {
         }
         let cursor = (term.mode().contains(TermMode::SHOW_CURSOR)).then(|| {
             let point = grid.cursor.point;
-            (history + point.line.0.max(0) as usize, point.column.0 as u16)
+            (
+                history + point.line.0.max(0) as usize,
+                point.column.0 as u16,
+            )
         });
         Snapshot {
             lines,

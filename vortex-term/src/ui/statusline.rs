@@ -207,14 +207,15 @@ where
     let hex_label = hex_cursor.as_ref().map(super::hex_view::mode_label);
     // a screen (this fork): a terminal's view mode
     let screen_label = crate::screens::mode_label(context.editor, context.doc);
-    let mode_str = hex_label
-        .or(screen_label)
-        .or(context.mode_label)
-        .unwrap_or(match context.editor.mode() {
-            Mode::Insert => &modenames.insert,
-            Mode::Select => &modenames.select,
-            Mode::Normal => &modenames.normal,
-        });
+    let mode_str =
+        hex_label
+            .or(screen_label)
+            .or(context.mode_label)
+            .unwrap_or(match context.editor.mode() {
+                Mode::Insert => &modenames.insert,
+                Mode::Select => &modenames.select,
+                Mode::Normal => &modenames.normal,
+            });
     let content = if visible {
         format!(" {mode_str} ")
     } else {
