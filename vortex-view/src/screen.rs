@@ -52,8 +52,12 @@ pub enum Placement {
     },
     /// A split of the focused window.
     Split(Layout),
-    /// Where it was ([`crate::tree::Tree::place`]), else `fallback`.
-    Back { place: Place, fallback: Layout },
+    /// Where it was ([`crate::tree::Tree::place`]), else along the edge `fallback`, `at_end`.
+    Back {
+        place: Place,
+        fallback: Layout,
+        at_end: bool,
+    },
 }
 
 impl Editor {
@@ -148,11 +152,15 @@ impl Editor {
             } => self.tree.split_root(view, layout, at_end, Some(share)),
             Placement::Split(layout) if self.tree.contains(from) => self.tree.split(view, layout),
             Placement::Split(layout) => self.tree.split_root(view, layout, true, None),
-            Placement::Back { place, fallback } => match self.tree.insert_at(view, &place) {
+            Placement::Back {
+                place,
+                fallback,
+                at_end,
+            } => match self.tree.insert_at(view, &place) {
                 Some(id) => id,
                 None => {
                     let view = View::new(doc, self.config().gutters.clone());
-                    self.tree.split_root(view, fallback, true, place.share)
+                    self.tree.split_root(view, fallback, at_end, place.share)
                 }
             },
         };

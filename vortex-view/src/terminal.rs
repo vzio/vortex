@@ -284,6 +284,7 @@ impl crate::Editor {
             Some(place) => Placement::Back {
                 place,
                 fallback: layout,
+                at_end,
             },
             None => Placement::Edge {
                 layout,
