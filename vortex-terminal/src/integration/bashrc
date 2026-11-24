@@ -1,6 +1,9 @@
 # Shell integration for Vortex's terminal panel. Started with `bash --init-file`, which replaces
 # ~/.bashrc only (bash still reads /etc/bash.bashrc itself). Emits OSC 133 markers:
 #   C: a command starts running      D;status: it finished      A: the prompt starts
+# and OSC 7 (the working directory) at each prompt; binds two keys only Vortex sends, one that
+# reports the command line being edited (OSC 6973, its bytes in hexadecimal) and one that clears
+# it, to edit the command in a Vortex buffer.
 
 if [ -f "$HOME/.bashrc" ]; then
     . "$HOME/.bashrc"
@@ -14,9 +17,19 @@ if [ -z "$__vx_integration_loaded" ]; then
     __vx_precmd() {
         local __vx_status=$?
         __vx_at_prompt=
-        printf '\e]133;D;%s\a\e]133;A\a' "$__vx_status"
+        local __vx_cwd=${PWD//%/%25}
+        printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' "$__vx_status" "$HOSTNAME" "${__vx_cwd// /%20}"
         return "$__vx_status"
     }
+
+    __vx_report_line() {
+        printf '\e]6973;%s\a' "$(printf %s "$READLINE_LINE" | od -An -tx1 | tr -d ' \n')"
+    }
+    for __vx_map in emacs vi-insert vi-command; do
+        bind -m "$__vx_map" -x '"\e[5556~": __vx_report_line'
+        bind -m "$__vx_map" '"\e[5557~": kill-whole-line'
+    done
+    unset __vx_map
 
     # Runs last in PROMPT_COMMAND: from here on, the DEBUG trap (old bash) is for the command.
     __vx_arm() {

@@ -1,4 +1,4 @@
-//! The shell of Vortex's terminal panel: one shell process on a pseudo-terminal
+//! The shell of a Vortex terminal: one shell process on a pseudo-terminal
 //! (`portable-pty`), the terminal emulator its output goes through (`alacritty_terminal`), and
 //! the shell integration that reports when a command starts and how it ended (OSC 133).
 //!
@@ -65,6 +65,11 @@ pub enum ShellEvent {
     Title(String),
     /// The shell process exited (with its exit code, when known). The shell is dead; drop it.
     Exited(Option<i32>),
+    /// The shell's working directory changed (OSC 7).
+    Cwd(PathBuf),
+    /// The command line the shell is editing, sent when [`Shell::request_command_line`] asked
+    /// for it (Vortex's integration only).
+    CommandLine(String),
 }
 
 /// The modes the program in the terminal asked for, which decide how keys, the mouse and pastes
@@ -114,6 +119,20 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
+/// How a cell is drawn, without its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CellStyle {
+    pub fg: Color,
+    pub bg: Color,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikeout: bool,
+    pub inverse: bool,
+    pub hidden: bool,
+}
+
 /// One cell of the screen, as drawn.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Cell {
@@ -130,6 +149,66 @@ pub struct Cell {
     /// Foreground and background are swapped when drawn.
     pub inverse: bool,
     pub hidden: bool,
+}
+
+impl Cell {
+    pub fn style(&self) -> CellStyle {
+        CellStyle {
+            fg: self.fg,
+            bg: self.bg,
+            bold: self.bold,
+            dim: self.dim,
+            italic: self.italic,
+            underline: self.underline,
+            strikeout: self.strikeout,
+            inverse: self.inverse,
+            hidden: self.hidden,
+        }
+    }
+}
+
+/// What a line of the terminal is to the shell integration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineKind {
+    /// Output, or a line no marker says anything about.
+    #[default]
+    Other,
+    /// Written between a prompt's start and its command running (OSC 133 `A` to `C`): the
+    /// prompt and the command typed at it.
+    Prompt,
+}
+
+/// One line of a [`Snapshot`]: its text, with trailing blanks trimmed, and how it is drawn.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SnapshotLine {
+    pub text: String,
+    /// The column of each character of `text` (wide characters take two columns).
+    pub cols: Vec<u16>,
+    /// The styles of the text: each starts at a character index and goes on to the next one.
+    pub runs: Vec<(usize, CellStyle)>,
+    pub kind: LineKind,
+}
+
+impl SnapshotLine {
+    /// The style of the character at `index`.
+    pub fn style_at(&self, index: usize) -> CellStyle {
+        let at = self.runs.partition_point(|(start, _)| *start <= index);
+        at.checked_sub(1)
+            .map(|at| self.runs[at].1)
+            .unwrap_or_default()
+    }
+}
+
+/// Every line of the terminal at one moment, the scrollback first: what view mode walks.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Snapshot {
+    pub lines: Vec<SnapshotLine>,
+    /// The line of the top of the screen (the scrollback is above it).
+    pub screen_top: usize,
+    /// The line the view was scrolled to show at its top.
+    pub view_top: usize,
+    /// The cursor, as a line and a column, when the program shows it.
+    pub cursor: Option<(usize, u16)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

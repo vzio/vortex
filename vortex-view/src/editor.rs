@@ -1709,8 +1709,11 @@ pub struct Conflicts {
 pub struct Editor {
     /// Current editing mode.
     pub mode: Mode,
-    /// The terminal panel below the splits (fork feature).
-    pub terminal: crate::terminal::Panel,
+    /// The terminals, each in a window of its own (fork feature, see `crate::screen`).
+    pub terminals: crate::terminal::Terminals,
+    /// The window that last showed a text document while a screen's window had the focus (this
+    /// fork): where files open from a terminal.
+    pub last_document_view: Option<ViewId>,
     /// The debug panel and what it shows (fork feature).
     pub debug: crate::debug::DebugState,
     /// The screen drawn over a buffer, the dashboard, for history (this fork).
@@ -1885,7 +1888,8 @@ impl Editor {
 
         Self {
             mode: Mode::Normal,
-            terminal: crate::terminal::Panel::default(),
+            terminals: Default::default(),
+            last_document_view: None,
             debug: {
                 let mut debug = crate::debug::DebugState::default();
                 debug.apply_config(&conf.debugger);
@@ -2394,7 +2398,7 @@ impl Editor {
         doc.language_servers = language_servers;
     }
 
-    fn _refresh(&mut self) {
+    pub(crate) fn _refresh(&mut self) {
         let config = self.config();
 
         // Reset the inlay hints annotations *before* updating the views, that way we ensure they
@@ -2415,6 +2419,22 @@ impl Editor {
             view.gutters = config.gutters.clone();
             view.ensure_cursor_in_view(doc, config.scrolloff)
         }
+        self.resize_terminals();
+    }
+
+    /// Tells each terminal shown (this fork) the size of its window.
+    pub fn resize_terminals(&self) {
+        for (view, _) in self.tree.views() {
+            if let (Some(terminal), Some(doc)) =
+                (self.terminals.get(view.doc), self.documents.get(&view.doc))
+            {
+                let area = view.inner_area(doc);
+                terminal.shell.resize(crate::terminal::Size {
+                    rows: area.height,
+                    cols: area.width,
+                });
+            }
+        }
     }
 
     fn replace_document_in_view(&mut self, current_view: ViewId, doc_id: DocumentId) {
@@ -2431,12 +2451,28 @@ impl Editor {
         view.ensure_cursor_in_view(doc, scrolloff)
     }
 
-    pub fn switch(&mut self, id: DocumentId, action: Action) {
+    pub fn switch(&mut self, id: DocumentId, mut action: Action) {
         use crate::tree::Layout;
 
         if !self.documents.contains_key(&id) {
             log::error!("cannot switch to document that does not exist (anymore)");
             return;
+        }
+
+        // a screen (this fork) shows in its own window only: switching to it goes there
+        if self.documents[&id].is_screen() {
+            if !matches!(action, Action::Load) {
+                self.show_screen(id);
+            }
+            return;
+        }
+        // from a screen's window, a document opens in the window for documents
+        if matches!(action, Action::Replace | Action::Load) && self.is_screen_view(self.tree.focus)
+        {
+            match self.document_view() {
+                Some(view) => self.focus(view),
+                None => action = Action::VerticalSplit,
+            }
         }
 
         if !matches!(action, Action::Load) {
@@ -2666,6 +2702,21 @@ impl Editor {
     }
 
     pub fn close(&mut self, id: ViewId) {
+        // a screen's window (this fork), unless it is the last one: the scratch terminal hides,
+        // the others close their screen (a terminal's shell is killed)
+        if let Some(doc) = self.tree.try_get(id).map(|view| view.doc) {
+            if self.document(doc).is_some_and(|doc| doc.is_screen())
+                && self.tree.views().count() > 1
+            {
+                if self.terminals.scratch == Some(doc) {
+                    let place = self.hide_screen(id);
+                    self.terminals.scratch_place = Some(place);
+                } else {
+                    let _ = self.close_document(doc, true);
+                }
+                return;
+            }
+        }
         // Remove selections for the closed view on all documents.
         for doc in self.documents_mut() {
             doc.remove_view(id);
@@ -2747,9 +2798,11 @@ impl Editor {
             doc.mark_as_focused();
         }
 
-        // a `vx` in the terminal panel waited on it (`git commit`): back to the panel
-        if self.terminal.document_closed(doc_id) {
-            self.terminal.focus();
+        // a terminal's screen (this fork) closed: its shell goes with it
+        self.terminals.remove(doc_id);
+        // a `vx` in a terminal waited on it (`git commit`): back to that terminal
+        if let Some(terminal) = self.terminals.document_closed(doc_id) {
+            self.show_screen(terminal);
         }
 
         self._refresh();
@@ -2820,6 +2873,8 @@ impl Editor {
 
         let prev_id = std::mem::replace(&mut self.tree.focus, view_id);
         doc_mut!(self).mark_as_focused();
+        // a screen (this fork): a terminal entered types, one left is told
+        self.screen_focused(prev_id);
 
         let focus_lost = self.tree.get(prev_id).doc;
         dispatch(DocumentFocusLost {

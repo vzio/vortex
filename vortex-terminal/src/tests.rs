@@ -317,3 +317,106 @@ fn zsh_integration() {
     }
     integration_flow(&["zsh"]);
 }
+
+impl Harness {
+    fn wait_event(&mut self, what: &str, f: impl Fn(&ShellEvent) -> bool) -> ShellEvent {
+        self.wait_for(what, |h| h.seen.iter().any(&f));
+        self.seen.iter().find(|e| f(e)).cloned().unwrap()
+    }
+}
+
+/// The lines of a prompt (written between OSC 133 `A` and `C`) are known in a snapshot, through
+/// scrolling, and the output between them isn't.
+#[test]
+fn snapshot_knows_the_prompts() {
+    use crate::LineKind;
+    let mut h = Harness::start(&["bash"], true);
+    h.type_line("echo one; echo two");
+    h.wait_row("two");
+    h.type_line("seq 1 40");
+    h.wait_row("40");
+    h.wait_for("the prompt after seq", |h| {
+        h.rows().last().map(String::as_str) == Some("$")
+            || h.rows().iter().rev().find(|r| !r.is_empty()).map(String::as_str) == Some("$")
+    });
+    let snapshot = h.shell.snapshot();
+    // the scrollback is in it
+    assert!(snapshot.screen_top > 0, "{snapshot:?}");
+    let texts: Vec<_> = snapshot.lines.iter().map(|l| l.text.as_str()).collect();
+    let prompts: Vec<_> = snapshot
+        .lines
+        .iter()
+        .filter(|l| l.kind == LineKind::Prompt)
+        .map(|l| l.text.as_str())
+        .collect();
+    assert_eq!(
+        prompts,
+        ["$ echo one; echo two", "$ seq 1 40", "$"],
+        "{texts:#?}"
+    );
+    let one = texts.iter().position(|t| *t == "one").unwrap();
+    assert_eq!(snapshot.lines[one].kind, LineKind::Other);
+    assert_eq!(texts[one + 1], "two");
+    // the cursor is on the last prompt
+    let (line, col) = snapshot.cursor.unwrap();
+    assert_eq!(texts[line], "$");
+    assert_eq!(col, 2);
+    // columns of each character
+    assert_eq!(snapshot.lines[one].cols, [0, 1, 2]);
+}
+
+#[test]
+fn snapshot_columns_of_wide_characters() {
+    let mut h = Harness::start(&["/bin/sh"], false);
+    h.type_line("printf '\\344\\275\\240x\\n'");
+    h.wait_row("你x");
+    let snapshot = h.shell.snapshot();
+    let line = snapshot.lines.iter().find(|l| l.text == "你x").unwrap();
+    assert_eq!(line.cols, [0, 2]);
+}
+
+#[test]
+fn bash_reports_its_working_directory() {
+    let mut h = Harness::start(&["bash"], true);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a dir");
+    std::fs::create_dir(&path).unwrap();
+    h.type_line(&format!("cd '{}'", path.display()));
+    let want = path.clone();
+    h.wait_event("the new directory", |e| *e == ShellEvent::Cwd(want.clone()));
+    assert_eq!(h.shell.cwd(), Some(path));
+}
+
+/// Vortex's integration reports the command line being edited, and replaces it without running it.
+#[test]
+fn bash_reports_and_replaces_the_command_line() {
+    let mut h = Harness::start(&["bash"], true);
+    h.wait_for("the markers", |h| h.shell.has_vortex_integration());
+    assert!(h.shell.at_prompt());
+    h.shell.write(b"echo half typed");
+    h.wait_row("$ echo half typed");
+    h.shell.request_command_line();
+    h.wait_event("the command line", |e| {
+        *e == ShellEvent::CommandLine("echo half typed".into())
+    });
+    h.shell.replace_command_line("echo replaced-$((6*7))");
+    h.wait_row("$ echo replaced-$((6*7))");
+    // not run: Enter runs it
+    assert!(!h.rows().iter().any(|r| r == "replaced-42"));
+    h.shell.write(b"\r");
+    h.wait_row("replaced-42");
+    // while a command runs, there is no prompt
+    h.type_line("sleep 1");
+    h.wait_status(ShellStatus::Running);
+    assert!(!h.shell.at_prompt());
+    h.wait_status(ShellStatus::Finished(0));
+    assert!(h.shell.at_prompt());
+}
+
+#[test]
+fn no_prompt_without_markers() {
+    let h = Harness::start(&["/bin/sh"], false);
+    assert!(!h.shell.has_markers());
+    assert!(!h.shell.at_prompt());
+    assert!(!h.shell.has_vortex_integration());
+}

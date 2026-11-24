@@ -22,6 +22,7 @@ pub mod input;
 pub mod keyboard;
 pub mod language_theme;
 pub mod register;
+pub mod screen;
 pub mod terminal;
 pub mod theme;
 pub mod tree;

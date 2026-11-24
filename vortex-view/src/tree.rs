@@ -21,6 +21,23 @@ pub struct Tree {
 pub struct Node {
     parent: ViewId,
     content: Content,
+    /// The node's size in percent of its container, along the container's layout (this fork):
+    /// a terminal's window takes `[editor.terminal] size`. `None` shares what the sized nodes
+    /// leave equally with the other unsized ones.
+    share: Option<u16>,
+}
+
+/// Where a node was in the tree (this fork), to put a window back there after it left the tree
+/// (the scratch terminal hidden with `C-t`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    /// The container it was in.
+    pub parent: ViewId,
+    /// Its index among the container's children.
+    pub index: usize,
+    /// The container's layout then: the place is gone if it changed.
+    pub layout: Layout,
+    pub share: Option<u16>,
 }
 
 #[derive(Debug)]
@@ -34,6 +51,7 @@ impl Node {
         Self {
             parent: ViewId::default(),
             content: Content::Container(Box::new(Container::new(layout))),
+            share: None,
         }
     }
 
@@ -41,6 +59,7 @@ impl Node {
         Self {
             parent: ViewId::default(),
             content: Content::View(Box::new(view)),
+            share: None,
         }
     }
 }
@@ -186,6 +205,9 @@ impl Tree {
             container.children.push(node);
             self.nodes[focus].parent = split;
             self.nodes[node].parent = split;
+            // the new split takes the place of the focused node, and its size
+            let share = self.nodes[focus].share.take();
+            self.nodes[split].share = share;
 
             let container = match &mut self.nodes[parent] {
                 Node {
@@ -263,6 +285,8 @@ impl Tree {
             // Lets merge the only child back to its grandparent so that Views
             // are equally spaced.
             let sibling = parent_container.children.pop().unwrap();
+            // the child takes the container's place, and its size
+            self.nodes[sibling].share = self.nodes[parent].share;
             self.remove_or_replace(parent, Some(sibling));
         }
 
@@ -368,6 +392,15 @@ impl Tree {
         // b) node is container, calculate areas for each child and push them on the stack
 
         while let Some((key, area)) = self.stack.pop() {
+            // the sizes of a container's children (this fork), read before borrowing it
+            let shares: Vec<Option<u16>> = match &self.nodes[key].content {
+                Content::Container(container) => container
+                    .children
+                    .iter()
+                    .map(|&child| self.nodes[child].share)
+                    .collect(),
+                Content::View(_) => Vec::new(),
+            };
             let node = &mut self.nodes[key];
 
             match &mut node.content {
@@ -383,11 +416,16 @@ impl Tree {
                         Layout::Horizontal => {
                             let len = container.children.len();
 
-                            let height = area.height / len as u16;
+                            let heights = sizes(
+                                &shares,
+                                area.height,
+                                area.height / len as u16,
+                            );
 
                             let mut child_y = area.y;
 
                             for (i, child) in container.children.iter().enumerate() {
+                                let height = heights[i];
                                 let mut area = Rect::new(
                                     container.area.x,
                                     child_y,
@@ -413,11 +451,16 @@ impl Tree {
                             let total_gap = inner_gap * len_u16.saturating_sub(2);
 
                             let used_area = area.width.saturating_sub(total_gap);
-                            let width = used_area / len_u16;
+                            let widths = sizes(
+                                &shares,
+                                used_area,
+                                used_area / len_u16,
+                            );
 
                             let mut child_x = area.x;
 
                             for (i, child) in container.children.iter().enumerate() {
+                                let width = widths[i];
                                 let mut area = Rect::new(
                                     child_x,
                                     container.area.y,
@@ -669,6 +712,125 @@ impl Tree {
     pub fn area(&self) -> Rect {
         self.area
     }
+
+    /// Puts `view` along an edge of the whole tree (this fork): at the bottom (`Horizontal`,
+    /// `at_end`), top, left (`Vertical`) or right, across everything else, taking `share`
+    /// percent of the tree in that direction. Focuses it.
+    pub fn split_root(
+        &mut self,
+        view: View,
+        layout: Layout,
+        at_end: bool,
+        share: Option<u16>,
+    ) -> ViewId {
+        let root = self.root;
+        let mut node = Node::view(view);
+        node.parent = root;
+        node.share = share;
+        let node = self.nodes.insert(node);
+        self.get_mut(node).id = node;
+
+        let children = std::mem::take(&mut self.container_mut(root).children);
+        let old_layout = self.container_mut(root).layout;
+        let mut kept = if children.len() > 1 && old_layout != layout {
+            // what was there goes into a container of its own, which takes its place
+            let mut inner = Node::container(old_layout);
+            inner.parent = root;
+            let inner = self.nodes.insert(inner);
+            for &child in &children {
+                self.nodes[child].parent = inner;
+            }
+            self.container_mut(inner).children = children;
+            vec![inner]
+        } else {
+            children
+        };
+        if at_end {
+            kept.push(node);
+        } else {
+            kept.insert(0, node);
+        }
+        let container = self.container_mut(root);
+        container.layout = layout;
+        container.children = kept;
+        self.focus = node;
+        self.recalculate();
+        node
+    }
+
+    /// Where the node `id` is, to put a window back there with [`Self::insert_at`].
+    pub fn place(&self, id: ViewId) -> Place {
+        let node = &self.nodes[id];
+        let parent = node.parent;
+        let (index, layout) = match &self.nodes[parent].content {
+            Content::Container(container) => (
+                container
+                    .children
+                    .iter()
+                    .position(|&child| child == id)
+                    .unwrap_or(0),
+                container.layout,
+            ),
+            Content::View(_) => (0, Layout::Vertical),
+        };
+        Place {
+            parent,
+            index,
+            layout,
+            share: node.share,
+        }
+    }
+
+    /// Puts `view` back at `place` and focuses it, if its container is still there with the
+    /// same layout; else `None`, and the tree doesn't change.
+    pub fn insert_at(&mut self, view: View, place: &Place) -> Option<ViewId> {
+        match self.nodes.get(place.parent) {
+            Some(Node {
+                content: Content::Container(container),
+                ..
+            }) if container.layout == place.layout => {}
+            _ => return None,
+        }
+        let mut node = Node::view(view);
+        node.parent = place.parent;
+        node.share = place.share;
+        let node = self.nodes.insert(node);
+        self.get_mut(node).id = node;
+        let container = self.container_mut(place.parent);
+        let index = place.index.min(container.children.len());
+        container.children.insert(index, node);
+        self.focus = node;
+        self.recalculate();
+        Some(node)
+    }
+
+    /// The size of the node `id` in percent of its container, if it has one.
+    pub fn share(&self, id: ViewId) -> Option<u16> {
+        self.nodes.get(id)?.share
+    }
+}
+
+/// The sizes of children with `shares` in `total` cells: each sized one takes its share, the others what is
+/// left in equal parts (`equal` each when none is sized, as upstream). The last one is given
+/// what rounding leaves by the caller.
+fn sizes(shares: &[Option<u16>], total: u16, equal: u16) -> Vec<u16> {
+    if shares.iter().all(Option::is_none) {
+        return vec![equal; shares.len()];
+    }
+    let fixed: Vec<Option<u16>> = shares
+        .iter()
+        .map(|share| {
+            share.map(|percent| ((total as u32 * percent.min(100) as u32 + 50) / 100) as u16)
+        })
+        .collect();
+    let used: u16 = fixed.iter().flatten().sum();
+    let flexible = fixed.iter().filter(|size| size.is_none()).count() as u16;
+    let rest = total.saturating_sub(used);
+    let each = rest.checked_div(flexible).unwrap_or(0);
+    fixed
+        .into_iter()
+        .map(|size| size.unwrap_or(each).max(1))
+        .collect()
 }
 
 #[derive(Debug)]
@@ -964,5 +1126,95 @@ mod test {
                 .map(|(view, _)| view.area.width)
                 .collect::<Vec<_>>()
         );
+    }
+
+    fn view() -> View {
+        View::new(DocumentId::default(), GutterConfig::default())
+    }
+
+    fn tree(width: u16, height: u16) -> Tree {
+        let mut tree = Tree::new(Rect::new(0, 0, width, height));
+        tree.insert(view());
+        tree
+    }
+
+    #[test]
+    fn a_sized_window_at_the_bottom_across_side_by_side_splits() {
+        let mut tree = tree(100, 30);
+        let left = tree.focus;
+        let right = tree.split(view(), Layout::Vertical);
+        let bottom = tree.split_root(view(), Layout::Horizontal, true, Some(33));
+        assert_eq!(tree.focus, bottom);
+        assert_eq!(tree.get(bottom).area, Rect::new(0, 20, 100, 10));
+        assert_eq!(tree.get(left).area.height, 20);
+        assert_eq!(tree.get(right).area.height, 20);
+        assert_eq!(tree.get(left).area.y, 0);
+        // a split of the windows above shares what is left
+        tree.focus = left;
+        let third = tree.split(view(), Layout::Horizontal);
+        assert_eq!(tree.get(bottom).area, Rect::new(0, 20, 100, 10));
+        assert_eq!(tree.get(left).area.height + tree.get(third).area.height, 20);
+    }
+
+    #[test]
+    fn sized_windows_on_each_side() {
+        let mut tree = tree(100, 30);
+        let main = tree.focus;
+        let top = tree.split_root(view(), Layout::Horizontal, false, Some(20));
+        assert_eq!(tree.get(top).area, Rect::new(0, 0, 100, 6));
+        assert_eq!(tree.get(main).area, Rect::new(0, 6, 100, 24));
+        let right = tree.split_root(view(), Layout::Vertical, true, Some(25));
+        // what was there (two rows) is a container on the left
+        assert_eq!(tree.get(right).area.x + tree.get(right).area.width, 100);
+        assert_eq!(tree.get(right).area.height, 30);
+        // the separator column between them comes out of the last one
+        assert_eq!(tree.get(right).area.width, 24);
+        assert_eq!(tree.get(top).area.width, 75);
+        let left = tree.split_root(view(), Layout::Vertical, false, Some(10));
+        assert_eq!(tree.get(left).area.x, 0);
+        assert_eq!(tree.get(left).area.width, 10);
+    }
+
+    #[test]
+    fn a_window_goes_back_where_it_was() {
+        let mut tree = tree(100, 30);
+        let main = tree.focus;
+        let bottom = tree.split_root(view(), Layout::Horizontal, true, Some(33));
+        let place = tree.place(bottom);
+        tree.remove(bottom);
+        assert_eq!(tree.get(main).area, Rect::new(0, 0, 100, 30));
+        let again = tree.insert_at(view(), &place).unwrap();
+        assert_eq!(tree.focus, again);
+        assert_eq!(tree.get(again).area, Rect::new(0, 20, 100, 10));
+        assert_eq!(tree.get(main).area.height, 20);
+    }
+
+    #[test]
+    fn a_place_that_is_gone() {
+        let mut tree = tree(100, 30);
+        let a = tree.focus;
+        let b = tree.split(view(), Layout::Vertical);
+        tree.focus = b;
+        let c = tree.split(view(), Layout::Horizontal);
+        // c is in a container of its own (b over c)
+        let place = tree.place(c);
+        tree.remove(c);
+        // the container went with it: b took its place
+        assert!(tree.insert_at(view(), &place).is_none());
+        assert_eq!(tree.views().count(), 2);
+        assert!(tree.contains(a));
+    }
+
+    #[test]
+    fn a_split_window_keeps_its_size_through_its_new_container() {
+        let mut tree = tree(100, 30);
+        let bottom = tree.split_root(view(), Layout::Horizontal, true, Some(33));
+        // splitting the sized window side by side: the pair keeps the size
+        let next = tree.split(view(), Layout::Vertical);
+        assert_eq!(tree.get(bottom).area.height, 10);
+        assert_eq!(tree.get(next).area.height, 10);
+        tree.remove(next);
+        assert_eq!(tree.share(bottom), Some(33));
+        assert_eq!(tree.get(bottom).area.height, 10);
     }
 }

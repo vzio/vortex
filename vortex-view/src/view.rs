@@ -110,6 +110,10 @@ impl View {
     }
 
     pub fn gutter_offset(&self, doc: &Document) -> u16 {
+        // a screen (this fork) has no gutter: it takes the whole window
+        if doc.is_screen() {
+            return 0;
+        }
         let total_width = self
             .gutters
             .layout
