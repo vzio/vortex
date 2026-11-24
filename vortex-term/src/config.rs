@@ -13,7 +13,8 @@ use vortex_view::{document::Mode, theme};
 pub struct Config {
     pub theme: Option<theme::Config>,
     pub keys: HashMap<Mode, KeyTrie>,
-    /// The keys of the fork's modes (`[keys.watch]`, `[keys.debug]`).
+    /// The keys of the fork's modes (`[keys.watch]`, `[keys.debug]`) and of a terminal's normal
+    /// and view modes (`[keys.terminal]`, `[keys.terminal-view]`).
     pub layers: HashMap<Layer, KeyTrie>,
     pub editor: vortex_view::editor::Config,
 }
@@ -23,6 +24,9 @@ pub struct Config {
 pub struct RawKeys {
     watch: Option<KeyTrie>,
     debug: Option<KeyTrie>,
+    terminal: Option<KeyTrie>,
+    #[serde(rename = "terminal-view")]
+    terminal_view: Option<KeyTrie>,
     #[serde(flatten)]
     modes: HashMap<Mode, KeyTrie>,
 }
@@ -36,6 +40,12 @@ impl RawKeys {
         }
         if let Some(debug) = self.debug {
             merge_layers(layers, HashMap::from([(Layer::Debug, debug)]));
+        }
+        if let Some(terminal) = self.terminal {
+            merge_layers(layers, HashMap::from([(Layer::Terminal, terminal)]));
+        }
+        if let Some(terminal_view) = self.terminal_view {
+            merge_layers(layers, HashMap::from([(Layer::TerminalView, terminal_view)]));
         }
     }
 }

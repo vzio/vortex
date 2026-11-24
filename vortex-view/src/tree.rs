@@ -804,6 +804,14 @@ impl Tree {
         Some(node)
     }
 
+    /// Sets the size of the node `id` in percent of its container (`None`: an equal part).
+    pub fn set_share(&mut self, id: ViewId, share: Option<u16>) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.share = share;
+            self.recalculate();
+        }
+    }
+
     /// The size of the node `id` in percent of its container, if it has one.
     pub fn share(&self, id: ViewId) -> Option<u16> {
         self.nodes.get(id)?.share

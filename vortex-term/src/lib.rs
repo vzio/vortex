@@ -18,6 +18,7 @@ pub mod logging;
 pub mod markdown_view;
 pub mod modes;
 pub mod practice;
+pub mod screens;
 pub mod terminal;
 pub mod ui;
 pub mod watch;

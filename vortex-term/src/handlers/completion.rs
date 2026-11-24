@@ -121,6 +121,10 @@ pub fn trigger_auto_completion(editor: &Editor, trigger_char_only: bool) {
         return;
     }
     let (view, doc): (&vortex_view::View, &vortex_view::Document) = current_ref!(editor);
+    // a screen (this fork: a terminal's insert mode types in its shell) completes nothing
+    if doc.is_screen() {
+        return;
+    }
     let mut text = doc.text().slice(..);
     let cursor = doc.selection(view.id).primary().cursor(text);
     text = doc.text().slice(..cursor);

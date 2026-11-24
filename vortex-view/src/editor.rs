@@ -2575,6 +2575,8 @@ impl Editor {
                     *hex.cursor_mut(view_id) = cursor;
                 }
                 doc.mark_as_focused();
+                // leaving a terminal (this fork) gives normal mode back
+                self.focus_moved(focus_lost);
                 focus_lost
             }
         };
@@ -2589,7 +2591,7 @@ impl Editor {
     }
 
     /// Generate an id for a new document and register it.
-    fn new_document(&mut self, mut doc: Document) -> DocumentId {
+    pub(crate) fn new_document(&mut self, mut doc: Document) -> DocumentId {
         let id = self.next_document_id;
         // Safety: adding 1 from 1 is fine, practically impossible to reach usize max
         self.next_document_id =
@@ -2717,11 +2719,22 @@ impl Editor {
                 return;
             }
         }
+        self.close_view(id);
+    }
+
+    /// Closes the window `id`, whatever it shows.
+    fn close_view(&mut self, id: ViewId) {
         // Remove selections for the closed view on all documents.
         for doc in self.documents_mut() {
             doc.remove_view(id);
         }
+        let focused = self.tree.focus == id;
+        let from = self.tree.try_get(id).map(|view| view.doc);
         self.tree.remove(id);
+        // the focus may land on a terminal, or leave one (this fork)
+        if focused {
+            self.focus_moved(from);
+        }
         self._refresh();
     }
 
@@ -2766,7 +2779,7 @@ impl Editor {
         for action in actions {
             match action {
                 Action::Close(view_id) => {
-                    self.close(view_id);
+                    self.close_view(view_id);
                 }
                 Action::ReplaceDoc(view_id, doc_id) => {
                     self.replace_document_in_view(view_id, doc_id);
@@ -2800,6 +2813,12 @@ impl Editor {
 
         // a terminal's screen (this fork) closed: its shell goes with it
         self.terminals.remove(doc_id);
+        // the buffer a terminal's command line was edited in: back to that terminal
+        if let Some(terminal) = self.terminals.edits.remove(&doc_id) {
+            if self.terminals.is_terminal(terminal) {
+                self.show_screen(terminal);
+            }
+        }
         // a `vx` in a terminal waited on it (`git commit`): back to that terminal
         if let Some(terminal) = self.terminals.document_closed(doc_id) {
             self.show_screen(terminal);

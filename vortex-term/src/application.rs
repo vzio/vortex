@@ -807,9 +807,7 @@ impl Application {
                     }
                     _ => false,
                 };
-                let redraw = debug_mouse
-                    || crate::terminal::handle_event(&event, cx.editor, &mut self.compositor)
-                    || self.compositor.handle_event(&event, &mut cx);
+                let redraw = debug_mouse || self.compositor.handle_event(&event, &mut cx);
                 crate::practice::after_event(cx.editor, &mut self.compositor);
                 redraw
             }

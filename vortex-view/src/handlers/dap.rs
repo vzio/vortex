@@ -26,13 +26,17 @@ pub fn dap_pos_to_pos(doc: &vortex_core::Rope, line: usize, column: usize) -> Op
 
 /// Opens the frame's source at its line (and range, when the adapter gives one).
 /// Runs `f` in a view showing source code: the focused view, unless it shows a debugged
-/// program's memory (this fork), which keeps its place and the focus while the source moves in
-/// another view (a split of it when there is none).
+/// program's memory (this fork) or a screen (a terminal), which keep their place and the focus
+/// while the source moves in another view (a split of it when there is none).
 pub fn in_source_view<R>(editor: &mut Editor, f: impl FnOnce(&mut Editor) -> R) -> R {
+    // a terminal: the window for documents
+    if editor.is_screen_view(editor.tree.focus) {
+        return editor.in_document_window(f);
+    }
     let focused = editor.tree.focus;
     let shows_memory = |editor: &Editor, view: crate::ViewId| {
         let doc = editor.tree.get(view).doc;
-        editor.documents[&doc].memory().is_some()
+        editor.documents[&doc].memory().is_some() || editor.documents[&doc].is_screen()
     };
     if !shows_memory(editor, focused) {
         return f(editor);

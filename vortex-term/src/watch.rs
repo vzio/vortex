@@ -485,8 +485,11 @@ fn relative(baseline: &Baseline, path: &Path) -> String {
 /// first line of the hunk, centers it and flashes it.
 fn go_to(editor: &mut Editor, target: &Target, action: Action) {
     // the session keeps its own order of changes (`n`/`N`, `:watch-changes`): following and `n`
-    // are not history's jumps (a pick in `:watch-changes` is, as any picker's)
-    editor.without_history(|editor| go_to_unrecorded(editor, target, action));
+    // are not history's jumps (a pick in `:watch-changes` is, as any picker's); with a terminal
+    // focused (this fork), it happens in the window for documents, the terminal keeping the keys
+    editor.without_history(|editor| {
+        editor.in_document_window(|editor| go_to_unrecorded(editor, target, action))
+    });
 }
 
 fn go_to_unrecorded(editor: &mut Editor, target: &Target, action: Action) {
@@ -657,6 +660,15 @@ const NONE: &[&str] = &[
     "search_next",
     "search_prev",
     "toggle_terminal",
+    // the terminals (this fork): a window of their own, and their own lines
+    "hsplit_terminal",
+    "vsplit_terminal",
+    "terminal_view",
+    "terminal_edit_command",
+    "terminal_select",
+    "terminal_next_prompt",
+    "terminal_prev_prompt",
+    "terminal_select_output",
     // setting or removing a bookmark (history and bookmarks) neither moves nor opens anything
     "toggle_bookmark",
 ];

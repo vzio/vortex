@@ -123,6 +123,12 @@ impl Editor {
         }
     }
 
+    /// Adds a screen document, without showing it.
+    pub fn add_screen_document(&mut self, doc: crate::Document) -> DocumentId {
+        debug_assert!(doc.is_screen());
+        self.new_document(doc)
+    }
+
     /// Opens a window for the screen `doc` at `placement`, and focuses it. A screen shown
     /// already is only focused.
     pub fn open_screen_window(&mut self, doc: DocumentId, placement: Placement) -> ViewId {
@@ -186,9 +192,10 @@ impl Editor {
             doc.remove_view(view);
         }
         let focused = self.tree.focus == view;
+        let from = self.tree.try_get(view).map(|view| view.doc);
         self.tree.remove(view);
         if focused {
-            self.screen_focused(view);
+            self.focus_moved(from);
         }
         self._refresh();
         place
@@ -201,19 +208,40 @@ impl Editor {
         if from == to {
             return;
         }
-        let doc_of = |editor: &Editor, view: ViewId| editor.tree.try_get(view).map(|v| v.doc);
-        if let Some(doc) = doc_of(self, from) {
-            if let Some(terminal) = self.terminals.get_mut(doc) {
-                terminal.focus_out();
-            }
+        let from_doc = self.tree.try_get(from).map(|view| view.doc);
+        self.focus_moved(from_doc);
+    }
+
+    /// The focus moved away from a window that showed `from` (gone, maybe): entering a terminal
+    /// lands in its insert mode (it types), leaving one tells it and gives normal mode back.
+    pub(crate) fn focus_moved(&mut self, from: Option<DocumentId>) {
+        let to = self.tree.try_get(self.tree.focus).map(|view| view.doc);
+        if from == to {
+            return;
+        }
+        let mut left_terminal = false;
+        if let Some(terminal) = from.and_then(|doc| self.terminals.get_mut(doc)) {
+            terminal.focus_out();
+            left_terminal = true;
         }
         self.note_document_view();
-        if let Some(doc) = doc_of(self, to) {
-            if let Some(terminal) = self.terminals.get_mut(doc) {
-                terminal.snapshot = None;
+        match to.and_then(|doc| self.terminals.get_mut(doc)) {
+            Some(terminal) => {
+                if terminal.snapshot.take().is_some() {
+                    if let Some(doc) = to.and_then(|doc| self.documents.get_mut(&doc)) {
+                        doc.clear_screen_text();
+                    }
+                }
+                let terminal = self.terminals.get_mut(to.unwrap()).unwrap();
                 terminal.focus_in();
                 self.mode = crate::document::Mode::Insert;
             }
+            None if left_terminal || from.is_none() => {
+                if self.mode != crate::document::Mode::Normal {
+                    self.mode = crate::document::Mode::Normal;
+                }
+            }
+            None => {}
         }
     }
 }

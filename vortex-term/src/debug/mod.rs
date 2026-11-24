@@ -36,12 +36,15 @@ pub fn spectator_key(
 }
 
 /// The panel's area below the splits, when it is shown: the splits get `area` without it. It
-/// has the terminal panel's height (`[editor.terminal] height`), and its place.
+/// takes `[editor.terminal] size` percent of the height, as the scratch terminal does.
 pub fn split_area(editor: &Editor, area: Rect) -> (Rect, Option<Rect>) {
     if !editor.debug.visible || area.height < 6 {
         return (area, None);
     }
-    let height = crate::terminal::screen_height(editor, area.height).max(4);
+    let percent = editor.config().terminal.share() as u32;
+    let height = ((area.height as u32 * percent / 100) as u16)
+        .min(area.height.saturating_sub(3))
+        .max(4);
     let editor_area = area.clip_bottom(height);
     let panel = Rect::new(area.x, editor_area.bottom(), area.width, height);
     (editor_area, Some(panel))

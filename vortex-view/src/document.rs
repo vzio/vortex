@@ -1034,6 +1034,14 @@ impl Document {
         }
     }
 
+    /// Empties the text of a screen document (view mode ended).
+    pub fn clear_screen_text(&mut self) {
+        let views: Vec<ViewId> = self.selections.keys().copied().collect();
+        if let Some(&view) = views.first() {
+            self.set_screen_text(Rope::new(), view, Selection::point(0));
+        }
+    }
+
     /// Replaces the text of a screen document with `text` (view mode's lines), with `selection`
     /// in `view`, as a document of its own: no history, no change to undo.
     pub fn set_screen_text(&mut self, text: Rope, view: ViewId, selection: Selection) {

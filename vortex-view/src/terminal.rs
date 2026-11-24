@@ -206,6 +206,8 @@ pub struct Terminals {
     pub scratch_place: Option<Place>,
     /// Buffers a `vx` in a terminal waits on.
     pub waiters: Vec<Waiter>,
+    /// The buffers a terminal's command line is edited in, and their terminal.
+    pub edits: HashMap<DocumentId, DocumentId>,
 }
 
 impl Terminals {
@@ -234,6 +236,7 @@ impl Terminals {
             self.scratch = None;
             self.scratch_place = None;
         }
+        self.edits.retain(|_, terminal| *terminal != doc);
         let (done, waiting): (Vec<_>, _) = std::mem::take(&mut self.waiters)
             .into_iter()
             .partition(|waiter| waiter.terminal == doc);

@@ -115,10 +115,10 @@ fn quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow
         return Ok(());
     }
 
-    // a buffer a `vx` in the terminal panel waits on (`git commit`): close it, and go back to
-    // the panel, rather than closing the split or the editor
+    // a buffer a `vx` in a terminal waits on (`git commit`), or a terminal's command line being
+    // edited: close it, and go back to the terminal, rather than closing the split or the editor
     let doc_id = view!(cx.editor).doc;
-    if cx.editor.terminal.is_awaited(doc_id) {
+    if cx.editor.terminals.is_awaited(doc_id) || cx.editor.terminals.edits.contains_key(&doc_id) {
         return buffer_close_by_ids_impl(cx, &[doc_id], false);
     }
 
@@ -138,10 +138,10 @@ fn force_quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
         return Ok(());
     }
 
-    // a buffer a `vx` in the terminal panel waits on (`git commit`): close it, and go back to
-    // the panel, rather than closing the split or the editor
+    // a buffer a `vx` in a terminal waits on (`git commit`), or a terminal's command line being
+    // edited: close it, and go back to the terminal, rather than closing the split or the editor
     let doc_id = view!(cx.editor).doc;
-    if cx.editor.terminal.is_awaited(doc_id) {
+    if cx.editor.terminals.is_awaited(doc_id) || cx.editor.terminals.edits.contains_key(&doc_id) {
         return buffer_close_by_ids_impl(cx, &[doc_id], true);
     }
 
@@ -396,6 +396,13 @@ fn write_impl(
     path: Option<&str>,
     options: WriteOptions,
 ) -> anyhow::Result<()> {
+    // a terminal's command line (this fork) isn't a file: `:w` sends it back to the shell's line
+    if cx.editor.terminals.edits.contains_key(&doc!(cx.editor).id()) {
+        if path.is_some() {
+            bail!("a command line isn't a file: it can't be written to one (:w sends it to the shell)");
+        }
+        return crate::terminal::edit::send(cx.editor);
+    }
     // memory (this fork) isn't a file: `:w` sends its overwritten bytes to the program
     if doc!(cx.editor).memory().is_some() {
         if path.is_some() {
@@ -2970,7 +2977,28 @@ fn watch_changes(
     Ok(())
 }
 
-/// `:sh`: types the command in the terminal panel's shell and focuses the panel.
+/// `:terminal`, `:vterminal` (this fork): a new terminal in a horizontal or vertical split.
+fn new_terminal(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    crate::terminal::window::open_new(cx.editor, vortex_view::tree::Layout::Horizontal);
+    Ok(())
+}
+
+fn new_vterminal(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    crate::terminal::window::open_new(cx.editor, vortex_view::tree::Layout::Vertical);
+    Ok(())
+}
+
+/// `:sh`: types the command in the scratch terminal's shell and focuses it.
 fn run_shell_command(
     cx: &mut compositor::Context,
     args: Args,
@@ -2979,7 +3007,7 @@ fn run_shell_command(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-    crate::terminal::run(cx.editor, &args.join(" "));
+    crate::terminal::window::run(cx.editor, &args.join(" "));
     Ok(())
 }
 
@@ -4416,12 +4444,34 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "run-shell-command",
         aliases: &["sh"],
-        doc: "Run a shell command in the terminal panel's shell, as if typed, and focus the panel. Without a command, just show and focus the panel.",
+        doc: "Run a shell command in the scratch terminal's shell, as if typed, and focus it. Without a command, just show and focus the scratch terminal.",
         fun: run_shell_command,
         completer: SHELL_COMPLETER,
         signature: Signature {
             positionals: (0, None),
             ..SHELL_SIGNATURE
+        },
+    },
+    TypableCommand {
+        name: "terminal",
+        aliases: &["term"],
+        doc: "Open a new terminal in a horizontal split.",
+        fun: new_terminal,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "vterminal",
+        aliases: &["vterm"],
+        doc: "Open a new terminal in a vertical split.",
+        fun: new_vterminal,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
         },
     },
     TypableCommand {
