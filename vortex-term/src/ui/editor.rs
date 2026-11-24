@@ -56,6 +56,9 @@ pub struct EditorView {
     diagnostic_cells: std::cell::RefCell<Vec<(u16, u16)>>,
     /// The mode bar as last drawn (this fork), for clicks on its badges.
     modebar: Option<crate::ui::modebar::Drawn>,
+    /// Where the statuslines drew watch mode's mark in the last frame (this fork): a click
+    /// enters watch mode.
+    watch_spots: std::cell::RefCell<Vec<Rect>>,
     /// The Markdown render mode, drawn over the focused view's buffer while it is up (this
     /// fork).
     markdown: Option<crate::markdown_view::MarkdownView>,
@@ -97,6 +100,7 @@ impl EditorView {
             dashboard: None,
             diagnostic_glitch: Default::default(),
             diagnostic_cells: Default::default(),
+            watch_spots: Default::default(),
             modebar: None,
             markdown: None,
             markdown_positions: Default::default(),
@@ -602,6 +606,9 @@ impl EditorView {
         context.mode_label = self.keymaps.sticky().and_then(|node| node.mode_label);
 
         statusline::render(&mut context, statusline_area, surface);
+        if let Some(spot) = context.watch_spot {
+            self.watch_spots.borrow_mut().push(spot);
+        }
     }
 
     /// The columns of the rulers of `doc` (1-based), and their style.
@@ -1616,6 +1623,18 @@ impl EditorView {
             return result;
         }
 
+        // watch mode's mark in a statusline (a left session still watching): enters it again
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.watch_spots.borrow().iter().any(|spot| {
+                (spot.left()..spot.right()).contains(&event.column) && spot.top() == event.row
+            })
+        {
+            if let Err(err) = crate::watch::toggle(cxt.editor) {
+                cxt.editor.set_error(err.to_string());
+            }
+            return EventResult::Consumed(None);
+        }
+
         // the Markdown render mode (this fork) takes the mouse over its page
         if let Some(markdown) = self.live_markdown(cxt.editor) {
             if markdown.handle_mouse(event, cxt.editor) {
@@ -1655,7 +1674,12 @@ impl EditorView {
             })
         };
 
-        // clicking and scrolling are moving: watch mode's following pauses
+        // watch mode (this fork): while following, the mouse in the views does nothing, as the
+        // movement keys (only `v` looks around); a middle-click paste waits for it to end
+        if crate::watch::holds_mouse(cxt.editor, kind) {
+            return EventResult::Consumed(None);
+        }
+        // clicking and scrolling are moving: debug mode's following pauses
         if matches!(
             kind,
             MouseEventKind::Down(_)
@@ -1665,7 +1689,6 @@ impl EditorView {
                 | MouseEventKind::ScrollLeft
                 | MouseEventKind::ScrollRight
         ) {
-            crate::watch::moved(cxt.editor);
             crate::debug::mode::moved(cxt.editor);
         }
 
@@ -2254,6 +2277,7 @@ impl Component for EditorView {
         // with the panel focused, no split is
         let panel_focused = cx.editor.terminal.is_focused() || cx.editor.debug.is_focused();
         self.diagnostic_cells.get_mut().clear();
+        self.watch_spots.get_mut().clear();
         for (view, is_focused) in cx.editor.tree.views() {
             let doc = cx.editor.document(view.doc).unwrap();
             self.render_view(

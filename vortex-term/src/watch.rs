@@ -31,11 +31,15 @@ use tui::text::Span;
 use vortex_core::Selection;
 use vortex_event::register_hook;
 use vortex_vcs::FileChange;
+use vortex_view::input::{MouseButton, MouseEventKind};
 use vortex_view::{
     editor::{Action, ChangesConfig},
     events::DocumentDidOpen,
     graphics::{Color, Modifier, Style},
-    watch::{Baseline, FileKind, FileUpdate, Flash, HunkLines, Quiet, Session, Step, Target},
+    watch::{
+        Baseline, FileKind, FileUpdate, Flash, Gone, HunkLines, Quiet, Rejected, Review, Session,
+        SessionHunk, Step, Target,
+    },
     Editor, Theme,
 };
 
@@ -52,6 +56,15 @@ const FLASH: Duration = Duration::from_millis(900);
 const FLASH_FRAME: Duration = Duration::from_millis(45);
 
 static SESSIONS: AtomicU64 = AtomicU64::new(0);
+
+/// The statusline's mark of a left session blinks when a change arrives: lit this long...
+const BLINK_LIT: Duration = Duration::from_secs(1);
+/// ...every this long...
+const BLINK_PERIOD: Duration = Duration::from_secs(4);
+/// ...this many times, then it stays steady.
+const BLINKS: u32 = 10;
+/// The latest blinking: an earlier one's redraws stop.
+static BLINKING: AtomicU64 = AtomicU64::new(0);
 
 fn trust_full(editor: &Editor, cwd: &Path) -> bool {
     editor
@@ -95,6 +108,78 @@ fn resume(editor: &mut Editor) {
     session.activity = Some(match new {
         0 => "back: nothing changed meanwhile".to_string(),
         new => format!("back: {new} new change{} meanwhile", plural(new)),
+    });
+    catch_up(editor);
+}
+
+/// Coming back while following catches up: the changes made meanwhile are followed one after
+/// another, in the order they happened, `watch-catch-up` seconds each, then following goes on
+/// live. With `watch-catch-up = 0`, straight to the newest. Looking around, nothing moves: they
+/// are counted as new.
+fn catch_up(editor: &mut Editor) {
+    let pace = editor.config().watch_catch_up.duration();
+    let Some(session) = editor.watch.active() else {
+        return;
+    };
+    if !session.following || session.missed().is_empty() {
+        return;
+    }
+    if pace.is_zero() {
+        let newest = session.missed().pop().expect("a change missed");
+        go_to(editor, &newest, Action::Replace);
+        if let Some(session) = editor.watch.session.as_mut() {
+            session.followed(&newest);
+        }
+        return;
+    }
+    let id = session.id;
+    if let Some(token) = session.start_catch_up() {
+        catch_up_step(editor, id, token);
+    }
+}
+
+/// Shows the oldest change not seen yet of the catch-up `token`, then waits `watch-catch-up`
+/// for the next. With none left, the catch-up ends and following goes on live: the changes
+/// made during it were queued behind the others.
+fn catch_up_step(editor: &mut Editor, id: u64, token: u64) {
+    let pace = editor.config().watch_catch_up.duration();
+    let Some(session) = editor.watch.active().filter(|session| session.id == id) else {
+        return;
+    };
+    if session.catch_up.as_ref().map(|catch_up| catch_up.token) != Some(token) {
+        return;
+    }
+    let Some(target) = session.missed().into_iter().next() else {
+        session.catch_up = None;
+        session.activity = Some("caught up: following".into());
+        return;
+    };
+    let baseline = session.baseline.clone();
+    let place = format!(
+        "{}:{}",
+        relative(&baseline, &target.path),
+        target.lines.start + 1
+    );
+    // a buffer with unsaved edits of its own is skipped, as following does
+    let unsaved = editor
+        .document_by_path(&target.path)
+        .is_some_and(|doc| doc.is_modified());
+    let activity = if unsaved {
+        format!(
+            "skipped {}: unsaved edits",
+            relative(&baseline, &target.path)
+        )
+    } else {
+        go_to(editor, &target, Action::Replace);
+        format!("followed {place}")
+    };
+    if let Some(session) = editor.watch.session.as_mut() {
+        session.caught_up(&target);
+        session.activity = Some(activity);
+    }
+    tokio::spawn(async move {
+        tokio::time::sleep(pace).await;
+        crate::job::dispatch(move |editor, _| catch_up_step(editor, id, token)).await;
     });
 }
 
@@ -309,8 +394,16 @@ fn apply(editor: &mut Editor, id: u64, updates: Vec<FileUpdate>) {
     };
     let applied = session.apply(updates);
     let baseline = session.baseline.clone();
-    // out of watch mode (left with `Esc`) the changes are recorded, not followed
-    let following = session.active && session.following;
+    // out of watch mode (left with `Esc`) the changes are recorded, not followed: the
+    // statusline's mark blinks
+    if !session.active && !applied.changed.is_empty() {
+        let now = Instant::now();
+        session.recorded = Some(now);
+        blink(now);
+    }
+    // out of watch mode the changes are recorded, not followed; during a catch-up, they wait
+    // their turn behind the changes it is showing
+    let following = session.active && session.following && session.catch_up.is_none();
     for path in &applied.changed {
         if let Some(doc) = editor.document_by_path_mut(path) {
             if doc.watch_diff().is_none() {
@@ -552,6 +645,9 @@ const NONE: &[&str] = &[
     "watch_prev_change",
     "watch_changes",
     "watch_leave",
+    "watch_accept",
+    "watch_reject",
+    "watch_yank",
     // entering debug mode ends watch mode (one mode at a time)
     "debug_mode",
     "normal_mode",
@@ -739,38 +835,89 @@ pub(crate) fn before_typed(editor: &mut Editor, name: &str) {
     }
 }
 
-/// The mouse moved the cursor or scrolled: you are looking around.
-pub(crate) fn moved(editor: &mut Editor) {
-    if let Some(session) = editor.watch.active() {
-        if session.following {
-            session.pause();
-            session.activity = None;
-        }
-    }
+/// Whether watch mode holds a mouse event over the views, which then does nothing. While
+/// following, the mouse moves nothing (clicks, drags, the wheel), as the movement keys: the bar
+/// says that `v` looks around. A middle-click paste edits: it waits for watch mode to end, in both
+/// states. While looking around, the rest works as usual.
+pub(crate) fn holds_mouse(editor: &mut Editor, kind: MouseEventKind) -> bool {
+    let middle_paste = editor.config().middle_click_paste;
+    let Some(session) = editor.watch.active() else {
+        return false;
+    };
+    let note = match kind {
+        MouseEventKind::Moved => return false,
+        MouseEventKind::Up(MouseButton::Middle) if middle_paste => LEAVE_TO_EDIT,
+        _ if !session.following => return false,
+        MouseEventKind::Down(_)
+        | MouseEventKind::Drag(_)
+        | MouseEventKind::ScrollUp
+        | MouseEventKind::ScrollDown
+        | MouseEventKind::ScrollLeft
+        | MouseEventKind::ScrollRight => LOOK_TO_MOVE,
+        // the button's release after a held press (the left one would yank a selection)
+        MouseEventKind::Up(_) => return true,
+    };
+    session.activity = Some(note.into());
+    true
 }
 
-/// The statusline element (not in the default statusline: the mode bar shows watch mode): a
-/// small `●` while following, `◌` while looking around; nothing outside watch mode.
+/// Whether the statusline's mark is lit, `elapsed` after a change arrived: lit for a second
+/// every four, ten times; `None` once it is steady.
+pub(crate) fn blink_lit(elapsed: Duration) -> Option<bool> {
+    if elapsed >= BLINK_PERIOD * BLINKS {
+        return None;
+    }
+    let phase = elapsed.as_millis() % BLINK_PERIOD.as_millis();
+    Some(phase < BLINK_LIT.as_millis())
+}
+
+/// Redraws at each turn of the blinking that starts at `start`, until it is steady: an earlier
+/// blinking stops. Nothing runs once it is steady, so the editor idles.
+fn blink(start: Instant) {
+    let blinking = BLINKING.fetch_add(1, Ordering::Relaxed) + 1;
+    tokio::spawn(async move {
+        for turn in 0..BLINKS {
+            let period = BLINK_PERIOD * turn;
+            for at in [period + BLINK_LIT, period + BLINK_PERIOD] {
+                tokio::time::sleep_until((start + at).into()).await;
+                if BLINKING.load(Ordering::Relaxed) != blinking {
+                    return;
+                }
+                vortex_event::request_redraw();
+            }
+        }
+    });
+}
+
+/// The statusline's `watch` element (in the default statusline): a session left with `Esc` that
+/// is still watching, as `●` and the count of the changes made since (`● 3`), lit for a second
+/// every four when a change arrives, ten times, then steady. Nothing without a session, once it
+/// is stopped, and while watch mode is on (the mode bar shows it).
 pub(crate) fn statusline(editor: &Editor) -> Option<Span<'static>> {
-    let session = editor.watch.session.as_ref().filter(|s| s.active)?;
+    let session = editor
+        .watch
+        .session
+        .as_ref()
+        .filter(|session| !session.active && session.is_live())?;
     let theme = &editor.theme;
-    let style = |scope: &str, fallback: Color| {
+    let lit = session
+        .recorded
+        .and_then(|at| blink_lit(at.elapsed()))
+        .unwrap_or(false);
+    let style = if lit {
         theme
-            .try_get_exact(scope)
-            .or_else(|| theme.try_get_exact("ui.statusline.watch"))
-            .unwrap_or_else(|| {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(fallback)
-                    .add_modifier(Modifier::BOLD)
-            })
-    };
-    let span = if session.following {
-        Span::styled(" ● ", style("ui.statusline.watch.following", Color::Green))
+            .try_get_exact("ui.statusline.watch.lit")
+            .unwrap_or_else(|| Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
     } else {
-        Span::styled(" ◌ ", style("ui.statusline.watch.paused", Color::Yellow))
+        theme
+            .try_get_exact("ui.statusline.watch")
+            .unwrap_or_default()
     };
-    Some(span)
+    let text = match session.new_since_left() {
+        0 => " ● ".to_string(),
+        count => format!(" ● {count} "),
+    };
+    Some(Span::styled(text, style))
 }
 
 /// The rows watch mode takes on the mode bar.
@@ -780,7 +927,10 @@ pub const BAR_ROWS: u16 = 2;
 pub(crate) fn bar(editor: &Editor, keys: &ReverseKeymap) -> Option<modebar::Bar> {
     use modebar::{Row, Segment};
     let session = editor.watch.session.as_ref().filter(|s| s.active)?;
-    let state = if session.following {
+    let state = if let Some((done, total)) = session.catch_up_progress() {
+        Segment::state(format!("WATCH ● catching up {done}/{total}"))
+            .scope("ui.modebar.state.following")
+    } else if session.following {
         Segment::state("WATCH ● following").scope("ui.modebar.state.following")
     } else {
         Segment::state("WATCH ◌ looking").scope("ui.modebar.state.looking")
@@ -819,6 +969,9 @@ pub(crate) fn bar(editor: &Editor, keys: &ReverseKeymap) -> Option<modebar::Bar>
                     Segment::key("watch_look", look, keys),
                     Segment::key("watch_next_change", "next", keys),
                     Segment::key("watch_prev_change", "previous", keys),
+                    Segment::key("watch_accept", "accept", keys),
+                    Segment::key("watch_reject", "reject", keys),
+                    Segment::key("watch_yank", "yank", keys),
                     Segment::key("watch_changes", "changes", keys),
                     Segment::key("watch_leave", "leave", keys),
                 ],
@@ -828,7 +981,7 @@ pub(crate) fn bar(editor: &Editor, keys: &ReverseKeymap) -> Option<modebar::Bar>
     })
 }
 
-/// The style of the flash on line `line` of `doc`, fading out; `None` when it isn't flashing.
+/// The lines of `doc` flashing and their style, fading out; `None` when it isn't flashing.
 pub(crate) fn flash_style(
     editor: &Editor,
     doc: vortex_view::DocumentId,
@@ -843,7 +996,12 @@ pub(crate) fn flash_style(
     }
     let theme: &Theme = &editor.theme;
     let color = theme.get_or("ui.highlight.watch", "ui.selection").bg;
-    let background = theme.get("ui.background").bg;
+    // toward the background drawn under it: a mode's screen while one is on (watch mode's when
+    // following), else the buffer's, so that it ends on it without a flicker
+    let background = match crate::modes::current(editor) {
+        Some(_) => crate::modes::screen_style(theme).bg,
+        None => theme.get("ui.background").bg,
+    };
     let left = 1.0 - elapsed.as_secs_f32() / FLASH.as_secs_f32();
     let bg = match crate::ui::diff_view::blend(background, color, left) {
         Some(color) => Some(color),
@@ -877,23 +1035,41 @@ pub(crate) fn register_hooks() {
 }
 
 /// The rows of the session's changes: the most recently changed file first, and in a file its
-/// newest hunk first.
+/// newest hunk first. Accepted changes are marked; rejected ones, no longer changes, have a row
+/// of their own (where they were, with the lines they had) under their file.
 fn session_rows(editor: &Editor, session: &Session) -> Vec<ChangeRow> {
     let config = &editor.config().changes;
     let mut rows = Vec::new();
-    for (path, file) in session.files_newest_first() {
-        let before = session.baseline.get(path);
-        let now = match file.kind {
-            FileKind::Deleted => None,
-            _ => std::fs::read(path).ok(),
+    let mut files = session.files_newest_first();
+    // a file whose changes were all rejected is back to its baseline: listed for them
+    for change in session.rejected() {
+        if session.file(&change.path).is_none() && !files.iter().any(|(p, _)| *p == &change.path) {
+            files.push((&change.path, &EMPTY_FILE));
+        }
+    }
+    for (path, file) in files {
+        let rejected: Vec<_> = session
+            .rejected()
+            .iter()
+            .filter(|change| &change.path == path)
+            .collect();
+        let mut group = if session.file(path).is_some() {
+            let before = session.baseline.get(path);
+            let now = match file.kind {
+                FileKind::Deleted => None,
+                _ => std::fs::read(path).ok(),
+            };
+            let change = match file.kind {
+                FileKind::Created => FileChange::Added { path: path.clone() },
+                FileKind::Deleted => FileChange::Deleted { path: path.clone() },
+                _ => FileChange::Modified { path: path.clone() },
+            };
+            changes::commit_group(&change, before.as_deref(), now.as_deref(), config)
+        } else {
+            let change = FileChange::Modified { path: path.clone() };
+            changes::file_group(&change, None, changes::Body::Hunks, Vec::new())
         };
-        let change = match file.kind {
-            FileKind::Created => FileChange::Added { path: path.clone() },
-            FileKind::Deleted => FileChange::Deleted { path: path.clone() },
-            _ => FileChange::Modified { path: path.clone() },
-        };
-        let mut group = changes::commit_group(&change, before.as_deref(), now.as_deref(), config);
-        let seq = |row: &ChangeRow| match &row.what {
+        let seq_of = |row: &ChangeRow| match &row.what {
             What::Hunk(hunk) => file
                 .hunks
                 .iter()
@@ -901,11 +1077,74 @@ fn session_rows(editor: &Editor, session: &Session) -> Vec<ChangeRow> {
                 .map_or(0, |session_hunk| session_hunk.seq),
             What::File(_) => u64::MAX,
         };
+        let mut keyed: Vec<(u64, ChangeRow)> = group
+            .drain(..)
+            .map(|mut row| {
+                let seq = seq_of(&row);
+                let accepted = file
+                    .hunks
+                    .iter()
+                    .any(|hunk| hunk.seq == seq && hunk.review == Some(Review::Accepted));
+                if accepted {
+                    row.marks = Some(changes::Marks {
+                        review: Some(Review::Accepted),
+                        ..Default::default()
+                    });
+                }
+                (seq, row)
+            })
+            .collect();
+        for change in rejected {
+            keyed.push((change.seq, rejected_row(path, change)));
+        }
         // the divider stays first
-        group.sort_by_key(|row| std::cmp::Reverse(seq(row)));
-        rows.extend(group);
+        keyed.sort_by_key(|(seq, _)| std::cmp::Reverse(*seq));
+        rows.extend(keyed.into_iter().map(|(_, row)| row));
     }
     rows
+}
+
+/// A file without hunks, for the files whose changes were all rejected.
+static EMPTY_FILE: vortex_view::watch::SessionFile = vortex_view::watch::SessionFile::EMPTY;
+
+/// The row of a rejected change: where it was, with the lines it had.
+fn rejected_row(path: &Path, change: &Rejected) -> ChangeRow {
+    let removed: Vec<&str> = change
+        .removed
+        .iter()
+        .map(|line| line.trim_end_matches(['\n', '\r']))
+        .collect();
+    let added: Vec<&str> = change
+        .added
+        .iter()
+        .map(|line| line.trim_end_matches(['\n', '\r']))
+        .collect();
+    let line_hunk = vortex_vcs::staging::LineHunk {
+        before: 0..removed.len() as u32,
+        after: 0..added.len() as u32,
+    };
+    let edit = match (removed.is_empty(), added.is_empty()) {
+        (true, _) => changes::Edit::Add,
+        (_, true) => changes::Edit::Remove,
+        _ => changes::Edit::Change,
+    };
+    let hunk = changes::Hunk {
+        lines: change.line..change.line,
+        added: added.len() as u32,
+        removed: removed.len() as u32,
+        edit,
+        preview: Arc::new(changes::preview(&removed, &added, &line_hunk)),
+    };
+    ChangeRow {
+        change: FileChange::Modified {
+            path: path.to_owned(),
+        },
+        marks: Some(changes::Marks {
+            review: Some(Review::Rejected),
+            ..Default::default()
+        }),
+        what: What::Hunk(hunk),
+    }
 }
 
 /// `:watch-changes`: the picker of the session's changes, one row per hunk under a divider per
@@ -978,6 +1217,253 @@ fn open_row(editor: &mut Editor, row: &ChangeRow, action: Action) -> bool {
     true
 }
 
+/// The current change: the hunks of the change followed or gone to last (`n`/`N`, the picker),
+/// in the order of its file.
+fn current_change(editor: &Editor) -> anyhow::Result<(Target, Vec<SessionHunk>)> {
+    let session = editor.watch.session.as_ref().context("no watch session")?;
+    let target = session.current().map_err(|gone| match gone {
+        Gone::NoChange => anyhow::anyhow!("no change yet: n goes to one"),
+        Gone::Rewritten => anyhow::anyhow!("that change is gone: its lines were changed again"),
+        Gone::Rejected => anyhow::anyhow!("that change was rejected"),
+    })?;
+    let hunks = session.change_of(&target);
+    Ok((target, hunks))
+}
+
+/// `src/main.rs:12-14`, one per hunk, as `Space :` and `C-y` write them.
+fn places(path: &Path, hunks: &[SessionHunk]) -> Vec<String> {
+    let path = crate::yank_place::shown_path(path, false);
+    hunks
+        .iter()
+        .map(|hunk| changes::place(&path, &hunk.after))
+        .collect()
+}
+
+/// `y` in watch mode: yanks the current change's `file:lines` to the clipboard, one place per
+/// hunk (a removed hunk is the line before it), as `Space :` does.
+pub(crate) fn yank(editor: &mut Editor) {
+    match current_change(editor) {
+        Ok((target, hunks)) => crate::yank_place::yank(editor, places(&target.path, &hunks)),
+        Err(err) => editor.set_error(err.to_string()),
+    }
+}
+
+/// The text of the file the current change is in, checked: no unsaved edits of your own, and its
+/// change still there with the same lines (the watcher may not have taken in a write yet).
+fn checked_text(
+    editor: &mut Editor,
+    target: &Target,
+    hunks: &[SessionHunk],
+) -> anyhow::Result<String> {
+    let path = &target.path;
+    let shown = crate::yank_place::shown_path(path, false);
+    crate::handlers::disk::check_paths(editor, std::slice::from_ref(path));
+    if let Some(doc) = editor.document_by_path(path) {
+        anyhow::ensure!(
+            !doc.is_modified(),
+            "{shown} has unsaved changes: write it first"
+        );
+    }
+    let bytes = std::fs::read(path).with_context(|| format!("can't read {shown}"))?;
+    let text = String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{shown} is binary"))?;
+    let session = editor.watch.session.as_ref().context("no watch session")?;
+    let config = editor.config().changes.clone();
+    let now = read_updates(&session.baseline, &config, std::slice::from_ref(path));
+    let there = |hunk: &SessionHunk| {
+        now.iter().any(|update| {
+            update
+                .hunks
+                .iter()
+                .any(|now| now.key == hunk.key() && now.after == hunk.after)
+        })
+    };
+    anyhow::ensure!(
+        !hunks.is_empty() && hunks.iter().all(there),
+        "{shown} changed since: try again"
+    );
+    Ok(text)
+}
+
+fn line_hunk(hunk: &SessionHunk) -> vortex_vcs::staging::LineHunk {
+    vortex_vcs::staging::LineHunk {
+        before: hunk.before.clone(),
+        after: hunk.after.clone(),
+    }
+}
+
+/// `a` in watch mode: accepts the current change: stages its hunks, as staging a hunk in the
+/// diff view does (the index gets those lines of the file). The change is marked accepted.
+pub(crate) fn accept(editor: &mut Editor) {
+    let result = current_change(editor).and_then(|(target, hunks)| {
+        let work = checked_text(editor, &target, &hunks)?;
+        let path = &target.path;
+        let trust_full = trust_full(editor, path.parent().unwrap_or(path));
+        let index = editor
+            .diff_providers
+            .index_file(path, trust_full)?
+            .map(|bytes| {
+                String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("the index has a binary file"))
+            })
+            .transpose()?;
+        let index_text = index.as_deref().unwrap_or("");
+        let staged = hunks.iter().fold(index_text.to_string(), |index, hunk| {
+            vortex_vcs::staging::stage_hunk(&index, &work, &line_hunk(hunk))
+        });
+        if index.is_none() || staged != index_text {
+            editor
+                .diff_providers
+                .set_index_file(path, Some(staged.as_bytes()), trust_full)?;
+        }
+        if let Some(session) = editor.watch.session.as_mut() {
+            for hunk in &hunks {
+                session.accept(path, hunk.seq);
+            }
+        }
+        Ok(format!("staged {}", places(path, &hunks).join(", ")))
+    });
+    match result {
+        Ok(message) => editor.set_status(message),
+        Err(err) => editor.set_error(err.to_string()),
+    }
+}
+
+/// What rejecting the current change does once it was checked.
+pub(crate) enum Rejection {
+    /// Done, with the message for the status line.
+    Done(String),
+    /// The change is the whole of a file the session created: rejecting it deletes the file,
+    /// after a confirmation ([`delete_created`]).
+    ConfirmDelete(PathBuf),
+}
+
+/// `x` in watch mode: rejects the current change: its lines go back to what they were when the
+/// watch started (the baseline), as one edit of the file's buffer, then a write (`u` in the
+/// buffer undoes it), with the rules of reverting a hunk: not with unsaved edits of your own, not
+/// once staged (accepted), and a file the session created asks before it is deleted. The change
+/// is marked rejected.
+pub(crate) fn reject(editor: &mut Editor) -> anyhow::Result<Rejection> {
+    let (target, hunks) = current_change(editor)?;
+    let work = checked_text(editor, &target, &hunks)?;
+    let path = target.path.clone();
+    let shown = crate::yank_place::shown_path(&path, false);
+    let baseline = editor
+        .watch
+        .session
+        .as_ref()
+        .context("no watch session")?
+        .baseline
+        .clone();
+    let base = baseline.get(&path);
+    let base_text = match base.as_deref() {
+        Some(bytes) => std::str::from_utf8(bytes)
+            .map_err(|_| anyhow::anyhow!("{shown} was binary"))?
+            .to_string(),
+        None => String::new(),
+    };
+    // staged: the index has those lines
+    let trust_full = trust_full(editor, path.parent().unwrap_or(&path));
+    let index = editor.diff_providers.index_file(&path, trust_full)?;
+    if let Some(index) = index
+        .as_deref()
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+    {
+        let staged = hunks
+            .iter()
+            .all(|hunk| vortex_vcs::staging::revert_hunk(index, &work, &line_hunk(hunk)) == work);
+        anyhow::ensure!(
+            !staged,
+            "{} is staged: unstage it first",
+            places(&path, &hunks).join(", ")
+        );
+    }
+    // from the last hunk up, so that the lines of those above stay where they are
+    let reverted = hunks.iter().rev().fold(work.clone(), |text, hunk| {
+        vortex_vcs::staging::revert_hunk(&base_text, &text, &line_hunk(hunk))
+    });
+    if base.is_none() && reverted.is_empty() {
+        return Ok(Rejection::ConfirmDelete(path));
+    }
+    anyhow::ensure!(reverted != work, "{shown} has nothing to reject there");
+    let places = places(&path, &hunks);
+    let doc = match editor.document_by_path(&path) {
+        Some(doc) => doc.id(),
+        None => editor.open(&path, Action::Load)?,
+    };
+    replace_text(editor, doc, &reverted);
+    let message = format!("rejected {}", places.join(", "));
+    // said once it is written, instead of `'file' written`
+    editor.save_messages.insert(doc, message.clone());
+    if let Err(err) = editor.save::<PathBuf>(doc, None, false) {
+        editor.save_messages.remove(&doc);
+        return Err(err);
+    }
+    mark_rejected(editor, &target, &hunks, &base_text, &work);
+    Ok(Rejection::Done(message))
+}
+
+/// Records the change of `hunks` (of the text `work`, against `base`) as rejected.
+fn mark_rejected(
+    editor: &mut Editor,
+    target: &Target,
+    hunks: &[SessionHunk],
+    base: &str,
+    work: &str,
+) {
+    let (base_lines, work_lines) = (changes::lines(base), changes::lines(work));
+    let slice = |lines: &[&str], range: &std::ops::Range<u32>| -> Vec<String> {
+        let end = (range.end as usize).min(lines.len());
+        let start = (range.start as usize).min(end);
+        lines[start..end]
+            .iter()
+            .map(|line| line.to_string())
+            .collect()
+    };
+    let Some(session) = editor.watch.session.as_mut() else {
+        return;
+    };
+    // a hunk above moves the lines of those below by the lines it gave back
+    let mut shift: i64 = 0;
+    for hunk in hunks {
+        let line = (hunk.after.start as i64 + shift).max(0) as u32;
+        shift += hunk.before.len() as i64 - hunk.after.len() as i64;
+        session.reject(Rejected {
+            path: target.path.clone(),
+            seq: hunk.seq,
+            line,
+            removed: slice(&base_lines, &hunk.before),
+            added: slice(&work_lines, &hunk.after),
+        });
+    }
+}
+
+/// Deletes the file the session created whose whole content was the change rejected, after the
+/// confirmation: like reverting an untracked file.
+pub(crate) fn delete_created(editor: &mut Editor, path: &Path) -> anyhow::Result<String> {
+    let (target, hunks) = current_change(editor)?;
+    anyhow::ensure!(target.path == path, "the change moved: try again");
+    let work = checked_text(editor, &target, &hunks)?;
+    crate::commands::hunks::delete_untracked(editor, path)?;
+    mark_rejected(editor, &target, &hunks, "", &work);
+    Ok(format!(
+        "rejected {}: deleted it",
+        crate::yank_place::shown_path(path, false)
+    ))
+}
+
+/// Changes the text of `doc` to `text`, as one undoable step.
+fn replace_text(editor: &mut Editor, doc: vortex_view::DocumentId, text: &str) {
+    let view = editor.get_synced_view_id(doc);
+    let document = editor
+        .documents
+        .get_mut(&doc)
+        .expect("the document is open");
+    let transaction =
+        vortex_core::diff::compare_ropes(document.text(), &vortex_core::Rope::from(text));
+    let view = editor.tree.get_mut(view);
+    document.apply(&transaction, view.id);
+    document.append_changes_to_history(view);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1009,6 +1495,33 @@ mod tests {
         ] {
             assert_eq!(effect(name), Effect::End, "{name}");
         }
+    }
+
+    #[test]
+    fn the_mark_blinks_a_second_every_four_ten_times_then_is_steady() {
+        let at = |millis: u64| blink_lit(Duration::from_millis(millis));
+        assert_eq!(at(0), Some(true));
+        assert_eq!(at(999), Some(true));
+        assert_eq!(at(1000), Some(false));
+        assert_eq!(at(3999), Some(false));
+        assert_eq!(at(4000), Some(true));
+        assert_eq!(at(36_500), Some(true));
+        assert_eq!(at(39_999), Some(false));
+        assert_eq!(at(40_000), None);
+        assert_eq!(at(400_000), None);
+    }
+
+    #[test]
+    fn the_catch_up_pace_is_a_number_of_seconds() {
+        let pace = |toml: &str| {
+            toml::from_str::<vortex_view::editor::Config>(toml)
+                .map(|config| config.watch_catch_up.millis)
+        };
+        assert_eq!(pace("").unwrap(), 1000);
+        assert_eq!(pace("watch-catch-up = 0").unwrap(), 0);
+        assert_eq!(pace("watch-catch-up = 2").unwrap(), 2000);
+        assert_eq!(pace("watch-catch-up = 0.25").unwrap(), 250);
+        assert!(pace("watch-catch-up = -1").is_err());
     }
 
     /// A renamed or removed command left in a list would silently fall to "ends watch mode".

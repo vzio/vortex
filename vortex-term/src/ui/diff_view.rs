@@ -40,6 +40,8 @@ const MAX_WORD_CHANGE_RATIO: f32 = 0.6;
 /// One version of the file.
 pub struct Side {
     title: String,
+    /// The file this side is a version of, for `y`; `None` for a buffer without a file.
+    path: Option<PathBuf>,
     text: String,
     /// Byte range of each line, without the line ending.
     lines: Vec<Range<usize>>,
@@ -48,6 +50,12 @@ pub struct Side {
 }
 
 impl Side {
+    /// The side of a buffer without a file: `y` has no place to yank.
+    pub fn without_file(mut self) -> Side {
+        self.path = None;
+        self
+    }
+
     pub fn new(title: String, text: String, path: &Path, editor: &Editor) -> Side {
         let lines = line_ranges(&text);
         let highlights = highlight(
@@ -59,6 +67,7 @@ impl Side {
         );
         Side {
             title,
+            path: Some(path.to_owned()),
             text,
             lines,
             highlights,
@@ -895,6 +904,30 @@ impl DiffView {
         None
     }
 
+    /// `y` (this fork): yanks the current hunk's `file:lines`, as `Space :` writes them: the new
+    /// side's lines, or the old side's for a hunk that only removes lines.
+    fn yank_place(&self, editor: &mut Editor) {
+        let Some(hunk) = self.line_hunks.get(self.current) else {
+            editor.set_error("No changes");
+            return;
+        };
+        let (side, lines) = if hunk.after.is_empty() {
+            (&self.left, &hunk.before)
+        } else {
+            (&self.right, &hunk.after)
+        };
+        let Some(path) = side.path.as_deref() else {
+            editor.set_error("This buffer has no file");
+            return;
+        };
+        let place = format!(
+            "{}:{}",
+            crate::yank_place::shown_path(path, false),
+            crate::yank_place::lines(lines.start as usize, lines.end as usize - 1)
+        );
+        crate::yank_place::yank(editor, vec![place]);
+    }
+
     /// Runs a hunk action on the current hunk, or on the whole file, then shows the result.
     fn act(&mut self, op: hunks::Op, whole_file: bool, editor: &mut Editor) {
         let Some(actions) = &self.actions else {
@@ -1081,6 +1114,7 @@ impl DiffView {
             KeyCode::PageUp => self.scroll_by(-page),
             KeyCode::Home => self.scroll_to(0),
             KeyCode::Char('G') | KeyCode::End => self.scroll_to(usize::MAX),
+            KeyCode::Char('y') => self.yank_place(editor),
             KeyCode::Char('n') => return self.step_hunk(true, editor),
             KeyCode::Char('N') => return self.step_hunk(false, editor),
             KeyCode::Char('s') => self.act(hunks::Op::Stage, false, editor),
@@ -1534,6 +1568,7 @@ fn key_help() -> crate::ui::keyhelp::KeyHelp {
                     ("s u r", "stage, unstage, revert the hunk"),
                     ("S U R", "stage, unstage, revert the file"),
                     ("Enter", "open the file at the hunk"),
+                    ("y", "yank the hunk's file:lines"),
                 ],
             ),
             (
@@ -1597,6 +1632,7 @@ mod test {
     fn wrapped_rows_take_several_lines() {
         let editor_less_side = |text: &str| Side {
             title: String::new(),
+            path: None,
             lines: line_ranges(text),
             highlights: vec![Vec::new(); line_ranges(text).len()],
             text: text.to_string(),

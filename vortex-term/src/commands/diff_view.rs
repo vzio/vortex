@@ -251,13 +251,14 @@ fn buffer_snapshot(editor: &Editor, doc: DocumentId) -> anyhow::Result<Snapshot>
     let name = doc.display_name();
     let path = Path::new(name.as_ref());
     Ok(Snapshot {
-        left: Side::new("Diff base".into(), base, path, editor),
+        left: Side::new("Diff base".into(), base, path, editor).without_file(),
         right: Side::new(
             format!("Buffer: {name}"),
             doc.text().to_string(),
             path,
             editor,
-        ),
+        )
+        .without_file(),
         path: None,
         staging: None,
     })

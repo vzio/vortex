@@ -26,6 +26,7 @@ use vortex_vcs::FileChange;
 use vortex_view::{
     editor::{Action, ChangesConfig},
     graphics::{Rect, Style},
+    watch::Review,
     Editor,
 };
 
@@ -46,6 +47,8 @@ pub(crate) struct Marks {
     pub(crate) unstaged: bool,
     /// In the buffer and not on disk: the file and its modified buffer differ there.
     pub(crate) unsaved: bool,
+    /// What reviewing made of a change of the watch session (`:watch-changes`).
+    pub(crate) review: Option<Review>,
 }
 
 impl Marks {
@@ -64,6 +67,8 @@ impl Marks {
             (self.staged, "staged"),
             (self.unstaged, "unstaged"),
             (self.unsaved, "unsaved"),
+            (self.review == Some(Review::Accepted), "accepted"),
+            (self.review == Some(Review::Rejected), "rejected"),
         ]
         .iter()
         .filter(|(on, _)| *on)
@@ -782,6 +787,20 @@ pub(crate) fn picker(
     open: impl Fn(&mut Context, &ChangeRow, Action) + 'static,
 ) -> Picker<ChangeRow, RowData> {
     let mut columns = Vec::new();
+    // the watch session's reviewed changes: `✓` accepted, `✗` rejected
+    if rows
+        .iter()
+        .any(|row| row.marks.is_some_and(|marks| marks.review.is_some()))
+    {
+        columns.push(PickerColumn::new(
+            "review",
+            |row: &ChangeRow, data: &RowData| match row.marks.and_then(|marks| marks.review) {
+                Some(Review::Accepted) => Span::styled("✓", data.added).into(),
+                Some(Review::Rejected) => Span::styled("✗", data.removed).into(),
+                None => "".into(),
+            },
+        ));
+    }
     if with_marks {
         columns.push(PickerColumn::new(
             "marks",
@@ -1041,6 +1060,7 @@ pub(crate) mod tests {
             staged: true,
             unstaged: false,
             unsaved: true,
+            review: None,
         };
         assert_eq!(marks.describe(), "staged, unsaved");
         assert!(!marks.only_unsaved());

@@ -25,6 +25,8 @@ pub struct RenderContext<'a> {
     /// keymap node, like "MOV" for the move mode). The colors still follow the editor mode.
     pub mode_label: Option<&'a str>,
     pub parts: RenderBuffer<'a>,
+    /// Where the `watch` element was drawn, for a click on it (this fork).
+    pub watch_spot: Option<Rect>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -43,6 +45,7 @@ impl<'a> RenderContext<'a> {
             spinners,
             mode_label: None,
             parts: RenderBuffer::default(),
+            watch_spot: None,
         }
     }
 }
@@ -67,11 +70,19 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
 
     let config = context.editor.config();
 
+    let mut watch = None;
     for element_id in &config.statusline.left {
         let render = get_render_function(*element_id);
+        let before = context.parts.left.width();
         (render)(context, |context, span| {
             append(&mut context.parts.left, span, base_style)
         });
+        if *element_id == StatusLineElementID::Watch {
+            watch = Some((before, context.parts.left.width()));
+        }
+    }
+    if let Some((start, end)) = watch.take() {
+        context.watch_spot = spot(viewport, viewport.x as usize + start, end - start);
     }
 
     surface.set_spans(
@@ -85,9 +96,18 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
 
     for element_id in &config.statusline.right {
         let render = get_render_function(*element_id);
+        let before = context.parts.right.width();
         (render)(context, |context, span| {
             append(&mut context.parts.right, span, base_style)
-        })
+        });
+        if *element_id == StatusLineElementID::Watch {
+            watch = Some((before, context.parts.right.width()));
+        }
+    }
+    if let Some((start, end)) = watch.take() {
+        let right = viewport.x as usize
+            + (viewport.width as usize).saturating_sub(context.parts.right.width());
+        context.watch_spot = spot(viewport, right + start, end - start);
     }
 
     surface.set_spans(
@@ -122,6 +142,11 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
         &context.parts.center,
         center_width,
     );
+}
+
+/// The cells of an element drawn `width` wide from column `x` of the statusline, if any.
+fn spot(viewport: Rect, x: usize, width: usize) -> Option<Rect> {
+    (width > 0).then(|| Rect::new(x as u16, viewport.y, width as u16, 1))
 }
 
 fn append<'a>(buffer: &mut Spans<'a>, mut span: Span<'a>, base_style: Style) {

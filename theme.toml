@@ -197,13 +197,16 @@ hint = { fg = "n_8", bg = "n_1" }
 "ui.virtual.inline-blame" = { fg = "n_5", modifiers = ["italic"] }
 "ui.virtual.inline-blame.hash" = "n_6"
 
-# Watch mode: the session's changes in the gutter, the hunk followed to, the WATCH indicator
+# Watch mode: the session's changes in the gutter (accepted, rejected), the hunk followed to
 "diff.watch.plus" = "n_10"
 "diff.watch.delta" = "red_light"
 "diff.watch.minus" = "red_light"
 "ui.highlight.watch" = { bg = "purple_dark" }
-"ui.statusline.watch.following" = { fg = "n_11", bg = "purple_mid", modifiers = ["bold"] }
-"ui.statusline.watch.paused" = { fg = "background", bg = "red_faded", modifiers = ["bold"] }
+"diff.watch.accepted" = "purple_light"
+"diff.watch.rejected" = "red"
+# a session left with Esc: its mark in the statusline, lit when a change arrives
+"ui.statusline.watch" = { fg = "n_8", bg = "n_2" }
+"ui.statusline.watch.lit" = { fg = "n_11", bg = "red", modifiers = ["bold"] }
 "ui.modebar" = { fg = "n_9", bg = "n_2" }
 "ui.modebar.state" = { fg = "n_11", bg = "purple_mid", modifiers = ["bold"] }
 "ui.modebar.state.following" = { fg = "n_11", bg = "purple_mid", modifiers = ["bold"] }

@@ -71,6 +71,7 @@ pub(crate) fn file_rows(change: &FileChange, versions: Versions, lockfile: bool)
         staged: index != head || (renamed && index.is_some()),
         unstaged: disk != index || (renamed && index.is_none()),
         unsaved: buffer.is_some_and(|buffer| Some(buffer.as_bytes()) != disk),
+        review: None,
     };
     if file_marks == Marks::default() {
         // listed by git all the same (a change of mode): on disk
@@ -116,6 +117,7 @@ pub(crate) fn file_rows(change: &FileChange, versions: Versions, lockfile: bool)
                 staged: staged.iter().any(|s| touches(&s.before, &hunk.before)),
                 unstaged: unstaged.iter().any(|u| touches(&u.after, &on_disk)),
                 unsaved: unsaved.iter().any(|u| touches(&u.after, &hunk.after)),
+                review: None,
             };
             if marks == Marks::default() {
                 // the diffs line up differently: it is a change of the file all the same

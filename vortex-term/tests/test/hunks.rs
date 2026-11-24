@@ -560,3 +560,90 @@ async fn the_diff_has_no_keys_in_its_footer_and_question_mark_shows_them() {
     assert_eq!(session.footer(), "hunk 1/2 · file 1/1");
     assert_eq!(status(&session.app), "");
 }
+
+// `y` in the diff: yanks the place of the hunk
+
+/// The clipboard register as the one value yanking places writes.
+fn clipboard(session: &Session) -> Option<String> {
+    let values: Vec<String> = session
+        .app
+        .editor
+        .registers
+        .read('+', &session.app.editor)?
+        .map(|value| value.into_owned())
+        .collect();
+    assert!(values.len() <= 1, "{values:?}");
+    values.into_iter().next()
+}
+
+/// `y` yanks the `file:lines` of the hunk shown, the new side's lines: for a hunk that changes
+/// a line, its number in the file as it is now.
+#[tokio::test(flavor = "multi_thread")]
+async fn y_in_the_diff_yanks_the_new_lines_of_the_hunk() {
+    let Some(_) = enter("y_in_the_diff_yanks_the_new_lines_of_the_hunk") else {
+        return;
+    };
+    let original = lines("line ", 20);
+    write("a.txt", &original);
+    commit_all("Add a.txt");
+    // line 3 changed, and lines 14-16 replaced by two: the new side has 14-15
+    let edited =
+        change(&original, 3, "three").replace("line 14\nline 15\nline 16\n", "fourteen\nfifteen\n");
+    write("a.txt", &edited);
+
+    let mut session = Session::open_uncommitted(1).await;
+    session.open_diff(0).await;
+    assert_eq!(session.footer(), "hunk 1/2 · file 1/1");
+    session.keys("y").await;
+    assert_eq!(status(&session.app), "yanked a.txt:3");
+    assert_eq!(clipboard(&session).as_deref(), Some("a.txt:3"));
+
+    session.keys("n").await;
+    assert_eq!(session.footer(), "hunk 2/2 · file 1/1");
+    session.keys("y").await;
+    assert_eq!(status(&session.app), "yanked a.txt:14-15");
+    assert_eq!(clipboard(&session).as_deref(), Some("a.txt:14-15"));
+    // nothing else happened: still in the diff, nothing staged
+    assert_eq!(session.footer(), "hunk 2/2 · file 1/1");
+    assert_eq!(cached(), "");
+}
+
+/// A hunk that only removes lines has no new lines: `y` yanks the old side's, where they were.
+#[tokio::test(flavor = "multi_thread")]
+async fn y_in_the_diff_yanks_the_old_lines_of_a_hunk_that_only_removes() {
+    let Some(_) = enter("y_in_the_diff_yanks_the_old_lines_of_a_hunk_that_only_removes") else {
+        return;
+    };
+    let original = lines("line ", 20);
+    write("a.txt", &original);
+    commit_all("Add a.txt");
+    write("a.txt", &original.replace("line 8\nline 9\n", ""));
+
+    let mut session = Session::open_uncommitted(1).await;
+    session.open_diff(0).await;
+    assert_eq!(session.footer(), "hunk 1/1 · file 1/1");
+    session.keys("y").await;
+    assert_eq!(status(&session.app), "yanked a.txt:8-9");
+    assert_eq!(clipboard(&session).as_deref(), Some("a.txt:8-9"));
+}
+
+/// The `?` help of the diff lists `y`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_help_of_the_diff_lists_y() {
+    let Some(_) = enter("the_help_of_the_diff_lists_y") else {
+        return;
+    };
+    let (_, edited) = two_hunks("a.txt");
+    commit_all("Add a.txt");
+    write("a.txt", &edited);
+
+    let mut session = Session::open_uncommitted(1).await;
+    session.open_diff(0).await;
+    session.keys("?").await;
+    let rows = session.rows();
+    let row = rows
+        .iter()
+        .find(|row| row.contains("yank the hunk's file:lines"))
+        .unwrap_or_else(|| panic!("no yank in the help: {rows:#?}"));
+    assert!(row.contains("│ y "), "{row:?}");
+}

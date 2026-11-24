@@ -145,7 +145,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Hex view | `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`), `vortex-term/tests/test/hex_view.rs` |
 | Dashboard | `vortex-term/src/dashboard.rs` (when it is up, its keys), `vortex-term/src/dashboard/` (`stats.rs` the background reading, `languages.rs` the line counts, `render.rs` the layout and the panels, `timeline.rs` when things move, `title.rs` the title, `vortex.rs` the vortex, `charset.rs` blocks or ASCII, `wrap.rs` long values on two rows, `snapshots/` the drawings the tests compare with), `vortex-vcs/src/git/summary.rs` (the git summary), `vortex-term/tests/test/dashboard.rs` |
 | Worktrees | `vortex-term/src/commands/worktrees.rs` (the `:worktrees` picker: its rows, columns, background jobs and `Enter`), `vortex-vcs/src/git/summary.rs` (the worktrees, missing ones flagged; `Repo::status`, the last modified time; `Repo::dated_worktrees`; `Worktree::details`), `vortex-stdx/src/time.rs` (`format_ago`), the dashboard's worktree rows and `t` in `vortex-term/src/dashboard/`, `vortex-term/tests/test/worktrees.rs` |
-| Watch mode | `vortex-view/src/watch.rs` (the session: the baseline, the files and hunks numbered in the order they changed, following, `n`/`N`, the new count), `vortex-term/src/watch.rs` (`:watch` and the other commands, the keys of the mode, reading the changed files on the watcher's thread, following, the flash, which commands are held, the mode bar's rows, the statusline element, the `:watch-changes` picker), `RepoWatch::start_tapped` in `vortex-term/src/live.rs`, the session's gutter markers in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/watch.rs` |
+| Watch mode | `vortex-view/src/watch.rs` (the session: the baseline, the files and hunks numbered in the order they changed, following, `n`/`N`, the new count), `vortex-term/src/watch.rs` (`:watch` and the other commands, the keys of the mode, reading the changed files on the watcher's thread, following, the flash, which commands are held, the mode bar's rows, the statusline element and its blinking, catching up, review (`watch_accept`, `watch_reject`, `watch_yank`), the `:watch-changes` picker), `RepoWatch::start_tapped` in `vortex-term/src/live.rs`, the session's gutter markers and review marks (`reviews`) in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/watch.rs` |
 | History and bookmarks | `vortex-view/src/history.rs` (what records a jump, `Editor::record_jump`, the places of a view, walking), `vortex-view/src/bookmarks.rs` (the bookmarks of a buffer, mapped through its changes; the closed files' bookmarks; the ring), `vortex-term/src/history.rs` (`ga`, the forward step, the history picker, showing a screen again, the bookmark commands and picker), the `bookmarks` gutter in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/history.rs` |
 | The vortex theme | `theme.toml` (the theme), `helix_theme.toml` (upstream's default theme), the built-in themes in `vortex-view/src/theme.rs` |
 | Theme effects | `vortex-view/src/effects.rs` (the `[effects]` table: parsing, validation, inheritance), `vortex-term/src/ui/glitch.rs` (the glitch and its wake-ups), `vortex-term/src/dashboard/charset.rs` (blocks or the measured ASCII ramp), `vortex-term/src/terminal/phosphor.rs` (the phosphor filter), the glitch over error diagnostics in `vortex-term/src/ui/text_decorations/diagnostics.rs` (where the ghost text of errors is) and `glitch_diagnostics` in `vortex-term/src/ui/editor.rs` |
@@ -290,14 +290,14 @@ Worktrees change core files: `:worktrees` (`:wt`) in `typed.rs`, where `apply_di
 `ui/editor.rs` calls `Dashboard::follow_cwd`, so the dashboard reloads when the working directory
 changes.
 
-Watch mode changes core files: the `watch` field of `Editor` and the `watch` statusline element
-(no longer in the default statusline: the mode bar shows watch mode) in `vortex-view/src/editor.rs`; the session's diff of
+Watch mode changes core files: the `watch` field of `Editor`, `watch-catch-up` (`CatchUpPace`) and
+the `watch` element in the default statusline in `vortex-view/src/editor.rs`; the session's diff of
 `Document` (`watch_diff`, `set_watch_base`, kept up to date on every edit like git's) in
 `vortex-view/src/document.rs`; the `diff` gutter in `vortex-view/src/gutter.rs`, which draws the
-session's hunks over git's; `MappableCommand::execute` in `commands.rs` and `execute_command` in
+session's hunks and the review marks over git's; `watch_spot` in `ui/statusline.rs`; `MappableCommand::execute` in `commands.rs` and `execute_command` in
 `typed.rs`, which tell watch mode which command runs; `search_next_or_prev_impl` in `commands.rs`
-(`n`/`N`); the mouse (looks around), the flash, the select cursor while looking around and the
-keys of `[keys.watch]` first (`EditorView::layer_key`) in `ui/editor.rs`; `MappableCommand::execute`
+(`n`/`N`); the mouse (held while following), the click on the statusline's `watch` mark, the flash, the select cursor while looking around and the
+keys of `[keys.watch]` first (`EditorView::layer_key`) in `ui/editor.rs`; `Marks::review` and the review column in `commands/changes.rs`; `Side::without_file` and `y` in `ui/diff_view.rs` and `commands/diff_view.rs`; `MappableCommand::execute`
 not running a command watch mode holds, and the `watch_*` static commands, in `commands.rs`; `RepoWatch` in `live.rs`
 (a tap that sees each batch of paths on the watcher's thread); `--watch` in `args.rs` and
 `Application::new`; `Diff` exported by `vortex-vcs`; `blend` of `ui/diff_view.rs`, now
@@ -419,7 +419,7 @@ rows; [debug mode](#debug-mode) uses three.
 
 ```text
  WATCH ● following      src/main.rs · 3/12 changes · 2 files      followed src/main.rs:30
-  v  look   n  next   N  previous   c  changes   Esc  leave
+  v  look   n  next   N  previous   a  accept   x  reject   y  yank   c  changes   Esc  leave
 ```
 
 **Layout.** A mode supplies rows of segments, each placed left, middle or right; the bar draws
@@ -564,6 +564,7 @@ Inside the diff:
 | `s` `u` `r`, `S` `U` `R` | Stage, unstage, revert the hunk, or the whole file, see [hunks](#stage-unstage-and-revert-hunks) |
 | `j` / `k`, `C-d` / `C-u`, `C-f` / `C-b`, `PageDown` / `PageUp`, mouse wheel | Scroll |
 | `gg` / `ge`, `G` | Top / bottom |
+| `y` | Yank the current hunk's `file:lines` to the clipboard: the new side's lines, or the old side's for a hunk that only removes lines. A buffer without a file says so |
 | `h` / `l`, `0` | Scroll horizontally, back to the start of the line |
 | `gh` / `gl` | Scroll horizontally all the way to the start / to the end of the longest line |
 | `w` | Wrap long lines, or scroll them horizontally again |
@@ -3561,7 +3562,7 @@ while it is on, its keys come first, and its state and keys are on the [mode bar
    31  line 31 of main
  NOR   src/main.rs                                                   1 sel  30:1
  WATCH ● following      src/main.rs · 3/12 changes · 2 files      followed src/main.rs:30
-  v  look   n  next   N  previous   c  changes   Esc  leave
+  v  look   n  next   N  previous   a  accept   x  reject   y  yank   c  changes   Esc  leave
 ```
 
 ### Usage
@@ -3579,6 +3580,9 @@ While watch mode is on, these keys come first (`[keys.watch]`, below):
 | --- | --- |
 | `v` | Look around: your own cursor, drawn as in select mode (`ui.cursor.select`), moves and searches freely while new changes are only counted. `v` again follows again, from the newest change |
 | `n`, `N` | The next, previous change of the session, across files, in the order they happened (newest last). They stop at the newest and the oldest (the bar says `at the newest change`, `at the oldest change`; nothing wraps around). Reaching the newest with `n` follows again; going to an older one looks around |
+| `a` | Accept the current change: stage it (see [Reviewing and yanking](#reviewing-and-yanking)) |
+| `x` | Reject the current change: put its lines back to what they were when the watch started |
+| `y` | Yank the current change's `file:lines` to the clipboard |
 | `c` | The picker of the session's changes (`:watch-changes`) |
 | `Esc` | Leave watch mode, to edit where you are. The session goes on recording; `:watch` comes back to it |
 
@@ -3598,8 +3602,14 @@ nothing in either state: the bar says that `Esc` leaves watch mode first. The co
 the palette, the [terminal panel](#terminal-panel) (`C-t`: an agent can run in the panel while
 its changes are followed above it) and setting a bookmark (`C-s`) work in both. A typed command
 is meant: `:goto` looks around, the watch commands keep watch mode, any other command (`:w`,
-`:open`, ...) leaves it first (as `Esc` does: the session goes on). Scrolling or clicking with the mouse looks around. The `space` and
+`:open`, ...) leaves it first (as `Esc` does: the session goes on). The `space` and
 other menus still open; a command picked in them is held like its key.
+
+**The mouse.** While following, the mouse does nothing in the views: clicks, drags and the wheel.
+The bar says that `v` looks around (`following: v looks around to move`), as for the movement keys.
+A middle-click paste waits for `Esc` in both states (the bar says `Esc leaves watch mode, then
+edit`). While looking around the mouse works as usual. The bar's badges and the statusline's
+`watch` mark stay clickable.
 
 **Other modes.** One mode at a time. Starting or entering watch mode (`:watch`, `vx --watch`)
 leaves [debug mode](#debug-mode), and entering debug mode (`space G`) leaves watch mode as `Esc`
@@ -3611,10 +3621,47 @@ working tree is still watched and its changes recorded (their markers appear, `n
 `:watch-changes` reach them), but nothing is followed. `:watch` (or `w` on the dashboard) enters
 it again as it was: the change you were at, following or looking around as you were. The changes
 made meanwhile are new: the bar counts them (`· 3 new`, and `back: 3 new changes meanwhile` on the
-right) and `n` goes to them, from where you were; while following, the next change is followed as
-usual. `:watch-stop` stops the session for good: the working tree is no longer watched, and the
-markers, `n`/`N` and `:watch-changes` show the changes up to then, until the next `:watch` (a new
-session) or `:watch-clear`.
+right) and `n` goes to them, from where you were. `:watch-stop` stops the session for good: the
+working tree is no longer watched, and the markers, `n`/`N` and `:watch-changes` show the changes
+up to then, until the next `:watch` (a new session) or `:watch-clear`.
+
+**Catching up.** If you left it following, coming back follows the changes made meanwhile one
+after another, oldest first, as if you had been watching (opened, jumped to, flashed), `watch-catch-up`
+seconds each, and then goes on live. Changes that arrive during the catch-up wait their turn at its
+end. The bar's state reads `WATCH ● catching up 2/5` (shown so far / total). `v` stops it and looks
+around (the rest stay new); `n`/`N` take over from where it is; `Esc` leaves (the rest stay new,
+and coming back catches up again from there). A buffer with unsaved edits of your own is skipped,
+as following does. Left while looking around, coming back doesn't move: the changes are counted
+new. `:watch-stop` still ends everything.
+
+**While it is left**, the [statusline](#the-statusline) shows that the session is recording.
+
+### Reviewing and yanking
+
+A **change** is the hunks one write brought to one file together (usually one hunk). The review
+keys work on the current change: the one followed, caught up to, or gone to with `n`/`N` or the
+picker. `a`, `x` and `y` take all the hunks of the change; `n`/`N` still go hunk by hunk.
+
+- `a` accepts it: stages its hunks (the index gets those lines of the file, as `s` in the [diff
+  view](#side-by-side-git-diff)). The status line says `staged src/main.rs:12-14`. The change is
+  marked accepted.
+- `x` rejects it: its lines go back to what they were when the watch started (the baseline), as one
+  edit of its buffer and a write (`u` in the buffer undoes it). Reverting's rules apply: not with
+  unsaved edits of your own in the buffer (`write it first`), not once staged (`unstage it first`),
+  not when the file changed since the session read it (`try again`). A file created this session
+  whose whole content is the change asks `Delete src/x.rs, created this session? (y/n)` first. The
+  status line says `rejected src/main.rs:12-14`. The change is no longer a hunk; its mark stays and
+  `n` goes on from it.
+- `y` yanks the change's `file:lines` to the clipboard, as `Space :` and `C-y` write them: one
+  place per hunk (`src/main.rs:12-14`; a removed hunk is the line before it), the path relative to
+  the workspace root. The status line says `yanked src/main.rs:12-14` or `yanked 2 places`. In
+  watch mode `y` no longer yanks the selection while looking around: `Space y` still does.
+
+Errors: `no change yet: n goes to one`, `that change is gone: its lines were changed again` (the
+agent rewrote it: it is another change now), `that change was rejected`.
+
+`x` goes back to the baseline and not to the index, as the diff view's `r` does: the baseline is
+what the agent changed, and a file that was already dirty keeps your earlier uncommitted work.
 
 **History and bookmarks.** Following and `n`/`N` through the session's changes are not
 [history](#history-and-bookmarks)'s jumps: the session has its own order and its picker, and
@@ -3639,6 +3686,9 @@ l = "watch_look"        # look around on l (v still does too: add v = "no_op" to
 | `watch_look` | `v` |
 | `watch_next_change` | `n` |
 | `watch_prev_change` | `N` |
+| `watch_accept` | `a` |
+| `watch_reject` | `x` |
+| `watch_yank` | `y` |
 | `watch_changes` | `c` |
 | `watch_leave` | `Esc` |
 
@@ -3651,21 +3701,28 @@ Watch mode's [mode bar](#the-mode-bar) has two rows:
 - row 1: the state on the left, `WATCH ● following` (`ui.modebar.state.following`) or `WATCH ◌
   looking` (`ui.modebar.state.looking`, both falling back to `ui.modebar.state`); in the middle the
   current change, its number and the count (`src/main.rs · 3/12 changes · 2 files`, and `· 3 new`
-  for the changes not seen yet: while looking around, or made while watch mode was left); on the
+  for the changes not seen yet: while looking around, or made while watch mode was left; while
+  catching up, `WATCH ● catching up 2/5`); on the
   right the latest activity: what was just followed, a file skipped
   for its unsaved edits, a lockfile or binary file that changed (not followed), a held key, where
   watch mode started and how many files were already uncommitted, an end reached by `n`/`N`, and
   how many changes came while it was left. Nothing of this goes to the
   status line.
 - row 2: the key badges, from `[keys.watch]`, clickable: `v look` (`v follow` while looking around),
-  `n next`, `N previous`, `c changes`, `Esc leave`.
+  `n next`, `N previous`, `a accept`, `x reject`, `y yank`, `c changes`, `Esc leave`.
 
 ### The statusline
 
-The statusline's `watch` element is no longer in the default statusline: the bar shows the state.
-A config with its own statusline may still list `"watch"`: it is a small `●` while following and
-`◌` while looking around (`ui.statusline.watch.following` and `ui.statusline.watch.paused`, both
-falling back to `ui.statusline.watch`), empty outside watch mode.
+The statusline's `watch` element is in the default statusline, on the right after the diagnostics.
+While a session was left with `Esc` and is still watching, it shows `●` and the count of the
+changes made since leaving that weren't gone to with `n`/`N` (`● 3`; `●` with none). It is empty
+without a session, after `:watch-stop`, and while watch mode is on (the bar shows the state).
+
+When a change arrives it blinks like a recording light: lit for 1 second every 4, ten times (about
+40 seconds), each new change starting the ten again; then it stays steady and nothing is redrawn.
+`ui.statusline.watch` colors it steady and between blinks (it falls back to the statusline's
+colors), `ui.statusline.watch.lit` while lit (it falls back to bold red). A click on it enters
+watch mode. The vortex and Matrix themes have both scopes.
 
 ```toml
 [editor.statusline]
@@ -3703,12 +3760,22 @@ added or changed, `▔` where they were removed (git's are `▍` and `▔`). The
 to git's gutter colors. A buffer's markers follow its edits, also after watch mode ended, as git's
 do. Lines changed before the watch keep git's marker.
 
+Reviewed changes are marked too: `✓` on the first line of an accepted change (`┃` on its other
+lines), in `diff.watch.accepted` (falls back to git's `diff.plus.gutter`), and `✗` where a rejected
+change was, in `diff.watch.rejected` (falls back to `diff.minus.gutter`).
+
+**The flash** fades toward the background drawn under it: the mode's screen background
+(`ui.background.mode`, else the popups' background) while watch mode is on, the buffer's
+(`ui.background`) otherwise, so it ends without a flicker.
+
 ### The picker
 
 `:watch-changes` lists the session's changes in the shape of the [lists of
 changes](#lists-of-changes): one row per hunk under a divider per file, with the `+`/`-` marks, the
 most recently changed file first and, in a file, its newest hunk first. Lockfiles are a divider
-alone, deleted files are `(deleted)`, created ones `(new)`. The prompt's row has the totals: `this
+alone, deleted files are `(deleted)`, created ones `(new)`. A column shows `✓` for an accepted
+change and `✗` for a rejected one; a rejected change has a row of its own where it was, with the
+lines it had in the preview, and the preview's title says `accepted` or `rejected`. The prompt's row has the totals: `this
 session: 6 changes in 4 files, +7 -4`.
 
 ```text
@@ -3727,6 +3794,15 @@ session: 6 changes in 4 files, +7 -4`.
 Its keys are those of the lists of changes (`j`/`k`, `w`/`b` between files, `s` filters, `?` lists
 them); `Enter` goes to the change (`n` goes on from there) and closes the picker, `C-s`/`C-v` open
 it in a split. Opening the picker looks around but doesn't end watch mode.
+
+### Configuration
+
+```toml
+[editor]
+watch-catch-up = 1    # seconds per change while catching up; 0 to 3600, 0.5 works
+```
+
+`0` jumps straight to the newest change on return.
 
 ### Unsaved buffers
 
@@ -3747,8 +3823,11 @@ that file; the others are still followed. Its markers compare the buffer with th
 - A rename is a deleted file and a created one.
 - Watch mode and the commit log's live views each have a watcher on the working tree when both are
   on.
-- A session left with `Esc` keeps its watcher until `:watch-stop`, `:watch-clear` or quitting;
-  nothing shows it is recording while watch mode is off but the markers that appear.
+- A session left with `Esc` keeps its watcher until `:watch-stop`, `:watch-clear` or quitting.
+- A rejected change's mark stays on its line number while the file changes later: it doesn't move
+  with later edits.
+- Accepting stages the git hunks that touch the change's lines: in a file already dirty with nearby
+  uncommitted work of your own, more may be staged.
 - Following shows changes one batch at a time: in a burst over several files, only the newest is
   jumped to (the others are marked, and `n`/`N` reach them).
 
