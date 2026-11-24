@@ -443,6 +443,9 @@ pub fn layers() -> HashMap<Layer, KeyTrie> {
         "v" => watch_look,
         "n" => watch_next_change,
         "N" => watch_prev_change,
+        "a" => watch_accept,
+        "x" => watch_reject,
+        "y" => watch_yank,
         "c" => watch_changes,
         "esc" => watch_leave,
     });

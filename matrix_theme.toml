@@ -204,8 +204,11 @@ hint = { fg = "dim", bg = "g_1", modifiers = ["italic"] }
 "diff.watch.delta" = "text"
 "diff.watch.minus" = "dim"
 "ui.highlight.watch" = { bg = "g_3" }
-"ui.statusline.watch.following" = { fg = "background", bg = "mid", modifiers = ["bold"] }
-"ui.statusline.watch.paused" = { fg = "background", bg = "dim", modifiers = ["bold", "italic"] }
+"diff.watch.accepted" = { fg = "bright", modifiers = ["bold"] }
+"diff.watch.rejected" = "dim"
+# a session left with Esc: its mark in the statusline, lit when a change arrives
+"ui.statusline.watch" = { fg = "dim", bg = "g_2" }
+"ui.statusline.watch.lit" = { fg = "background", bg = "bright", modifiers = ["bold"] }
 "ui.modebar" = { fg = "text", bg = "g_2" }
 "ui.modebar.state" = { fg = "background", bg = "mid", modifiers = ["bold"] }
 "ui.modebar.state.following" = { fg = "background", bg = "mid", modifiers = ["bold"] }

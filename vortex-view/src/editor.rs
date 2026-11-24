@@ -671,6 +671,9 @@ pub struct Config {
     pub inline_blame: InlineBlameConfig,
     /// The lists of changes: the uncommitted changes and the commits (fork feature).
     pub changes: ChangesConfig,
+    /// Watch mode (fork feature): the seconds per change when entering watch mode again follows
+    /// the changes made meanwhile one after another; `0` jumps straight to the newest.
+    pub watch_catch_up: CatchUpPace,
     /// Configuration of the statusline elements
     pub statusline: StatusLineConfig,
     /// Shape for cursor in each mode
@@ -985,6 +988,7 @@ impl Default for StatusLineConfig {
             center: vec![],
             right: vec![
                 E::Diagnostics,
+                E::Watch,
                 E::Debug,
                 E::Shell,
                 E::Selections,
@@ -1018,14 +1022,54 @@ impl Default for ModeConfig {
     }
 }
 
+/// `watch-catch-up` (fork feature): seconds per change, written as a number of seconds
+/// (`1`, `0.5`), kept in milliseconds.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CatchUpPace {
+    pub millis: u64,
+}
+
+impl Default for CatchUpPace {
+    fn default() -> Self {
+        Self { millis: 1000 }
+    }
+}
+
+impl CatchUpPace {
+    pub fn duration(self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.millis)
+    }
+}
+
+impl Serialize for CatchUpPace {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_f64(self.millis as f64 / 1000.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for CatchUpPace {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let seconds = f64::deserialize(deserializer)?;
+        if !seconds.is_finite() || !(0.0..=3600.0).contains(&seconds) {
+            return Err(serde::de::Error::custom(
+                "watch-catch-up is a number of seconds, from 0 to 3600",
+            ));
+        }
+        Ok(Self {
+            millis: (seconds * 1000.0).round() as u64,
+        })
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StatusLineElement {
     /// The editor mode (Normal, Insert, Visual/Selection)
     Mode,
 
-    /// Watch mode (fork feature): a small `●` while following, `◌` while looking around. Not in
-    /// the default statusline: the mode bar shows watch mode
+    /// A watch session left with `Esc` that is still watching (fork feature): `●` and the count
+    /// of the changes made since, blinking when one arrives. Empty without a session and while
+    /// watch mode is on (the mode bar shows it then)
     Watch,
 
     /// The LSP activity spinner
@@ -1504,6 +1548,7 @@ impl Default for Config {
             dashboard_title: true,
             inline_blame: InlineBlameConfig::default(),
             changes: ChangesConfig::default(),
+            watch_catch_up: CatchUpPace::default(),
             statusline: StatusLineConfig::default(),
             cursor_shape: CursorShapeConfig::default(),
             true_color: false,

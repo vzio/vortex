@@ -577,6 +577,9 @@ impl MappableCommand {
         watch_prev_change, "Watch mode: the previous change",
         watch_changes, "Watch mode: the picker of the session's changes",
         watch_leave, "Leave watch mode, to edit where you are (the session goes on recording)",
+        watch_accept, "Watch mode: accept the current change (stage its hunks)",
+        watch_reject, "Watch mode: reject the current change (revert its lines to before the watch)",
+        watch_yank, "Watch mode: yank the current change's file:lines to the clipboard",
         rotate_view, "Goto next window",
         rotate_view_reverse, "Goto previous window",
         hsplit, "Horizontal bottom split",
@@ -3642,6 +3645,37 @@ fn watch_changes(cx: &mut Context) {
 
 fn watch_leave(cx: &mut Context) {
     crate::watch::leave(cx.editor);
+}
+
+fn watch_accept(cx: &mut Context) {
+    crate::watch::accept(cx.editor);
+}
+
+fn watch_reject(cx: &mut Context) {
+    match crate::watch::reject(cx.editor) {
+        Ok(crate::watch::Rejection::Done(message)) => cx.editor.set_status(message),
+        Ok(crate::watch::Rejection::ConfirmDelete(path)) => {
+            let shown = crate::yank_place::shown_path(&path, false);
+            // a question that waits for its answer
+            cx.editor
+                .set_warning(format!("Delete {shown}, created this session? (y/n)"));
+            cx.on_next_key(move |cx, event| {
+                if event.code != KeyCode::Char('y') || !event.modifiers.is_empty() {
+                    cx.editor.set_status(format!("Kept {shown}"));
+                    return;
+                }
+                match crate::watch::delete_created(cx.editor, &path) {
+                    Ok(message) => cx.editor.set_status(message),
+                    Err(err) => cx.editor.set_error(err.to_string()),
+                }
+            });
+        }
+        Err(err) => cx.editor.set_error(err.to_string()),
+    }
+}
+
+fn watch_yank(cx: &mut Context) {
+    crate::watch::yank(cx.editor);
 }
 
 fn debug_mode(cx: &mut Context) {

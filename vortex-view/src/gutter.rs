@@ -127,7 +127,7 @@ impl<'a> HunkWalk<'a> {
 }
 
 pub fn diff<'doc>(
-    _editor: &'doc Editor,
+    editor: &'doc Editor,
     doc: &'doc Document,
     _view: &View,
     theme: &Theme,
@@ -142,9 +142,14 @@ pub fn diff<'doc>(
         theme.get_or("diff.watch.minus", "diff.minus.gutter"),
         theme.get_or("diff.watch.delta", "diff.delta.gutter"),
     );
+    // reviewed changes (`a`, `x` in watch mode): `✓` on the first line of an accepted one, `✗`
+    // where a rejected one was
+    let accepted_style = theme.get_or("diff.watch.accepted", "diff.plus.gutter");
+    let rejected_style = theme.get_or("diff.watch.rejected", "diff.minus.gutter");
+    let (accepted, rejected) = reviews(editor, doc);
     let mut git = doc.diff_handle().map(|handle| HunkWalk::new(handle.load()));
     let mut watch = doc.watch_diff().map(|handle| HunkWalk::new(handle.load()));
-    if git.is_none() && watch.is_none() {
+    if git.is_none() && watch.is_none() && rejected.is_empty() {
         return Box::new(move |_, _, _, _| None);
     }
     Box::new(
@@ -152,14 +157,30 @@ pub fn diff<'doc>(
             // truncating the line is fine here because we don't compute diffs
             // for files with more lines than i32::MAX anyways
             let line = line as u32;
-            let (hunk, (plus, minus, delta), bar) =
-                match watch.as_mut().and_then(|walk| walk.at(line)) {
-                    Some(hunk) => (hunk.clone(), session, "┃"),
-                    None => match git.as_mut().and_then(|walk| walk.at(line)) {
-                        Some(hunk) => (hunk.clone(), (added, deleted, modified), "▍"),
-                        None => return None,
-                    },
+            let watched = watch.as_mut().and_then(|walk| walk.at(line)).cloned();
+            if let Some(range) = watched
+                .as_ref()
+                .and_then(|_| accepted.iter().find(|range| range.contains(&line)))
+            {
+                let icon = if line == range.start && first_visual_line {
+                    "✓"
+                } else {
+                    "┃"
                 };
+                write!(out, "{icon}").unwrap();
+                return Some(accepted_style);
+            }
+            if watched.is_none() && first_visual_line && rejected.contains(&line) {
+                write!(out, "✗").unwrap();
+                return Some(rejected_style);
+            }
+            let (hunk, (plus, minus, delta), bar) = match watched {
+                Some(hunk) => (hunk, session, "┃"),
+                None => match git.as_mut().and_then(|walk| walk.at(line)) {
+                    Some(hunk) => (hunk.clone(), (added, deleted, modified), "▍"),
+                    None => return None,
+                },
+            };
             let (icon, style) = if hunk.is_pure_insertion() {
                 (bar, plus)
             } else if hunk.is_pure_removal() {
@@ -175,6 +196,32 @@ pub fn diff<'doc>(
             Some(style)
         },
     )
+}
+
+/// The lines (from 0) of the accepted changes of the watch session in `doc`'s file, and the lines
+/// where its rejected ones were.
+fn reviews(editor: &Editor, doc: &Document) -> (Vec<std::ops::Range<u32>>, Vec<u32>) {
+    let (Some(session), Some(path)) = (editor.watch.session.as_ref(), doc.path()) else {
+        return (Vec::new(), Vec::new());
+    };
+    let accepted = session
+        .file(path)
+        .map(|file| {
+            file.hunks
+                .iter()
+                .filter(|hunk| hunk.review == Some(crate::watch::Review::Accepted))
+                .map(|hunk| hunk.after.clone())
+                .filter(|range| !range.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let rejected = session
+        .rejected()
+        .iter()
+        .filter(|change| change.path == path)
+        .map(|change| change.line)
+        .collect();
+    (accepted, rejected)
 }
 
 pub fn line_numbers<'doc>(

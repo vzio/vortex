@@ -136,6 +136,15 @@ pub struct FileUpdate {
     pub modified: Option<SystemTime>,
 }
 
+/// What reviewing made of a change of the session (`a` and `x` in watch mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Review {
+    /// Its hunk was staged.
+    Accepted,
+    /// Its hunk was reverted to the baseline: it is no longer a change, see [`Rejected`].
+    Rejected,
+}
+
 /// A hunk of the session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHunk {
@@ -144,6 +153,34 @@ pub struct SessionHunk {
     key: u64,
     /// When it appeared: higher is newer.
     pub seq: u64,
+    /// The change it is part of: the hunks one write brought to its file together share the
+    /// number of the first of them. Reviewing and yanking take a whole change.
+    pub change: u64,
+    /// Accepted, while the hunk is there with the same lines.
+    pub review: Option<Review>,
+}
+
+/// A change that was rejected: its lines went back to the baseline, so it is no longer a hunk of
+/// its file. Kept for its mark (in the gutter and the picker) and for `n`/`N` to go on from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejected {
+    pub path: PathBuf,
+    pub seq: u64,
+    /// The line (from 0) where its lines were, now the baseline's.
+    pub line: u32,
+    /// The lines it had replaced (the baseline's) and those it had put there.
+    pub removed: Vec<String>,
+    pub added: Vec<String>,
+}
+
+/// Entering watch mode again follows the changes made meanwhile one after another
+/// (`watch-catch-up` seconds each), then goes on live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatchUp {
+    /// The changes shown so far.
+    pub done: usize,
+    /// Tells the timer of this catch-up from an earlier one's.
+    pub token: u64,
 }
 
 /// A file changed during the session.
@@ -158,7 +195,23 @@ pub struct SessionFile {
     content: u64,
 }
 
+impl SessionHunk {
+    /// The hash of its removed and added lines (see [`HunkLines::key`]).
+    pub fn key(&self) -> u64 {
+        self.key
+    }
+}
+
 impl SessionFile {
+    /// A file with no change: back to its baseline.
+    pub const EMPTY: SessionFile = SessionFile {
+        kind: FileKind::Unchanged,
+        quiet: Quiet::No,
+        hunks: Vec::new(),
+        seq: 0,
+        content: 0,
+    };
+
     /// Whether it is followed and gone through: a text file that exists.
     pub fn navigable(&self) -> bool {
         self.quiet == Quiet::No && matches!(self.kind, FileKind::Modified | FileKind::Created)
@@ -222,6 +275,15 @@ pub struct Session {
     pub activity: Option<String>,
     /// The watcher; dropping it stops watching.
     pub watcher: Option<Box<dyn Any>>,
+    /// Following the changes made while watch mode was left, one after another.
+    pub catch_up: Option<CatchUp>,
+    catch_ups: u64,
+    /// The newest hunk when watch mode was left: the statusline counts the newer ones.
+    left_seq: u64,
+    /// When the latest change came while watch mode was left: the statusline's mark blinks.
+    pub recorded: Option<Instant>,
+    /// The rejected changes, oldest first.
+    rejected: Vec<Rejected>,
 }
 
 /// What a batch of updates brought.
@@ -249,6 +311,11 @@ impl Session {
             flash: None,
             activity: None,
             watcher: None,
+            catch_up: None,
+            catch_ups: 0,
+            left_seq: 0,
+            recorded: None,
+            rejected: Vec::new(),
         }
     }
 
@@ -306,19 +373,26 @@ impl Session {
             let mut hunks = Vec::with_capacity(update.hunks.len());
             let mut first_new = None;
             for hunk in update.hunks {
-                let seq = match unmatched.iter().position(|old| old.key == hunk.key) {
-                    Some(i) => unmatched.swap_remove(i).seq,
-                    None => {
-                        self.last_seq += 1;
-                        first_new.get_or_insert((self.last_seq, hunk.after.clone()));
-                        self.last_seq
-                    }
-                };
+                let (seq, change, review) =
+                    match unmatched.iter().position(|old| old.key == hunk.key) {
+                        Some(i) => {
+                            let old = unmatched.swap_remove(i);
+                            (old.seq, old.change, old.review)
+                        }
+                        None => {
+                            self.last_seq += 1;
+                            let (change, _) =
+                                *first_new.get_or_insert((self.last_seq, hunk.after.clone()));
+                            (self.last_seq, change, None)
+                        }
+                    };
                 hunks.push(SessionHunk {
                     before: hunk.before,
                     after: hunk.after,
                     key: hunk.key,
                     seq,
+                    change,
+                    review,
                 });
             }
             let same = old
@@ -414,12 +488,15 @@ impl Session {
             .and_then(|(path, line)| self.hunk_at(path, line))
             .or_else(|| {
                 let (path, seq) = self.at.as_ref()?;
-                self.files
-                    .get(path)?
-                    .hunks
+                let in_file = self
+                    .files
+                    .get(path)
+                    .is_some_and(|file| file.hunks.iter().any(|hunk| hunk.seq == *seq));
+                let rejected = self
+                    .rejected
                     .iter()
-                    .any(|hunk| hunk.seq == *seq)
-                    .then_some(*seq)
+                    .any(|change| change.seq == *seq && &change.path == path);
+                (in_file || rejected).then_some(*seq)
             });
         let (Some(first), Some(last)) = (hunks.first(), hunks.last()) else {
             return None;
@@ -449,6 +526,8 @@ impl Session {
         if !self.active {
             return false;
         }
+        // `n`/`N` take over from a catch-up
+        self.catch_up = None;
         let newest = self.newest_seq() == Some(target.seq);
         let again = newest && !self.following;
         self.following = newest;
@@ -464,20 +543,26 @@ impl Session {
         self.see_all();
     }
 
-    /// Moving pauses following, while watch mode is on.
+    /// Moving pauses following, while watch mode is on (and stops a catch-up).
     pub fn pause(&mut self) {
         self.following = false;
+        self.catch_up = None;
     }
 
     /// Leaves watch mode (`Esc`): the working tree is still watched and the changes recorded,
     /// not followed; where you are and whether you were following stay for [`Session::resume`].
+    /// A catch-up stops where it was: the changes it didn't show are still new.
     pub fn leave(&mut self) {
         self.active = false;
+        self.catch_up = None;
+        self.left_seq = self.last_seq;
+        self.recorded = None;
     }
 
     /// Enters watch mode again, where it was left.
     pub fn resume(&mut self) {
         self.active = true;
+        self.recorded = None;
     }
 
     /// Stops the session for good (`:watch-stop`): no more watching nor following; the changes
@@ -485,7 +570,134 @@ impl Session {
     pub fn stop(&mut self) {
         self.active = false;
         self.following = false;
+        self.catch_up = None;
+        self.recorded = None;
         self.watcher = None;
+    }
+
+    /// The hunks not seen yet, oldest first: what a catch-up follows.
+    pub fn missed(&self) -> Vec<Target> {
+        let mut hunks = self.hunks_in_order();
+        hunks.retain(|hunk| hunk.seq > self.seen);
+        hunks
+    }
+
+    /// Starts a catch-up of the changes not seen yet, while following. Returns its token, `None`
+    /// when there is nothing to catch up (or you are looking around).
+    pub fn start_catch_up(&mut self) -> Option<u64> {
+        if !self.active || !self.following || self.missed().is_empty() {
+            return None;
+        }
+        self.catch_ups += 1;
+        self.catch_up = Some(CatchUp {
+            done: 0,
+            token: self.catch_ups,
+        });
+        Some(self.catch_ups)
+    }
+
+    /// A catch-up showed `target`: it and older hunks are seen.
+    pub fn caught_up(&mut self, target: &Target) {
+        self.at = Some((target.path.clone(), target.seq));
+        self.seen = self.seen.max(target.seq);
+        if let Some(catch_up) = self.catch_up.as_mut() {
+            catch_up.done += 1;
+        }
+    }
+
+    /// Where a catch-up is: the changes shown so far and their total with those left.
+    pub fn catch_up_progress(&self) -> Option<(usize, usize)> {
+        let catch_up = self.catch_up.as_ref()?;
+        Some((catch_up.done, catch_up.done + self.missed().len()))
+    }
+
+    /// The changes made since watch mode was left and not gone to since (with `n`/`N`): the
+    /// count of the statusline's mark.
+    pub fn new_since_left(&self) -> usize {
+        let since = self.left_seq.max(self.seen);
+        self.hunks_in_order()
+            .iter()
+            .filter(|hunk| hunk.seq > since)
+            .count()
+    }
+
+    /// The change to review and yank: the hunk followed or gone to last (with `n`/`N`, the
+    /// picker, a catch-up). `Err` with why there is none: no change yet, or it isn't there any
+    /// more (its lines were changed again, or it was rejected).
+    pub fn current(&self) -> Result<Target, Gone> {
+        let (path, seq) = self.at.as_ref().ok_or(Gone::NoChange)?;
+        if let Some(target) = self.target(path, *seq) {
+            return Ok(target);
+        }
+        match self.rejected.iter().any(|change| change.seq == *seq) {
+            true => Err(Gone::Rejected),
+            false => Err(Gone::Rewritten),
+        }
+    }
+
+    /// The navigable hunk `seq` of `path`.
+    fn target(&self, path: &Path, seq: u64) -> Option<Target> {
+        let file = self.files.get(path).filter(|file| file.navigable())?;
+        let hunk = file.hunks.iter().find(|hunk| hunk.seq == seq)?;
+        Some(Target {
+            path: path.to_owned(),
+            seq,
+            lines: hunk.after.clone(),
+        })
+    }
+
+    /// The hunk `seq` of `path`.
+    pub fn hunk(&self, path: &Path, seq: u64) -> Option<&SessionHunk> {
+        self.files
+            .get(path)?
+            .hunks
+            .iter()
+            .find(|hunk| hunk.seq == seq)
+    }
+
+    /// The hunks of the change `target` is part of, in the order of the file.
+    pub fn change_of(&self, target: &Target) -> Vec<SessionHunk> {
+        let Some(file) = self.files.get(&target.path) else {
+            return Vec::new();
+        };
+        let Some(change) = file
+            .hunks
+            .iter()
+            .find(|hunk| hunk.seq == target.seq)
+            .map(|hunk| hunk.change)
+        else {
+            return Vec::new();
+        };
+        file.hunks
+            .iter()
+            .filter(|hunk| hunk.change == change)
+            .cloned()
+            .collect()
+    }
+
+    /// Marks the hunk `seq` of `path` accepted.
+    pub fn accept(&mut self, path: &Path, seq: u64) {
+        if let Some(hunk) = self
+            .files
+            .get_mut(path)
+            .and_then(|file| file.hunks.iter_mut().find(|hunk| hunk.seq == seq))
+        {
+            hunk.review = Some(Review::Accepted);
+        }
+    }
+
+    /// Marks a change rejected: its hunk is gone (reverted to the baseline), the mark stays.
+    pub fn reject(&mut self, change: Rejected) {
+        if let Some(file) = self.files.get_mut(&change.path) {
+            file.hunks.retain(|hunk| hunk.seq != change.seq);
+        }
+        self.rejected.retain(|old| old.seq != change.seq);
+        self.rejected.push(change);
+    }
+
+    /// The rejected changes, oldest first.
+    pub fn rejected(&self) -> &[Rejected] {
+        &self.rejected
     }
 
     /// The working tree is watched: the session wasn't stopped.
@@ -506,6 +718,17 @@ impl Session {
             })
             .sum()
     }
+}
+
+/// Why there is no change to review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gone {
+    /// None was followed or gone to yet.
+    NoChange,
+    /// The agent changed its lines again: it is another change now.
+    Rewritten,
+    /// It was rejected already.
+    Rejected,
 }
 
 /// The watch of the editor: a session, if one was started and not cleared.
@@ -735,5 +958,138 @@ mod tests {
         session.leave();
         session.resume();
         assert!(!session.following);
+    }
+
+    #[test]
+    fn a_catch_up_goes_through_the_missed_changes_oldest_first() {
+        let mut session = Session::new(1, baseline());
+        session.watcher = Some(Box::new(()));
+        let applied = session.apply(vec![update("/repo/a", vec![hunk(1..2, 1)], 1)]);
+        session.followed(&applied.to_follow[0]);
+        session.leave();
+        session.apply(vec![update("/repo/b", vec![hunk(4..5, 2)], 2)]);
+        session.apply(vec![update(
+            "/repo/a",
+            vec![hunk(1..2, 1), hunk(7..8, 3)],
+            3,
+        )]);
+        assert_eq!(session.new_since_left(), 2);
+        // nothing to catch up out of watch mode
+        assert_eq!(session.start_catch_up(), None);
+        session.resume();
+        let token = session.start_catch_up().expect("changes to catch up");
+        assert_eq!(session.catch_up_progress(), Some((0, 2)));
+        let first = session.missed().remove(0);
+        assert_eq!(first.path, PathBuf::from("/repo/b"));
+        session.caught_up(&first);
+        assert_eq!(session.catch_up_progress(), Some((1, 2)));
+        // a change during the catch-up joins the end of it
+        session.apply(vec![update("/repo/c", vec![hunk(0..1, 4)], 4)]);
+        assert_eq!(session.catch_up_progress(), Some((1, 3)));
+        let second = session.missed().remove(0);
+        assert_eq!(
+            (second.path.clone(), second.lines.start),
+            (PathBuf::from("/repo/a"), 7)
+        );
+        session.caught_up(&second);
+        // n takes over
+        let target = to(session.step(None, true));
+        assert_eq!(target.path, PathBuf::from("/repo/c"));
+        assert!(!session.went_to(&target) || session.following);
+        assert_eq!(session.catch_up, None);
+        assert!(session.start_catch_up().is_none());
+        assert!(token > 0);
+    }
+
+    #[test]
+    fn looking_around_or_leaving_stops_a_catch_up() {
+        let mut session = Session::new(1, baseline());
+        session.watcher = Some(Box::new(()));
+        session.leave();
+        session.apply(vec![update("/repo/a", vec![hunk(1..2, 1)], 1)]);
+        session.resume();
+        assert!(session.start_catch_up().is_some());
+        session.pause();
+        assert_eq!(session.catch_up, None);
+        // looking around: no catch-up, the change stays new
+        assert_eq!(session.start_catch_up(), None);
+        assert_eq!(session.new_count(), 1);
+        session.following = true;
+        assert!(session.start_catch_up().is_some());
+        session.leave();
+        assert_eq!(session.catch_up, None);
+        assert_eq!(session.new_count(), 1);
+    }
+
+    #[test]
+    fn the_hunks_one_write_brings_are_one_change() {
+        let mut session = Session::new(1, baseline());
+        session.apply(vec![update(
+            "/repo/a",
+            vec![hunk(1..2, 1), hunk(9..10, 2)],
+            1,
+        )]);
+        session.apply(vec![update(
+            "/repo/a",
+            vec![hunk(1..2, 1), hunk(5..6, 3), hunk(9..10, 2)],
+            2,
+        )]);
+        let hunks = session.hunks_in_order();
+        let lines = |target: &Target| -> Vec<u32> {
+            session
+                .change_of(target)
+                .iter()
+                .map(|hunk| hunk.after.start)
+                .collect()
+        };
+        assert_eq!(lines(&hunks[0]), [1, 9]);
+        assert_eq!(lines(&hunks[1]), [1, 9]);
+        assert_eq!(lines(&hunks[2]), [5]);
+    }
+
+    #[test]
+    fn reviewed_changes_keep_their_marks() {
+        let mut session = Session::new(1, baseline());
+        assert_eq!(session.current(), Err(Gone::NoChange));
+        let applied = session.apply(vec![update(
+            "/repo/a",
+            vec![hunk(1..2, 1), hunk(6..7, 2)],
+            1,
+        )]);
+        session.followed(&applied.to_follow[0]);
+        let current = session.current().unwrap();
+        session.accept(&current.path, current.seq);
+        // the accepted hunk keeps its mark when the file changes elsewhere
+        session.apply(vec![update(
+            "/repo/a",
+            vec![hunk(1..2, 1), hunk(6..7, 2), hunk(12..13, 3)],
+            2,
+        )]);
+        let a = PathBuf::from("/repo/a");
+        assert_eq!(
+            session.hunk(&a, current.seq).unwrap().review,
+            Some(Review::Accepted)
+        );
+        // rejected: the hunk goes, the mark stays, and n goes on from it
+        let second = to(session.step(None, true));
+        session.went_to(&second);
+        session.reject(Rejected {
+            path: a.clone(),
+            seq: second.seq,
+            line: 6,
+            removed: vec!["x\n".into()],
+            added: vec!["y\n".into()],
+        });
+        assert_eq!(session.current(), Err(Gone::Rejected));
+        assert_eq!(session.rejected().len(), 1);
+        assert_eq!(to(session.step(None, true)).lines.start, 12);
+        // a change whose lines were changed again is gone
+        session.went_to(&to(session.step(None, true)));
+        session.apply(vec![update(
+            "/repo/a",
+            vec![hunk(1..2, 1), hunk(12..13, 9)],
+            3,
+        )]);
+        assert_eq!(session.current(), Err(Gone::Rewritten));
     }
 }
