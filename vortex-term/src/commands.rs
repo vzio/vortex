@@ -280,8 +280,10 @@ impl MappableCommand {
             Self::Static { name, fun, .. } => {
                 // in watch mode and debug mode, moving waits until you look around, and editing
                 // until you leave it; a command that walks a terminal's lines (this fork) is the
-                // terminal's, not theirs
+                // terminal's, not theirs; moving the focus between windows is neither's, since
+                // they follow and play in the window for documents
                 if crate::screens::before_command(cx.editor, name)
+                    || moves_focus(name)
                     || crate::watch::before_command(cx.editor, name)
                         && crate::debug::mode::before_command(cx.editor, name)
                 {
@@ -6290,6 +6292,11 @@ fn terminal_select(cx: &mut Context) {
     } else {
         select_mode(cx);
     }
+}
+
+/// The commands that only move the focus to another window (`C-w h/j/k/l`, `C-w w`).
+fn moves_focus(name: &str) -> bool {
+    name.starts_with("jump_view_") || matches!(name, "rotate_view" | "rotate_view_reverse")
 }
 
 fn terminal_next_prompt(cx: &mut Context) {

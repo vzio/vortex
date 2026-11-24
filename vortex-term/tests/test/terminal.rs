@@ -281,6 +281,25 @@ async fn ctrl_t_shows_and_hides_the_scratch_terminal() -> anyhow::Result<()> {
     h.finish().await
 }
 
+/// `:q` and `C-w q` on the scratch terminal hide it, like `C-t`: the shell keeps running.
+#[tokio::test(flavor = "multi_thread")]
+async fn q_hides_the_scratch_terminal() -> anyhow::Result<()> {
+    let mut h = Harness::sh()?;
+    open_panel(&mut h).await?;
+    let pid = scratch(&h.app).unwrap().shell.pid();
+    h.keys("<esc>:q<ret>").await?;
+    assert!(scratch_view(&h.app).is_none(), "hidden");
+    assert!(in_editor(&h.app));
+    assert_eq!(h.app.editor.tree.views().count(), 1);
+    assert_eq!(scratch(&h.app).unwrap().shell.pid(), pid, "the shell runs");
+    h.keys("<C-t>").await?;
+    assert!(scratch_view(&h.app).is_some());
+    h.keys("<esc><C-w>q").await?;
+    assert!(scratch_view(&h.app).is_none(), "hidden again");
+    assert_eq!(scratch(&h.app).unwrap().shell.pid(), pid);
+    h.finish().await
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn ctrl_t_hides_it_from_another_window() -> anyhow::Result<()> {
     let mut h = Harness::sh()?;
@@ -1613,8 +1632,7 @@ async fn watch_mode_follows_an_agent_in_a_terminal_split() -> anyhow::Result<()>
     };
     let mut h = Harness::sh()?;
     h.keys(":open a.txt<ret>").await?;
-    // watch mode from the editor window; then the terminal for the agent opens beside it (a
-    // terminal's window can't be reached by a window motion while following)
+    // watch mode from the editor window; then the terminal for the agent opens beside it
     h.keys(":watch<ret>").await?;
     assert!(h.app.editor.watch.is_active(), "{}", status_text(&h.app));
     h.pump_for(Duration::from_millis(400)).await;
@@ -1669,6 +1687,21 @@ async fn watch_mode_follows_an_agent_in_a_terminal_split() -> anyhow::Result<()>
         screen(app).lines().any(|l| l.trim() == "still-typing")
     })
     .await;
+
+    // window motions go to the editor window and back while following
+    h.keys("<esc><C-w>h").await?;
+    assert_eq!(focused_terminal(&h.app), None, "in the editor window");
+    assert_eq!(h.app.editor.mode(), Mode::Normal);
+    assert!(h.app.editor.watch.is_active());
+    assert!(h.app.editor.watch.session.as_ref().unwrap().following);
+    h.keys("<C-w>l").await?;
+    assert_eq!(
+        focused_terminal(&h.app),
+        Some(terminal_doc),
+        "back in the terminal"
+    );
+    assert_eq!(h.app.editor.mode(), Mode::Insert);
+    assert!(h.app.editor.watch.is_active());
     h.finish().await
 }
 

@@ -252,7 +252,8 @@ impl EditorView {
     fn layer_key(&mut self, key: KeyEvent, cx: &mut commands::Context) -> Option<()> {
         // a screen's own keys (a terminal's normal and view modes) before the modes'
         if let Some(layer) = crate::screens::layer(cx.editor) {
-            if self.run_layer_key(layer, key, cx).is_some() {
+            // a count goes to the screen's command (`2[`: two prompts back)
+            if self.run_layer_key(layer, key, cx, true).is_some() {
                 return Some(());
             }
         }
@@ -263,7 +264,7 @@ impl EditorView {
         } else {
             return None;
         };
-        self.run_layer_key(layer, key, cx)
+        self.run_layer_key(layer, key, cx, false)
     }
 
     /// Debug mode's key, after the focused debug panel didn't take it.
@@ -271,7 +272,7 @@ impl EditorView {
         if !cx.editor.debug.mode_on() {
             return None;
         }
-        self.run_layer_key(crate::keymap::Layer::Debug, key, cx)
+        self.run_layer_key(crate::keymap::Layer::Debug, key, cx, false)
     }
 
     fn run_layer_key(
@@ -279,18 +280,24 @@ impl EditorView {
         layer: crate::keymap::Layer,
         key: KeyEvent,
         cx: &mut commands::Context,
+        counts: bool,
     ) -> Option<()> {
         if !self.keymaps.pending().is_empty()
             || self.keymaps.sticky().is_some()
             || !self.pseudo_pending.is_empty()
             || self.on_next_key.is_some()
-            || cx.editor.count.is_some()
+            || (!counts && cx.editor.count.is_some())
             || cx.editor.mode() == Mode::Insert
             || (layer == crate::keymap::Layer::Watch && cx.editor.debug.is_focused())
         {
             return None;
         }
-        match self.keymaps.layer_get(layer, key)? {
+        let trie = self.keymaps.layer_get(layer, key)?;
+        if matches!(trie, crate::keymap::KeyTrie::Node(_)) {
+            return None;
+        }
+        cx.count = cx.editor.count.take();
+        match trie {
             crate::keymap::KeyTrie::MappableCommand(command) => command.execute(cx),
             crate::keymap::KeyTrie::Sequence(commands) => {
                 for command in commands {

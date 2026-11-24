@@ -9,7 +9,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     editor::{get_terminal_provider, ExternalTerminal},
-    graphics::Rect,
     tree::Place,
     DocumentId,
 };
@@ -147,8 +146,6 @@ pub struct Terminal {
     /// The edit command key asked the shell for its command line, which opens in a buffer when
     /// it comes.
     pub awaiting_command_line: bool,
-    /// Where its screen was last drawn.
-    pub area: Rect,
 }
 
 impl Terminal {
@@ -157,7 +154,6 @@ impl Terminal {
             shell,
             snapshot: None,
             awaiting_command_line: false,
-            area: Rect::default(),
         }
     }
 

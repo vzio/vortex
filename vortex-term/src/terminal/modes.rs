@@ -118,13 +118,26 @@ pub fn before_command(editor: &mut Editor, name: &str) -> bool {
     let Some((doc, view)) = focused(editor) else {
         return false;
     };
-    if editor.mode() == Mode::Insert || !walks_lines(name) {
+    if editor.mode() == Mode::Insert {
+        return false;
+    }
+    // the terminal's own commands (its layers' defaults: typing again, view mode, prompts, the
+    // command line) aren't held by watch or debug mode
+    if is_terminal_command(name) {
+        return true;
+    }
+    if !walks_lines(name) {
         return false;
     }
     if !viewing(editor) {
         enter_view(editor, doc, view);
     }
     true
+}
+
+/// The commands of a terminal's key layers.
+fn is_terminal_command(name: &str) -> bool {
+    matches!(name, "insert_mode" | "append_mode") || name.starts_with("terminal_")
 }
 
 /// The commands that walk a terminal's lines: moving, selecting, scrolling, searching, yanking,

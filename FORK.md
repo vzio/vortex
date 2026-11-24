@@ -1904,8 +1904,10 @@ come first (`i`, `a`, `v`, `e`; in view mode `Enter`, `]`, `[`, `o`), then the m
 
 Watch's following and catch-up, `n`/`N`, and the debugger's stops and playback act in the window
 for documents and never take the focus from the terminal: you keep typing to an agent while the
-split next to it follows. The commands that walk a terminal's lines aren't held by the modes. The
-mode's background (`ui.background.mode`) isn't painted over terminals.
+split next to it follows. So moving the focus between windows (`Ctrl-w h/j/k/l`, `Ctrl-w w`)
+isn't held by either mode, also while following: go to the editor window and back to the agent's
+terminal at will. The commands that walk a terminal's lines aren't held by the modes. The mode's
+background (`ui.background.mode`) isn't painted over terminals.
 
 ### Configuration
 
@@ -2360,7 +2362,9 @@ rewind follows the recorded stop the same way. The line is kept in the middle th
 scroll while it stays there, centered when it leaves it; a stop in another file opens it centered.
 
 While following, the movement and search keys of the editor do nothing (the bar's note says `v looks
-around to move`), and neither do the keys that edit (`Esc leaves debug mode, then edit`).
+around to move`), and neither do the keys that edit (`Esc leaves debug mode, then edit`). Moving the
+focus to another window (`Ctrl-w h/j/k/l`, `Ctrl-w w`) works: the stops show in the window for
+documents.
 
 `v` is **view mode**: your own cursor, drawn as in select mode (`ui.cursor.select`), moves and
 searches freely, and the stops don't move the view (playback goes on). `v` again follows, jumping to
@@ -3725,7 +3729,8 @@ open something else (insert mode, `d`, `o`, a paste, a picker, `gf`, `gd`, a buf
 [history](#history-and-bookmarks)'s `ga`/`gA`, the bookmarks' `C-i`/`C-o`/`space j`, a split) do
 nothing in either state: the bar says that `Esc` leaves watch mode first. The command line (`:`),
 the palette, the [terminals](#terminals) (`C-t`: an agent can run in one while
-its changes are followed in the window next to it) and setting a bookmark (`C-s`) work in both. A typed command
+its changes are followed in the window next to it), moving the focus between windows
+(`Ctrl-w h/j/k/l`, `Ctrl-w w`) and setting a bookmark (`C-s`) work in both. A typed command
 is meant: `:goto` looks around, the watch commands keep watch mode, any other command (`:w`,
 `:open`, ...) leaves it first (as `Esc` does: the session goes on). The `space` and
 other menus still open; a command picked in them is held like its key.
