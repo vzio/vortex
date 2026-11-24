@@ -97,7 +97,7 @@ git blame FILE
 - [Markdown render mode](#markdown-render-mode)
 - [`gw` with case](#gw-with-case)
 - [Yank `file:lines`](#yank-filelines)
-- [Terminal panel](#terminal-panel)
+- [Terminals](#terminals)
 - [The debugger](#the-debugger)
 - [API browser (in progress)](#api-browser-in-progress)
 - [Hex view](#hex-view)
@@ -139,7 +139,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Soft wrap for Markdown | the markdown entry of `languages.toml`, `vortex-term/tests/test/soft_wrap.rs` |
 | Selective soft wrap | `vortex-core/src/selective_wrap.rs` (the unwrapped lines, found in the syntax tree; `LineOffsets`), `TextFormat::{wraps, col_offset, is_selective}` and the formatter's `wraps` in `vortex-core/src/doc_formatter.rs` (tests in `doc_formatter/test.rs`), `char_idx_at_screen_offset` in `vortex-core/src/position.rs`, `vortex-term/src/ui/text_decorations/rulers.rs` (rulers per line), `vortex-term/src/ui/document/drawing_cost.rs` (the measurement), `vortex-term/tests/test/selective_wrap.rs` |
 | Markdown render mode | `vortex-term/src/markdown_view.rs` (the view: when it is up, the reading line, the keys and the commands it takes over, links, search, the outline, code blocks scrolled sideways, going back to the source, the drawing), `vortex-term/src/markdown_view/` (`parse.rs` Markdown to styled blocks, `page.rs` the layout of the page and its headings, links and code blocks, `wrap.rs` wrapping styled text, `table.rs` the tables' columns and cells, `tests.rs` and `snapshots/` the rendering tests), `vortex-term/tests/test/markdown_view.rs` |
-| Terminal panel | `vortex-terminal/` (the shell: pty, emulator, OSC 133, bash/zsh integration), `vortex-view/src/terminal.rs` (panel state, `[editor.terminal]`), `vortex-term/src/terminal/` (drawing, focus, input encoding, the `vx` shim), `vortex-term/tests/test/terminal.rs` |
+| Terminals | `vortex-terminal/` (the shell, pty and emulator, OSC 133 and 7, the command line report, bash/zsh integration, the snapshot of the lines), `vortex-view/src/terminal.rs` (the terminals' state, `[editor.terminal]`), `vortex-view/src/screen.rs` (screen documents, the window for documents, showing and hiding screens), the tree's shares and places in `vortex-view/src/tree.rs`, `vortex-term/src/screens.rs` (what each screen kind draws and takes), `vortex-term/src/terminal/` (`window.rs` starting, showing and closing terminals, `:sh`, the `vx` requests; `modes.rs` the keys of the three modes, view mode, prompts; `edit.rs` the command line in a buffer; `render.rs` drawing; `mouse.rs` the mouse; `input.rs` the encoding of keys, mouse and paste; `shim.rs` the `vx` shim; `phosphor.rs` the filter), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
 | API browser (in progress) | `vortex-term/src/api/` (`mod.rs` the browser: the tree, its tasks and their cancellation; `load.rs` the providers; `node.rs` the nodes; `temp.rs` temporary documents; `tags.rs` the tree-sitter skeleton; `picker.rs` `:api-browse`), `Client::cancellable_call` and `Client::set_config_overlay` in `vortex-lsp/src/client.rs`, `HiddenDocuments` in `vortex-lsp/src/lib.rs`, `vortex-term/tests/fake_lsp/main.rs` (a scripted fake language server), `vortex-term/tests/test/fake_lsp.rs`, `vortex-term/tests/test/api_browser.rs`, `vortex-term/tests/test/api_report.rs` (the measurements against real servers) |
 | Hex view | `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`), `vortex-term/tests/test/hex_view.rs` |
@@ -172,13 +172,22 @@ The move mode label (`MOV`) is a generic `mode="..."` option of sticky nodes in 
 `Application::handle_terminal_events`, draws its panel from one call in `EditorView::render`, has
 one entry in `typed.rs`, and opens its buffers with `Editor::new_file_from_document`, made public.
 
-The terminal panel changes core files directly (the fork no longer syncs with upstream): the
-`Editor::terminal` field and `close_document` (an awaited buffer closing answers `vx` and focuses
-the panel) in `vortex-view/src/editor.rs`, where `[editor.terminal]` also absorbed the debugger's
-`command`/`args`; the layout, the cursor and `Esc` in `ui/editor.rs`; the event routing in
-`Application::handle_terminal_events`; `toggle_terminal` in `commands.rs` and `keymap/default.rs`;
-`:sh`, `:!` (and `:!cmd` without a space) and `quit` on an awaited buffer in `typed.rs`; the `shell`
-element in `ui/statusline.rs`; the client mode at the top of `main.rs`.
+The terminals change core files directly (the fork no longer syncs with upstream): in
+`vortex-view/src/editor.rs`, `Editor::terminals`, `last_document_view`, `switch`, `close`,
+`close_view`, `close_document` (an awaited buffer closing answers `vx` and focuses the terminal),
+`focus` and `_refresh` (which tells each shell its window's size), where `[editor.terminal]` also
+absorbed the debugger's `command`/`args`; `Document::screen` and its methods, the refused
+transactions and no soft wrap in `vortex-view/src/document.rs`; `View::gutter_offset`;
+`Node::share`, `split_root`, `place` and `insert_at` in `vortex-view/src/tree.rs`; `in_source_view`
+in `vortex-view/src/handlers/dap.rs`. In `vortex-term`: `EditorView`'s render, keys, paste, mouse,
+cursor, `layer_key` and mode background in `ui/editor.rs`; `toggle_terminal`, `hsplit`/`vsplit`,
+`goto_buffer`, the new commands and the `before_command` hook in `commands.rs`; `:terminal`,
+`:vterminal`, `:sh`, `:w` and `:q` of the command line buffer in `typed.rs`; `Layer::Terminal` and
+`Layer::TerminalView` in `keymap.rs`, `config.rs` and `keymap/default.rs`; the disk check on leaving
+a terminal in `handlers/disk.rs`; completion skipping screens in `handlers/completion.rs`; the
+`shell` element and the mode in `ui/statusline.rs`; the debug panel's size in `debug/mod.rs`;
+watch's `go_to` and its command lists, and debug's `camera`; the client mode at the top of
+`main.rs`.
 
 Line history shares the commit log's picker: `CommitLog::new` and the line history's rows,
 preview, `o` and range `Enter` in `commands/git_log.rs`; `sections` of `vortex-vcs/src/git/log.rs`,
@@ -192,7 +201,7 @@ The uncommitted changes and files changed on disk also change core files: the di
 `Document` (`disk_change`, and `save_impl`, whose external-change check now compares content
 instead of the modification time) in `vortex-view/src/document.rs`; the checks before writing in
 `write_impl` and `write_all_impl` (`typed.rs`), on focus (`ui/editor.rs`) and when leaving the
-terminal panel (`terminal/panel.rs`); the `notify` watcher in `vortex-view`; `[editor.changes]` in
+terminal (`handlers/disk.rs`); the `notify` watcher in `vortex-view`; `[editor.changes]` in
 `vortex-view/src/editor.rs`.
 
 The conflict diagnostics change core files: `Severity::Conflict` and `DiagnosticProvider::Conflict`
@@ -208,11 +217,11 @@ The debugger changes core files directly: the `Editor::debug` field and the per-
 `Breakpoint` (`disabled`, `sessions`) in `vortex-view/src/editor.rs`, where the old event handler
 of `vortex-view/src/handlers/dap.rs` moved to `vortex-term/src/debug/session.rs` (the module keeps
 its small helpers); the gutter's breakpoint and `▶` markers in `vortex-view/src/gutter.rs`; the
-layout (the panel takes the terminal panel's place), its keys first in `handle_event`, `Esc`, the
+layout (the panel stays below the splits, `[editor.terminal] size` percent high), its keys first in `handle_event`, `Esc`, the
 cursor, the frame line limited to its file, and a gutter click in `ui/editor.rs`; the mouse in
 `Application::handle_terminal_events` and the adapters' messages in `Application`; the `debug`
 statusline element; `:debug-eval` (raw input) in `typed.rs`; `space G` (`debug_mode`) and `C-g` in
-`keymap/default.rs`; the terminal panel hiding the debug panel in `terminal/panel.rs`; in
+`keymap/default.rs`; in
 `vortex-dap`, the client's `Requester`, child sessions, bodyless responses, the TCP connect retry,
 and `supportsStartDebuggingRequest`; `SetVariable`/`SetExpression` and signed exit codes in
 `vortex-dap-types`. Spectator mode adds: `Editor::current_stack_frame` showing the recorded frame in
@@ -311,7 +320,7 @@ Theme effects change core files: the `effects` of `Theme` and `Theme::effects`, 
 taken out of the styles in `build_theme_values` and merged key by key in `Loader::merge_themes`,
 in `vortex-view/src/theme.rs`; `InlineDiagnostics::new` taking the list of cells to keep, in
 `ui/text_decorations/diagnostics.rs`; the `diagnostic_glitch` and `diagnostic_cells` of
-`EditorView` and the glitch after the views in `render`, in `ui/editor.rs`; the panel's colors
+`EditorView` and the glitch after the views in `render`, in `ui/editor.rs`; the terminals' colors
 through the filter in `terminal/render.rs`; `DashboardBackground` (`settle` with its `load`
 alias, `drain`, `grow`, `grow-on` the default) in `vortex-view/src/editor.rs`.
 
@@ -429,7 +438,7 @@ did: debug mode's), or a **key badge**; a row can also be a **line** of cells as
 (debug mode's lineline). When a row is too narrow, a note goes first (cut with `…`, then gone), then
 the keys collapse (all their labels go, leaving the keys, then the last badges go), then the
 information is cut with `…` (the widest first), then the state. The bar takes its place
-under the splits and the panels (the terminal and debug panels stay above it), and the infobox
+under the splits and the debug panel (which stays above it), and the infobox
 moves up over it.
 
 **Key badges** are drawn like the dashboard's, the key then its label (` v  look`). A badge names a
@@ -1088,7 +1097,7 @@ Open buffers are compared with their file when it matters, without a background 
 - after switching to another buffer (`ga`, the buffer picker, `:bn`, a jump, a split that shows
   another buffer...);
 - when the terminal regains focus, and when going back to the editor from the
-  [terminal panel](#terminal-panel) (`Ctrl-t`, a click, `vx`);
+  [terminal](#terminals) (`Ctrl-t`, a click, `vx`);
 - right before writing (`:w`, `:wq`, `:x`, `:wa`, auto-save);
 - while the [uncommitted changes](#uncommitted-changes-live) are watched, on every change of a
   file.
@@ -1158,7 +1167,7 @@ fn main() {
 - **Which files are unmerged** is read from git's index:
   - when a file is opened, and after switching buffers;
   - when the terminal regains focus, and when going back to the editor from the
-    [terminal panel](#terminal-panel), with the [disk checks](#files-changed-on-disk);
+    [terminal](#terminals), with the [disk checks](#files-changed-on-disk);
   - while the [uncommitted changes](#uncommitted-changes-live) are watched (the commit log or a
     diff view is open), on every change of the repository: a merge, rebase or cherry-pick that
     starts or ends shows up at once;
@@ -1186,7 +1195,7 @@ the other bundled themes conflicts look like errors with their own gutter symbol
 - A conflict without markers (binary files, a file modified on one side and deleted on the
   other) has no diagnostic and no row in `space D`.
 - While Vortex is focused and idle, with no live view open, a merge started from another terminal
-  shows up with the next buffer switch or focus. A merge run in the [terminal panel](#terminal-panel)
+  shows up with the next buffer switch or focus. A merge run in a [terminal](#terminals)
   shows up when going back to the editor.
 - Nested repositories (a submodule inside the working directory) are only looked at for the files
   open in them, when no file of the outer repository is.
@@ -1768,51 +1777,102 @@ in a chat, an issue, a terminal (`vx src/main.rs:42` opens it there).
 
 `Space :` was free; `:` reads as the separator of `file:line`.
 
-## Terminal panel
+## Terminals
 
-A persistent shell in a panel below all the splits (not a split itself), with a statusline
-indicator that tells what the shell is doing while the panel is hidden.
+Shells in windows. A terminal is a window of the tree like any other, so splits, window motions
+and the mouse work on it. The first one is the scratch terminal, which `Ctrl-t` shows and hides;
+a statusline indicator tells what its shell is doing while it is hidden.
 
 ### Usage
 
 | Key or command | What it does |
 | --- | --- |
-| `Ctrl-t` | From the editor (normal, select or insert mode): shows and focuses the panel, starting a shell when none runs. From the panel: back to the editor, the panel stays shown |
-| `Esc` | In normal mode, with nothing pending and no popup: hides the panel. The shell keeps running |
-| `:sh cmd`, `:run-shell-command cmd` | Shows and focuses the panel and runs `cmd` in its shell, as if typed and Enter pressed |
-| `:sh` | Shows and focuses the panel, starting a shell only if none runs |
-| `:! cmd`, `:shell-popup cmd` | Runs `cmd` on its own and shows its output in a popup (what `:sh` used to do). `:!cmd` without a space works too |
-| `exit`, `Ctrl-d` in the shell | Closes the panel for real; the next `Ctrl-t` or `:sh` starts a fresh shell |
+| `Ctrl-t` | Shows the scratch terminal (starting a shell when none runs) at `position`, `size`% of the editor, and focuses it in insert mode. Again, from its normal mode or from any other window: hides it, the shell keeps running. Alone in the tree, it first opens a scratch buffer split. Not in a terminal's insert mode, where it goes to the program |
+| `:sh cmd`, `:run-shell-command cmd` | Shows and focuses the scratch terminal and runs `cmd` in its shell, as if typed and Enter pressed |
+| `:sh` | Shows and focuses the scratch terminal, starting a shell only if none runs |
+| `:! cmd`, `:shell-popup cmd` | Runs `cmd` on its own and shows its output in a popup. `:!cmd` without a space works too |
+| `:q`, `Ctrl-w q` | On the scratch terminal: hides it (as usual when it is the last window). On another terminal: closes it and kills its shell |
+| `exit`, `Ctrl-d` in the shell | Closes the terminal's window and document. The next `Ctrl-t` or `:sh` starts a fresh shell |
 
-While the panel is focused, every key goes to the shell except `Ctrl-t`: `Esc`, `Ctrl-c`, `Ctrl-w`,
-arrows, function keys... are translated to what an xterm sends, in the modes the program asked for
-(application cursor keys, bracketed paste). Full screen programs work: colors (indexed colors stay
-indexed, so your terminal's palette applies; RGB colors are passed through), the cursor and its
-shape, the alternate screen, mouse reporting, resizing. The mouse wheel over the panel scrolls the
-scrollback (or goes to the program when it asked for the mouse, or becomes arrow keys on the
-alternate screen); a click in the panel focuses it, a click in a split focuses the editor. The
-panel has no border or title of its own: it starts right below the statusline of the split above,
-which shows as inactive while the panel has the keys.
+Window motions (`Ctrl-w h/j/k/l`, `Ctrl-w w`, a click) go to and from a terminal like any window.
+A hidden scratch terminal comes back where it was, in the same place of the tree with the same
+share. Entering a terminal's window by any means lands in insert mode; leaving it gives normal mode.
 
-### `vx` in the panel
+#### More terminals
 
-The shell gets a `vx` first on its `PATH` (the only program the panel adds), and `EDITOR`,
+| Key or command | What it does |
+| --- | --- |
+| `Ctrl-w T s`, `space w T s` | A new terminal in a horizontal split of the focused window (`hsplit_terminal`; `C-s` too) |
+| `Ctrl-w T v`, `space w T v` | The same, a vertical split (`vsplit_terminal`; `C-v` too) |
+| `:terminal`, `:term` | A new terminal in a horizontal split |
+| `:vterminal`, `:vterm` | A new terminal in a vertical split |
+| `Ctrl-w s`, `Ctrl-w v` in a terminal | The same as the two commands above: a new terminal, not a copy of the window |
+
+`Ctrl-t` doesn't touch these. Close one with `:q`, `Ctrl-w q` or `exit`; its shell is killed.
+
+### The modes
+
+A terminal window has three modes, shown in the statusline as `INS`, `NOR` and `VIEW` (`SEL` while
+extending in view mode); the cursor follows.
+
+| Mode | Keys | `Esc` |
+| --- | --- | --- |
+| Insert | Every key goes to the shell, encoded as xterm does, `Ctrl-w`, `Ctrl-t` and `Ctrl-c` included. Pastes go to the shell | Normal mode |
+| Normal | Vortex's keys, nothing is typed; window commands, `:` and the space menus work, edits do nothing (the document is read-only). `i`, `a` and every key that enters insert mode type again. A key that moves, selects, scrolls, searches or yanks (`j`, `k`, `w`, `gg`, `ge`, `/`, `?`, `n`, `Ctrl-u`...) starts view mode and does it there. `v` starts view mode | Sent to the program, every time, with the mode unchanged, when nothing is pending (no key, count or register) |
+| View | The terminal's lines, walked with Vortex's movement and search keys (below). `i` and `a` type again | Stops extending, then back to normal mode (the live screen, at the bottom) |
+
+In normal mode the cursor is Vortex's normal cursor, drawn on the program's cursor cell.
+
+#### View mode
+
+View mode makes the terminal's lines the document: the scrollback and the screen as they were when
+it started, with colors. Output that arrives meanwhile shows after leaving. The mouse acts as in a
+document.
+
+| Key | What it does |
+| --- | --- |
+| `Enter` | Starts and stops extending (select mode) |
+| `y` | Yanks the selection |
+| `]`, `[` | The next, the previous prompt (with a count; they extend the selection in select mode) |
+| `o` | Selects the whole output of the command under the cursor: the lines after its prompt and command lines, up to the next prompt, trailing blank lines dropped, with the last newline. On the last prompt, the previous command's output |
+
+The prompt keys need OSC 133 markers (see limitations).
+
+#### Editing the command
+
+`e` in a terminal's normal mode, at a prompt, opens the command being typed in a buffer in a split
+below the terminal (30% of it), in the shell's language (bash; fish and nu for those shells), with
+the cursor at its end, in normal mode.
+
+| Command | What it does |
+| --- | --- |
+| `:w` | Sends the buffer back to the shell's line, replacing it. It is not run |
+| `:wq`, `:x` | Sends it and closes the buffer |
+| `:q`, `:q!` | Close the buffer and leave the line as it was |
+
+Closing the buffer focuses the terminal, in insert mode. While a program runs, `e` says "a program
+runs: there is no command line to edit".
+
+### `vx` in a terminal
+
+The shell gets a `vx` first on its `PATH` (the only program a terminal adds), and `EDITOR`,
 `VISUAL` and `GIT_EDITOR` set to `vx --wait` (its absolute path), which never starts a nested
-Vortex. It is the `vx` binary itself in a client mode, talking to
-this editor over a private Unix socket (`VORTEX_TERMINAL_SOCKET`):
+Vortex. It is the `vx` binary itself in a client mode, talking to this editor over a private Unix
+socket (`VORTEX_TERMINAL_SOCKET`); each terminal has its own socket:
 
-- `vx` alone focuses the editor (the panel stays shown).
-- `vx file[:line[:col]] ...` opens the files in the editor and focuses it.
+- `vx` alone focuses the window for documents (the terminal stays shown, in normal mode).
+- `vx file[:line[:col]] ...` opens the files in the window for documents and focuses it.
 - As `$EDITOR` (`git commit`, `git rebase -i`, `crontab -e`...) it opens the file and waits until
-  that buffer is closed. `:wq` or `:q` on it closes the buffer (not the split, nor the editor,
-  even when it is the last one) and focuses the panel again; `:q!` closes it unsaved, so git
-  aborts as usual on an empty message.
+  that buffer is closed. `:wq`, `:q` or `:q!` on it closes the buffer (not the window, nor the
+  editor, even when it is the last one) and focuses the terminal it came from again, in insert
+  mode. `:q!` closes it unsaved, so git aborts as usual on an empty message.
 - `vx --help`, `--version`, `--health` and `--grammar` run normally.
 
 ### Shell indicator
 
 The statusline element `shell` (in the default layout, before the selections) shows `SH` while a
-shell runs, in a color for its state, also while the panel is hidden:
+shell runs, in a color for its state. A terminal window's statusline shows its own shell's state;
+every other window shows the scratch terminal's, also while it is hidden.
 
 | State | Theme scope | Fallback |
 | --- | --- | --- |
@@ -1821,48 +1881,130 @@ shell runs, in a color for its state, also while the panel is hidden:
 | the last command exited 0 | `ui.statusline.shell.success` | green |
 | the last command failed | `ui.statusline.shell.failure` | red |
 
-Success and failure stay until the panel is focused, then it is back to idle. The states come from
-OSC 133 markers (prompt, command, exit code), injected into bash and zsh when the shell starts,
-the way VS Code does it, without touching your rc files: bash runs with `--init-file` pointing to a
-script that sources your `~/.bashrc` and then adds its hooks (`PS0`, or a `DEBUG` trap before bash
-4.4, and the front of `PROMPT_COMMAND`, keeping `$?` for your own prompt); zsh runs with a
-`ZDOTDIR` whose startup files source yours and then add `precmd`/`preexec` hooks, and restore your
-`ZDOTDIR`. Shells that send OSC 133 themselves work too. For other shells, a command is running
-when the terminal's foreground process group isn't the shell's; there is no exit code then, so the
-indicator goes back to idle.
+Success and failure stay until that terminal's window is focused, then it is back to idle. The
+states come from OSC 133 markers (prompt, command, exit code), injected into bash and zsh when the
+shell starts, the way VS Code does it, without touching your rc files: bash runs with `--init-file`
+pointing to a script that sources your `~/.bashrc` and then adds its hooks (`PS0`, or a `DEBUG`
+trap before bash 4.4, and the front of `PROMPT_COMMAND`, keeping `$?` for your own prompt); zsh
+runs with a `ZDOTDIR` whose startup files source yours and then add `precmd`/`preexec` hooks, and
+restore your `ZDOTDIR`. The integration also reports the working directory (OSC 7) at each prompt,
+and binds two private sequences to read and clear the command line, which `e` uses. Shells that
+send OSC 133 themselves work too. For other shells, a command is running when the terminal's
+foreground process group isn't the shell's; there is no exit code then, so the indicator goes back
+to idle.
+
+### Watch mode and debug mode
+
+A terminal's insert mode takes every key, so the keys of [watch mode](#watch-mode) and
+[debug mode](#debug-mode) don't apply there. In a terminal's normal mode the terminal's own keys
+come first (`i`, `a`, `v`, `e`; in view mode `Enter`, `]`, `[`, `o`), then the mode's keys (watch's
+`n`, `N`, `x`, `y`, `c`; debug's playback keys...), then the editor's. `Esc` stays the terminal's
+(to the program, or leaving view mode), so leave a mode from an editor window or with its commands
+(`:watch-stop`...).
+
+Watch's following and catch-up, `n`/`N`, and the debugger's stops and playback act in the window
+for documents and never take the focus from the terminal: you keep typing to an agent while the
+split next to it follows. The commands that walk a terminal's lines aren't held by the modes. The
+mode's background (`ui.background.mode`) isn't painted over terminals.
 
 ### Configuration
 
 ```toml
 [editor.terminal]
-height = 30              # percent of the editor's height (10 to 90)
+position = "bottom"      # of the scratch terminal: "bottom", "top", "left" or "right"
+size = 33                # percent of the editor in that direction (10 to 90)
 shell = []               # the shell and its arguments; empty: $SHELL, else /bin/sh
 shell-integration = true # inject the OSC 133 markers into bash and zsh
 scrollback = 10000       # lines
 
 [editor.statusline]
 right = ["diagnostics", "shell", "selections", "register", "position", "file-encoding"]
+
+[keys.terminal]          # a terminal's normal mode, over the editor's
+[keys.terminal-view]     # a terminal's view mode, over the editor's normal and select modes
 ```
 
-The panel's colors are `ui.terminal` (background and default text; falls back to
-`ui.background`). A theme can draw the whole panel in one color at each color's own brightness,
-like an old monochrome monitor, with `terminal-phosphor` in its
-[effects](#the-phosphor-filter).
+`height` is the old name of `size` and still works for a while; when both are set, `size` wins.
+The default size was 30 percent of the height and is 33 now. The `[editor.terminal]` table is also
+the debugger's: `command` and `args` are its external terminal, and `size` is the debug panel's
+height in percent.
 
-`[editor.terminal]` was already the debugger's external terminal (`command`, `args`); those keys
-still work there.
+The defaults of the two layers: `i` (`insert_mode`), `a` (`append_mode`), `v` (`terminal_view`) and
+`e` (`terminal_edit_command`) in `[keys.terminal]`; `Enter` (`terminal_select`), `]`
+(`terminal_next_prompt`), `[` (`terminal_prev_prompt`) and `o` (`terminal_select_output`) in
+`[keys.terminal-view]`.
+
+The terminals' colors are `ui.terminal` (background and default text; falls back to
+`ui.background`). A theme can draw every terminal in one color at each color's own brightness,
+like an old monochrome monitor, with `terminal-phosphor` in its [effects](#the-phosphor-filter).
 
 ### Behaviour
 
+- Each terminal window tells its shell its size whenever its window changes size (splits added or
+  closed, the editor resized), right away, not at the next frame.
+- A file opened from a terminal (a picker, `:e`, `vx file`) opens in the last focused window for
+  documents and focuses it; with none, in a vertical split.
+- The buffer picker lists terminals, named `<shell> <cwd>` (`bash ~/src/x`); the scratch one also
+  while hidden. Picking one goes to its window, or shows the hidden scratch terminal. `gn` and `gp`
+  skip terminals.
+- `exit` or `Ctrl-d` closes the terminal's window. Quitting Vortex kills the shells (and what runs
+  in them).
 - Typed input waits for the shell to be ready: `:sh cmd` on a new shell holds `cmd` until the
   first prompt (bash and zsh drop what is typed while they start), 3 seconds at most.
-- Typing in the panel scrolls the view back down to the prompt.
-- Quitting Vortex kills the shell (and what runs in it).
+- The disk checks of [files changed on disk](#files-changed-on-disk) run when focus leaves a
+  terminal.
+
+### Windows that aren't documents
+
+A terminal shows live output that isn't text of a file, yet it is a window of the tree and shares
+its commands. That is done with **screen documents**: a `Document` with a name and no path, no
+gutter, no soft wrap, which refuses every transaction. The window shows a screen document and the
+screen's kind says what draws it and takes its keys.
+
+- `vortex-view/src/screen.rs` is the mechanism: `Document::screen_document`, `screen()`,
+  `is_screen()`, `screen_kind()` and `set_screen_text` (view mode puts the terminal's lines in it);
+  `Editor::document_view` (the window for documents), `in_document_window` (run something there
+  while focus stays on the screen), `open_screen_window` with a `Placement`, `show_screen`,
+  `hide_screen` (which returns the `Place` to come back to) and `focus_moved`.
+- `vortex-term/src/screens.rs` dispatches by kind: drawing, the cursor, keys, paste, the mouse, the
+  mode label, the keymap layer, `before_command` and `after_key`.
+- The tree gives windows a **share** (a percent of their container, `Node::share`), a root split
+  (`split_root`) and places (`place`, `insert_at`), so a screen can be hidden and brought back
+  where it was.
+
+The [hex view](#hex-view), the diffs, the [Markdown page](#markdown-render-mode) and the debug
+panel are views of their own for now. Each can become a screen kind later: a kind of its own in
+`screens.rs`, its content set with `set_screen_text` or drawn by the kind, and a window in the tree
+instead of a compositor layer.
+
+### Practice
+
+Terminals, `:sh` and `:!` don't change text, so they have no `:practice` exercise; they are in
+the tutor's "THE TERMINALS" section. The keys that put shell output into the text are
+upstream's: `|` is practised in the shell chapter, and `!` and `A-!` stay in the tutor, since
+with the POSIX tools the exercises may use no short text makes them beat typing the output.
+
+### Limitations
+
+- View mode is a frozen snapshot: output that arrives while it is on shows after leaving it.
+- A terminal shows in one window at a time.
+- A long line the program wrapped is several lines in view mode, and so when yanked.
+- The prompt keys (`]`, `[`, `o`) need OSC 133 markers. Editing the command (`e`) needs Vortex's
+  integration (bash and zsh). Shells with markers of their own (fish...) get prompts and output but
+  not editing ("editing the command line needs Vortex's shell integration (bash, zsh)"). Without
+  markers (`sh`, or `shell-integration = false`) there are windows, modes and view mode only, and
+  the keys say "no prompts: the shell sends no OSC 133 markers".
+- In a terminal's normal mode, watch mode's `a` and the debugger's `i`, `v`, `e` are the terminal's.
+- `Esc` stays the terminal's, so modes are left from an editor window or by their commands.
+- The debug panel is still a panel below the splits, not a window.
+- The debugger's `runInTerminal` still uses the external terminal, not a terminal window.
+- `vx` in a shell started in a terminal over `ssh` or in a container doesn't reach this editor.
+- A command typed with `:sh` while a full screen program runs goes to that program.
 
 ### Theme effects
 
 Themes are data, and so are their effects: an optional `[effects]` table in a theme file says how
-the dashboard draws its background and title, what glitches, and whether the terminal panel goes
+the dashboard draws its background and title, what glitches, and whether the terminals go
 phosphor. Every effect is off when a theme doesn't set it, and an effect that is off costs
 nothing: a theme without the table draws and idles exactly as one with no effects at all.
 
@@ -1883,7 +2025,7 @@ terminal-phosphor = "phosphor"  # a color: a palette name, "#rrggbb" or 0-255; d
 | `glitch-logo` | 0 to 10 | 0 | The glitch rate of the title's letters (not their shadow) |
 | `glitch-background` | 0 to 10 | 0 | The glitch rate of the vortex's cells (never in a panel) |
 | `glitch-diagnostics` | 0 to 10 | 0 | The glitch rate of the ghost text of error diagnostics |
-| `terminal-phosphor` | a color | off | The terminal panel drawn through a phosphor filter of that color |
+| `terminal-phosphor` | a color | off | The terminals drawn through a phosphor filter of that color |
 
 The rates are chances per cell per second: `glitch-diagnostics = 0.02` gives each character of an
 error's ghost text a 2% chance a second to glitch.
@@ -1949,17 +2091,17 @@ other symbols the glitch uses are no denser than `@` or fall between these with 
 
 ### The phosphor filter
 
-With `terminal-phosphor` set, every color in the terminal panel is drawn as that color at the
+With `terminal-phosphor` set, every color in a terminal is drawn as that color at the
 original's brightness: `ls`, `htop` and the prompt all turn phosphor and stay readable, since what
 was bright stays bright and what was dark stays dark. Indexed colors are resolved to RGB first
 (with xterm's default palette, as the outer terminal's own can't be read), RGB colors are taken as
-they are, and the default colors are the panel's (`ui.terminal`, else `ui.background`; xterm's
+they are, and the default colors are the terminal's (`ui.terminal`, else `ui.background`; xterm's
 light grey on black when the theme leaves them to the terminal). Brightness is the perceived one
 (HSP, the square root of the weighted squares of the channels), which ranks a pure blue as dim
 but visible rather than black. Up to the phosphor's own brightness the color is the phosphor
 scaled down; brighter colors go on from it towards white, so white stays white.
 
-The filter is off by default, and then costs one check per frame of the panel.
+The filter is off by default, and then costs one check per frame of a terminal.
 
 ## The Matrix theme
 
@@ -1985,7 +2127,7 @@ theme = "matrix"
   `:practice`...), so nothing falls back to an unreadable default.
 - Its effects: the ASCII charset and the classic logo on the dashboard (runes and the Matrix
   don't mix), a glitch on the logo (0.06), a slow one on the vortex (0.004), 0.02 on error
-  diagnostics, and the terminal panel through a phosphor filter of its text green.
+  diagnostics, and the terminals through a phosphor filter of its text green.
 
 Markdown follows the same idea: headings go from bright to dim green as the level goes down, bold,
 and levels 1 to 3 sit on a dark green band. Strikethrough is crossed out and dim. The render mode
@@ -2034,23 +2176,6 @@ theme = "gruvbox"
 
 - One theme for the whole screen: splits of different languages side by side show the focused
   one's theme in all of them.
-
-## Practice
-
-The panel, `:sh` and `:!` don't change text, so they have no `:practice` exercise; they are in
-the tutor's "THE TERMINAL PANEL" section. The keys that put shell output into the text are
-upstream's: `|` is practised in the shell chapter, and `!` and `A-!` stay in the tutor, since
-with the POSIX tools the exercises may use no short text makes them beat typing the output.
-
-### Limitations
-
-- No keyboard scrolling of the scrollback (every key goes to the shell): use the mouse wheel.
-- No text selection or copy inside the panel with the mouse; use the outer terminal's own
-  selection (usually with Shift held) or the shell's tools.
-- One shell, one panel: no tabs, no splits of the panel, no resizing it with the mouse.
-- The debugger's `runInTerminal` still uses the external terminal, not the panel.
-- `vx` in a shell started inside the panel over `ssh` or in a container doesn't reach this editor.
-- A command typed with `:sh` while a full screen program runs goes to that program.
 
 ## The debugger
 
@@ -2310,8 +2435,8 @@ evaluated). From 120 columns the console shows beside the data section; narrower
 tab. The tab bar shows the session's status and name, and the search of the section.
 
 The panel opens when a session starts (the editor keeps the keys) and hides when it ends; `P` in
-debug mode shows it again with the last console. `Esc` in normal mode hides it, like the terminal
-panel, with which it shares its place: showing one hides the other. `Tab` or `Ctrl-g` in debug
+debug mode shows it again with the last console. `Esc` in normal mode hides it. It stays a panel below the splits, `[editor.terminal] size`
+percent high, and no longer shares its place with a terminal. `Tab` or `Ctrl-g` in debug
 mode, or `Ctrl-g` outside it, focuses it.
 
 Its keys, when focused, are modal like the fork's pickers. The keys it doesn't take go to debug
@@ -2337,7 +2462,7 @@ with the panel focused:
 | `*` | Mark a variable: fast forward stops when it changes |
 | `{` `}` | Rewind ten stops back or forward |
 | `M` | The [memory](#memory) of the value under the cursor (`▦` after it), in the hex view |
-| `:`, `Ctrl-t` | The command line; the terminal panel |
+| `:`, `Ctrl-t` | The command line; the scratch terminal |
 | `q`, `Esc`, `Ctrl-g` | Back to the editor |
 
 The panel has no row of hints: the keys are in debug mode's `?` box and on the bar. The loading
@@ -3599,8 +3724,8 @@ work as usual, and `/`, `?`, `*` search (but `n`/`N` stay the changes'). Keys th
 open something else (insert mode, `d`, `o`, a paste, a picker, `gf`, `gd`, a buffer switch,
 [history](#history-and-bookmarks)'s `ga`/`gA`, the bookmarks' `C-i`/`C-o`/`space j`, a split) do
 nothing in either state: the bar says that `Esc` leaves watch mode first. The command line (`:`),
-the palette, the [terminal panel](#terminal-panel) (`C-t`: an agent can run in the panel while
-its changes are followed above it) and setting a bookmark (`C-s`) work in both. A typed command
+the palette, the [terminals](#terminals) (`C-t`: an agent can run in one while
+its changes are followed in the window next to it) and setting a bookmark (`C-s`) work in both. A typed command
 is meant: `:goto` looks around, the watch commands keep watch mode, any other command (`:w`,
 `:open`, ...) leaves it first (as `Esc` does: the session goes on). The `space` and
 other menus still open; a command picked in them is held like its key.
@@ -3885,7 +4010,7 @@ rule in `vortex_view::history::records`):
   changed files, the commits and their changes, the file tree, the bookmarks...), but the command
   palette, whose commands record their own;
 - another buffer, by any means: `gn`/`gp`, `gm`, `:open`, `:buffer`, `:new`, a picker, `vx file`
-  from the terminal panel, `:tutor`, `:practice`...
+  from a terminal, `:tutor`, `:practice`...
 - another screen. The screens, the full-screen views the editor has:
   - the dashboard (`:dashboard`, `:vortex`, and the one at startup), drawn over an empty buffer;
   - the side by side diff, every kind of it: `Space =` on a file, `Enter` or `Ctrl-g` in the
@@ -3899,7 +4024,7 @@ rule in `vortex_view::history::records`):
 `f`/`t`, `}`/`{`, `%`, `gh`/`gl`/`gs`, `gt`/`gc`/`gb`, `g|`, the syntax tree's `]f`, `]t`, `]a`...
 and `Alt-o`/`Alt-i`, `gw` and its labels on the screen), scrolling, a mouse click in the same
 buffer, selections (`s`, `S`, `K`... even though they use a regex prompt like `/`), edits, the
-terminal panel (a drawer, not a screen), history's own steps, the debugger's stops (stepping
+terminals (windows, not screens), history's own steps, the debugger's stops (stepping
 through files would fill the history; spectator mode steps many times a second),
 [watch mode](#watch-mode)'s following and its `n`/`N` (the session has its own order and picker)
 and switching windows. A jump that lands on the line it left records nothing, and a place on the same buffer
@@ -3990,8 +4115,8 @@ screen" is this: screens are places.
 - **The diagnostics and changes (`]d`, `]g`) record**, like `n`: they go anywhere in the file. The
   syntax tree's objects (`]f`...) don't: they move to what is around the cursor.
 - **The debugger's stops don't record**; the debug panel, once focused, is a place.
-- **The terminal panel is not a screen**: a drawer toggled with one key; recording it would fill
-  the history with it.
+- **Terminals are not screens** of the history: windows toggled with one key; recording them would
+  fill the history with them.
 - **Bookmarks of a closed file are kept** by path and line (the prompt only said a buffer
   without a file loses them).
 - **A bookmark is a line**, stored as the start of the line: text typed at the very start of the
@@ -4019,7 +4144,7 @@ screen" is this: screens are places.
 
 The editor's default theme is the owner's own, `vortex`: near-black greys, reds for keywords,
 strings and errors, purples for types, numbers and the modes, and colors for every screen of this
-fork (the file tree, the terminal panel, the hex view, the dashboard and its vortex, `:practice`).
+fork (the file tree, the terminals, the hex view, the dashboard and its vortex, `:practice`).
 It is built into the binary, like the 16-color `base16_default`, so it works without a runtime
 directory. Upstream's default theme is built in beside it as `helix`:
 
@@ -4152,7 +4277,7 @@ use `:practice` for editing, then covers only what doesn't fit an exercise check
 a buffer: opening, saving and quitting, buffers, pickers, the file tree, history and bookmarks, going
 places (`gw`, `[`/`]`), the view, splits, the system clipboard, language servers, git (with this
 fork's diff view, commit log and blame), the shell commands other than `|`, `:earlier`, settings,
-the debugger, this fork's terminal panel and hex view, and a last section with the editing keys that have no exercise. Upstream's lessons
+the debugger, this fork's terminals and hex view, and a last section with the editing keys that have no exercise. Upstream's lessons
 on editing are exercises now (the case keys, `<A-C>`, `n` in select mode, rotating and removing
 selections were added for them).
 

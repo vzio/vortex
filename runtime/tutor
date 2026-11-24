@@ -607,33 +607,71 @@
 
 
 
-=================================================================
-=                     18 THE TERMINAL PANEL                     =
+=============================================================================================================================
+=                       18 THE TERMINALS                        =
 =================================================================
 
- A shell runs in a panel below your splits. It keeps running
- while the panel is hidden, and SH in the statusline says what
- it does: yellow while a command runs, then green or red for
- how it ended, until you look at the panel again.
+ A terminal is a window like any other: it has its place among
+ your splits, and the window commands of section 9 move to it
+ and from it. The first one, the scratch terminal, keeps running
+ while it is hidden, and SH in the statusline says what its
+ shell does: yellow while a command runs, then green or red for
+ how it ended, until you look at the terminal again.
 
-  C-t            show the panel and type in it; C-t again goes
-                 back to the editor, with the panel still shown
-  Esc            in normal mode, hide the panel
-  :sh CMD        run CMD in the panel's shell, as if typed
+  C-t            show the scratch terminal and type in it; C-t
+                 again hides it, from its normal mode or from
+                 any other window
+  :sh CMD        run CMD in the scratch terminal, as if typed
   :! CMD         run CMD and show its output in a popup
 
- In the panel, vx FILE opens the file in this editor instead of
- starting another Vortex, and git commit edits its message here:
- :wq when done, and you are back in the shell. exit closes the
- panel; C-t starts a new shell.
+ A terminal has three modes. In insert mode every key goes to
+ the shell, C-w and C-t too, except Esc. Esc goes to normal
+ mode, where nothing is typed. There Esc goes to the program,
+ so a full screen program still gets it; i or a type again. A
+ key that moves, searches, scrolls or yanks (j, w, /, C-u...)
+ starts view mode: the lines of the terminal as they are now,
+ scrollback too, which you walk like a document. Esc leaves
+ view mode, then back to normal mode.
 
- In insert mode:
+  v              start view mode
+  Enter          start and stop selecting, as v does in text
+  y              yank the selection
+  ]  [           the next, the previous prompt
+  o              select the output of the command under the
+                 cursor
 
-  C-t            the panel, as in normal mode
+ ] and [ take a count, and o picks the output of the command
+ before when the cursor is on the last prompt.
+
+  e              edit the command line in a buffer under the
+                 terminal, in normal mode; :wq sends it back to
+                 the shell (not run) and closes it, :q! leaves
+                 the line as it was
+
+ More terminals open in a split of the window you are in:
+
+  C-w T s        a new terminal in a horizontal split
+  C-w T v        a new terminal in a vertical split
+  space w T s    the same, from the space menu
+  space w T v
+  :term  :vterm  the same, as commands
+  C-w s  C-w v   in a terminal, they also open a terminal
+
+ C-w q or exit closes a terminal's window and kills its shell;
+ for the scratch terminal C-w q only hides it. The buffer
+ picker lists terminals, and gn and gp skip them.
+
+ The prompt keys, e and SH need the shell to send OSC 133
+ markers, which bash and zsh do under Vortex; without them you
+ still get windows, modes and view mode.
+
+ In a terminal, vx FILE opens the file in a window for text
+ instead of starting another Vortex, and git commit edits its
+ message here: :wq when done, and you are back in the shell.
 
 
 
-=================================================================
+=====
 =                        19 THE HEX VIEW                        =
 =================================================================
 
