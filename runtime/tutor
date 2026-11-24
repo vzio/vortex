@@ -420,9 +420,13 @@
                  through the changes in the order they happened
                  (n to the newest follows again; they stop at
                  both ends), c lists them, Esc leaves it to edit
-                 where you are. The session goes on recording:
-                 :watch again comes back where you were, and
-                 :watch-stop ends it for good
+                 where you are. The mouse does nothing while it
+                 follows. a accepts the change (stages it), x
+                 rejects it (back to before the watch), y yanks
+                 its file:lines. The session goes on recording,
+                 and a ● in the statusline says so: :watch again
+                 catches up on what it missed, and :watch-stop
+                 ends it for good
   space i        yank the diagnostic under the cursor; with
                  none, and blame on, the line's commit hash
 
