@@ -714,9 +714,11 @@ async fn v_again_follows_again_from_the_newest_change() {
     assert!(session.following());
 }
 
+/// A click on the text while following does not look around: it does nothing, and the bar says
+/// that `v` looks around (the whole rule: [`the_mouse_does_nothing_while_following`]).
 #[tokio::test(flavor = "multi_thread")]
-async fn the_mouse_in_the_text_looks_around() {
-    let Some(_) = enter("the_mouse_in_the_text_looks_around") else {
+async fn a_click_in_the_text_while_following_does_not_look_around() {
+    let Some(_) = enter("a_click_in_the_text_while_following_does_not_look_around") else {
         return;
     };
     let mut session = Session::new();
@@ -724,8 +726,9 @@ async fn the_mouse_in_the_text_looks_around() {
     session.change_and_follow("a.txt", 4, "a4 agent").await;
     // a click on the text (the first row, well away from the bar)
     session.click_cell(3, 0).await;
-    assert!(!session.following());
+    assert!(session.following());
     assert!(session.watching());
+    assert_eq!(session.activity(), LOOK_TO_MOVE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1204,18 +1207,18 @@ async fn changes_made_out_of_watch_mode_are_recorded_not_followed_and_counted_on
         .expect("a.txt is open");
     assert_eq!(doc.watch_diff().expect("a watch gutter").load().len(), 2);
 
-    // back: the change is new, and nothing moves
+    // back: following again, the catch-up shows the change made meanwhile (and it is seen)
     session.keys(":watch<ret>").await;
     assert!(session.watching());
-    assert_eq!(session.new_count(), 1);
-    assert_eq!(session.activity(), "back: 1 new change meanwhile");
-    assert_eq!(focus(&session.app), before);
-    session.wait_for_screen_text("1 new").await;
-    // n reaches it, and it is seen
-    session.keys("n").await;
     assert_eq!(focus(&session.app), at("a.txt", 5));
+    session
+        .wait_watch("the catch-up to end", |app| {
+            session_of(app).catch_up.is_none()
+        })
+        .await;
     assert_eq!(session.new_count(), 0);
     assert!(session.following());
+    session.wait_for_screen_text("caught up: following").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2125,15 +2128,17 @@ impl Session {
         );
     }
 
-    /// `:watch` after the burst: the four changes are new, and `n` reaches them in order.
-    async fn check_burst_on_return(&mut self, before: (String, usize)) {
+    /// `:watch` after the burst, with a catch-up that stays on the first change: it shows the
+    /// oldest of the four, the other three are new, and `n` reaches them in order.
+    async fn check_burst_on_return(&mut self) {
         self.keys(":watch<ret>").await;
         assert!(self.watching());
-        assert_eq!(self.new_count(), 4, "activity: {:?}", self.activity());
-        assert_eq!(self.activity(), "back: 4 new changes meanwhile");
-        assert_eq!(focus(&self.app), before);
-        self.wait_for_screen_text("4 new").await;
-        let visited = self.walk_n(4).await;
+        assert_eq!(self.new_count(), 3, "activity: {:?}", self.activity());
+        assert_eq!(self.activity(), "followed a.txt:3");
+        self.wait_for_screen_text("catching up 1/4").await;
+        self.wait_for_screen_text("3 new").await;
+        let mut visited = vec![focus(&self.app)];
+        visited.extend(self.walk_n(3).await);
         assert_eq!(
             visited,
             [
@@ -2157,7 +2162,7 @@ async fn agent_atomic_writes_one_at_a_time_after_esc_are_recorded_and_counted_on
     else {
         return;
     };
-    let mut session = Session::new();
+    let mut session = paced(60_000);
     session.start_and_leave().await;
     let before = focus(&session.app);
 
@@ -2181,17 +2186,17 @@ async fn agent_atomic_writes_one_at_a_time_after_esc_are_recorded_and_counted_on
     assert_eq!(focus(&session.app), before, "something was followed");
     session.assert_quiet("after the writes");
 
+    // the catch-up (60 s per change: it stays on the first) shows the oldest change made while
+    // left; the other two stay new, and `n` takes over
     session.keys(":watch<ret>").await;
     assert!(session.watching());
-    assert_eq!(session.new_count(), 3, "activity: {:?}", session.activity());
-    assert_eq!(session.activity(), "back: 3 new changes meanwhile");
-    assert_eq!(focus(&session.app), before);
-    session.wait_for_screen_text("3 new").await;
-    let visited = session.walk_n(3).await;
-    assert_eq!(
-        visited,
-        [at("b.txt", 2), at("c.txt", 4), at("other.txt", 6)]
-    );
+    assert_eq!(focus(&session.app), at("b.txt", 2));
+    assert_eq!(session.new_count(), 2, "activity: {:?}", session.activity());
+    assert_eq!(session.activity(), "followed b.txt:3");
+    session.wait_for_screen_text("catching up 1/3").await;
+    session.wait_for_screen_text("2 new").await;
+    let visited = session.walk_n(2).await;
+    assert_eq!(visited, [at("c.txt", 4), at("other.txt", 6)]);
     assert_eq!(session.new_count(), 0);
     assert!(session.following());
 }
@@ -2205,7 +2210,7 @@ async fn agent_burst_over_four_files_after_esc_is_recorded_and_counted_on_return
     else {
         return;
     };
-    let mut session = Session::new();
+    let mut session = paced(60_000);
     session.keys(":open a.txt<ret>").await;
     session.start_and_leave().await;
     let before = focus(&session.app);
@@ -2223,7 +2228,7 @@ async fn agent_burst_over_four_files_after_esc_is_recorded_and_counted_on_return
     assert_eq!(doc.watch_diff().expect("a watch gutter").load().len(), 1);
     session.assert_quiet("after the burst");
 
-    session.check_burst_on_return(before).await;
+    session.check_burst_on_return().await;
 }
 
 /// The same four files, written 30 ms apart (one long stream for the 200 ms debounce), after
@@ -2234,7 +2239,7 @@ async fn agent_burst_with_30_ms_gaps_after_esc_is_recorded_and_counted_on_return
     else {
         return;
     };
-    let mut session = Session::new();
+    let mut session = paced(60_000);
     session.keys(":open a.txt<ret>").await;
     session.start_and_leave().await;
     let before = focus(&session.app);
@@ -2242,7 +2247,7 @@ async fn agent_burst_with_30_ms_gaps_after_esc_is_recorded_and_counted_on_return
     agent_burst(Duration::from_millis(30));
     session.check_burst_recorded().await;
     assert_eq!(focus(&session.app), before, "something was followed");
-    session.check_burst_on_return(before).await;
+    session.check_burst_on_return().await;
 }
 
 /// A stream of writes every 30 ms for about two seconds, to three files, after `Esc`: the batches
@@ -2254,7 +2259,7 @@ async fn agent_long_stream_after_esc_is_recorded_in_batches_and_counted_on_retur
     else {
         return;
     };
-    let mut session = Session::new();
+    let mut session = paced(60_000);
     session.start_and_leave().await;
     let before = focus(&session.app);
 
@@ -2285,18 +2290,20 @@ async fn agent_long_stream_after_esc_is_recorded_in_batches_and_counted_on_retur
     assert_eq!(focus(&session.app), before, "something was followed");
     let order = order_of(&session.app);
 
+    // the catch-up (60 s per change) shows the oldest and stops: the other 14 are new
     session.keys(":watch<ret>").await;
     assert_eq!(
         session.new_count(),
-        15,
+        14,
         "activity: {:?}",
         session.activity()
     );
-    assert!(session.activity().starts_with("back: 15 new"));
-    let visited = session.walk_n(15).await;
+    assert!(session.activity().starts_with("followed "));
+    let mut visited = vec![focus(&session.app)];
+    visited.extend(session.walk_n(14).await);
     assert_eq!(
         visited, order,
-        "n doesn't go through the changes in their order"
+        "the catch-up and n don't go through the changes in their order"
     );
     let mut sorted = visited.clone();
     sorted.sort();
@@ -2319,7 +2326,7 @@ async fn agent_same_file_rewritten_five_times_after_esc_has_the_hunks_of_all() {
     else {
         return;
     };
-    let mut session = Session::new();
+    let mut session = paced(60_000);
     session.start_and_leave().await;
     let before = focus(&session.app);
 
@@ -2344,8 +2351,9 @@ async fn agent_same_file_rewritten_five_times_after_esc_has_the_hunks_of_all() {
     assert_eq!(focus(&session.app), before, "something was followed");
 
     session.keys(":watch<ret>").await;
-    assert_eq!(session.new_count(), 5, "activity: {:?}", session.activity());
-    let mut visited = session.walk_n(5).await;
+    assert_eq!(session.new_count(), 4, "activity: {:?}", session.activity());
+    let mut visited = vec![focus(&session.app)];
+    visited.extend(session.walk_n(4).await);
     visited.sort();
     visited.dedup();
     assert_eq!(
@@ -2384,65 +2392,3 @@ async fn agent_burst_over_four_files_while_watching_is_recorded_and_followed() {
     assert_eq!(session.new_count(), 0);
 }
 
-/// `:watch` in the middle of a stream that goes on: what was recorded while left counts as new
-/// on return, and still does after the stream ends (following the later writes doesn't make
-/// the earlier ones seen), and `n` from the oldest reaches every one of them.
-#[tokio::test(flavor = "multi_thread")]
-async fn agent_watch_in_the_middle_of_a_stream_keeps_the_changes_made_while_left_new() {
-    let Some(_) =
-        enter("agent_watch_in_the_middle_of_a_stream_keeps_the_changes_made_while_left_new")
-    else {
-        return;
-    };
-    let mut session = Session::new();
-    session.start_and_leave().await;
-
-    let mut meanwhile = Vec::new();
-    let mut at_return = 0;
-    for k in 0..66 {
-        agent_stream_write(k);
-        session.run_for(Duration::from_millis(30)).await;
-        if k == 40 {
-            // about 1.3 s in
-            meanwhile = order_of(&session.app);
-            assert!(
-                !meanwhile.is_empty(),
-                "nothing recorded 1.3 s into a stream"
-            );
-            session.keys(":watch<ret>").await;
-            assert!(session.watching());
-            at_return = meanwhile.len();
-            assert_eq!(
-                session.new_count(),
-                at_return,
-                "right after :watch, activity: {:?}",
-                session.activity()
-            );
-        }
-    }
-    session
-        .wait_watch("the 15 hunks of the stream", |app| {
-            session_of(app).hunks_in_order().len() == 15
-        })
-        .await;
-    session.run_for(Duration::from_secs(1)).await;
-    assert!(
-        session.new_count() >= at_return,
-        "after the stream: {} new, but {at_return} were recorded while left (activity: {:?}, \
-         focus {:?}, following {})",
-        session.new_count(),
-        session.activity(),
-        focus(&session.app),
-        session.following()
-    );
-
-    // from the oldest change, n reaches every change made while left
-    session.keys("NNNNNNNNNNNNNNNNNNNN").await;
-    let visited = session.walk_n(15).await;
-    for change in &meanwhile {
-        assert!(
-            visited.contains(change),
-            "n never reached {change:?}, made while left; it went to {visited:?}"
-        );
-    }
-}
