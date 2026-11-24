@@ -1977,3 +1977,472 @@ async fn the_bookmark_picker_is_held_until_esc_leaves_watch_mode() {
     let session = held_then_left("<space>j").await;
     changes_stay_after_leaving(session).await;
 }
+
+// 20. A coding agent after Esc
+//
+// An agent doesn't `std::fs::write` a file in place: it writes a temporary file next to it and
+// renames it over the target, often several files at once, often for seconds. These tests
+// reproduce that after `Esc` (watch mode left, the session live) and check what the session
+// recorded and what `:watch` shows on the way back.
+
+/// Makes the names of the temporary files different.
+static AGENT_TMP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// An atomic write: the whole new text goes to a temporary file in the same directory, which is
+/// renamed over the target. Creates the parent directories.
+fn agent_write(name: &str, text: &str) {
+    let path = cwd().join(name);
+    let dir = path.parent().unwrap();
+    std::fs::create_dir_all(dir).unwrap();
+    let n = AGENT_TMP.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let tmp = dir.join(format!(
+        ".{}.tmp.{n}",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(&tmp, text).unwrap();
+    std::fs::rename(&tmp, &path).unwrap();
+}
+
+/// Like [`edit`] (line `number` from 1 becomes `text`), written with [`agent_write`].
+fn agent_edit(name: &str, number: usize, text: &str) {
+    let old = std::fs::read_to_string(cwd().join(name)).unwrap();
+    let new: String = old
+        .split_inclusive('\n')
+        .enumerate()
+        .map(|(i, line)| {
+            if i + 1 == number {
+                format!("{text}\n")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    agent_write(name, &new);
+}
+
+/// Four files written one after the other with `gap` between them (none for a burst): the open
+/// `a.txt`, `other.txt` which was never opened, `b.txt`, and the new file `src/new/notes.txt` in a
+/// new directory. In this order.
+fn agent_burst(gap: Duration) {
+    let pause = || {
+        if !gap.is_zero() {
+            std::thread::sleep(gap);
+        }
+    };
+    agent_edit("a.txt", 3, "a3 agent");
+    pause();
+    agent_edit("other.txt", 4, "o4 agent");
+    pause();
+    agent_edit("b.txt", 5, "b5 agent");
+    pause();
+    agent_write("src/new/notes.txt", &lines("n", 3));
+}
+
+/// The write number `k` of a stream: it replaces one of the lines 1, 3, 5, 7, 9 of `b.txt`,
+/// `c.txt` or `other.txt` in turn, each time with a new text. After 15 writes every file has five
+/// hunks, which later writes only change.
+fn agent_stream_write(k: usize) {
+    let name = ["b.txt", "c.txt", "other.txt"][k % 3];
+    agent_edit(name, 2 * ((k / 3) % 5) + 1, &format!("{name} stream {k}"));
+}
+
+/// The hunks of the stream after at least 15 writes: lines (from 0) 0, 2, 4, 6 and 8 of its files.
+fn stream_hunks() -> Vec<(String, usize)> {
+    let mut all = Vec::new();
+    for name in ["b.txt", "c.txt", "other.txt"] {
+        for line in [0, 2, 4, 6, 8] {
+            all.push((name.to_string(), line));
+        }
+    }
+    all
+}
+
+/// The changes of the session in the order `n` goes through them: file name and first line.
+fn order_of(app: &Application) -> Vec<(String, usize)> {
+    session_of(app)
+        .hunks_in_order()
+        .iter()
+        .map(|target| {
+            (
+                target
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                target.lines.start as usize,
+            )
+        })
+        .collect()
+}
+
+impl Session {
+    /// Starts watch mode and leaves it again: the session is live and empty.
+    async fn start_and_leave(&mut self) {
+        self.start_watch().await;
+        self.keys("<esc>").await;
+        assert!(!self.watching());
+        assert!(self.app.editor.watch.live().is_some());
+        assert!(session_of(&self.app).is_empty());
+    }
+
+    /// Presses `n` `count` times and returns where each press went.
+    async fn walk_n(&mut self, count: usize) -> Vec<(String, usize)> {
+        let mut visited = Vec::new();
+        for _ in 0..count {
+            self.keys("n").await;
+            visited.push(focus(&self.app));
+        }
+        visited
+    }
+
+    /// Waits for the burst of [`agent_burst`] to be recorded, a moment more for nothing else to
+    /// come, and checks its four files.
+    async fn check_burst_recorded(&mut self) {
+        self.wait_watch("the four files of the burst", |app| {
+            session_of(app).hunks_in_order().len() == 4
+        })
+        .await;
+        self.run_for(Duration::from_millis(600)).await;
+        assert_eq!(hunks(&self.app, "a.txt"), [(2, 3)]);
+        assert_eq!(hunks(&self.app, "other.txt"), [(3, 4)]);
+        assert_eq!(hunks(&self.app, "b.txt"), [(4, 5)]);
+        assert_eq!(hunks(&self.app, "src/new/notes.txt"), [(0, 3)]);
+        assert_eq!(
+            file(&self.app, "src/new/notes.txt").unwrap().kind,
+            FileKind::Created
+        );
+        assert_eq!(session_of(&self.app).hunks_in_order().len(), 4);
+        assert_eq!(
+            order_of(&self.app),
+            [
+                ("a.txt".to_string(), 2),
+                ("other.txt".to_string(), 3),
+                ("b.txt".to_string(), 4),
+                ("notes.txt".to_string(), 0),
+            ],
+            "the hunks are not in the order the writes happened"
+        );
+    }
+
+    /// `:watch` after the burst: the four changes are new, and `n` reaches them in order.
+    async fn check_burst_on_return(&mut self, before: (String, usize)) {
+        self.keys(":watch<ret>").await;
+        assert!(self.watching());
+        assert_eq!(self.new_count(), 4, "activity: {:?}", self.activity());
+        assert_eq!(self.activity(), "back: 4 new changes meanwhile");
+        assert_eq!(focus(&self.app), before);
+        self.wait_for_screen_text("4 new").await;
+        let visited = self.walk_n(4).await;
+        assert_eq!(
+            visited,
+            [
+                at("a.txt", 2),
+                at("other.txt", 3),
+                at("b.txt", 4),
+                at("notes.txt", 0)
+            ]
+        );
+        assert_eq!(self.new_count(), 0);
+        assert!(self.following());
+    }
+}
+
+/// Atomic writes (temporary file, then rename) to files the editor never opened, 300 ms apart,
+/// after `Esc`: each one is recorded with its hunk, and on return `n` reaches them in order.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_atomic_writes_one_at_a_time_after_esc_are_recorded_and_counted_on_return() {
+    let Some(_) =
+        enter("agent_atomic_writes_one_at_a_time_after_esc_are_recorded_and_counted_on_return")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.start_and_leave().await;
+    let before = focus(&session.app);
+
+    for (i, (name, number)) in [("b.txt", 3), ("c.txt", 5), ("other.txt", 7)]
+        .into_iter()
+        .enumerate()
+    {
+        agent_edit(name, number, &format!("{name} agent"));
+        session
+            .wait_watch(&format!("{name} in the session"), |app| {
+                file(app, name).is_some()
+            })
+            .await;
+        assert_eq!(
+            hunks(&session.app, name),
+            [(number as u32 - 1, number as u32)]
+        );
+        assert_eq!(session_of(&session.app).hunks_in_order().len(), i + 1);
+        session.run_for(Duration::from_millis(300)).await;
+    }
+    assert_eq!(focus(&session.app), before, "something was followed");
+    session.assert_quiet("after the writes");
+
+    session.keys(":watch<ret>").await;
+    assert!(session.watching());
+    assert_eq!(session.new_count(), 3, "activity: {:?}", session.activity());
+    assert_eq!(session.activity(), "back: 3 new changes meanwhile");
+    assert_eq!(focus(&session.app), before);
+    session.wait_for_screen_text("3 new").await;
+    let visited = session.walk_n(3).await;
+    assert_eq!(
+        visited,
+        [at("b.txt", 2), at("c.txt", 4), at("other.txt", 6)]
+    );
+    assert_eq!(session.new_count(), 0);
+    assert!(session.following());
+}
+
+/// One burst without any sleep over four files (one open, one never opened, one new in a new
+/// directory) after `Esc`: all four are recorded, in the order of the writes, and counted on
+/// return.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_burst_over_four_files_after_esc_is_recorded_and_counted_on_return() {
+    let Some(_) = enter("agent_burst_over_four_files_after_esc_is_recorded_and_counted_on_return")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.keys(":open a.txt<ret>").await;
+    session.start_and_leave().await;
+    let before = focus(&session.app);
+
+    agent_burst(Duration::ZERO);
+    session.check_burst_recorded().await;
+    // the open file was reloaded
+    assert_eq!(focus(&session.app), before, "something was followed");
+    let doc = session
+        .app
+        .editor
+        .document_by_path(cwd().join("a.txt"))
+        .expect("a.txt is open");
+    assert_eq!(doc.text().line(2).to_string(), "a3 agent\n");
+    assert_eq!(doc.watch_diff().expect("a watch gutter").load().len(), 1);
+    session.assert_quiet("after the burst");
+
+    session.check_burst_on_return(before).await;
+}
+
+/// The same four files, written 30 ms apart (one long stream for the 200 ms debounce), after
+/// `Esc`: the same result as the burst.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_burst_with_30_ms_gaps_after_esc_is_recorded_and_counted_on_return() {
+    let Some(_) = enter("agent_burst_with_30_ms_gaps_after_esc_is_recorded_and_counted_on_return")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.keys(":open a.txt<ret>").await;
+    session.start_and_leave().await;
+    let before = focus(&session.app);
+
+    agent_burst(Duration::from_millis(30));
+    session.check_burst_recorded().await;
+    assert_eq!(focus(&session.app), before, "something was followed");
+    session.check_burst_on_return(before).await;
+}
+
+/// A stream of writes every 30 ms for about two seconds, to three files, after `Esc`: the batches
+/// are cut by the one second maximum wait, so the session has changes before the stream ends;
+/// at the end it has every hunk, and on return all are new and `n` walks through them.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_long_stream_after_esc_is_recorded_in_batches_and_counted_on_return() {
+    let Some(_) = enter("agent_long_stream_after_esc_is_recorded_in_batches_and_counted_on_return")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.start_and_leave().await;
+    let before = focus(&session.app);
+
+    for k in 0..66 {
+        agent_stream_write(k);
+        session.run_for(Duration::from_millis(30)).await;
+        if k == 55 {
+            // about 1.7 s in: the maximum wait has passed at least once
+            assert!(
+                !session_of(&session.app).hunks_in_order().is_empty(),
+                "nothing recorded 1.7 s into a stream"
+            );
+        }
+    }
+    session
+        .wait_watch("the 15 hunks of the stream", |app| {
+            session_of(app).hunks_in_order().len() == 15
+        })
+        .await;
+    session.run_for(Duration::from_millis(600)).await;
+    for name in ["b.txt", "c.txt", "other.txt"] {
+        assert_eq!(
+            hunks(&session.app, name),
+            [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)],
+            "{name}"
+        );
+    }
+    assert_eq!(focus(&session.app), before, "something was followed");
+    let order = order_of(&session.app);
+
+    session.keys(":watch<ret>").await;
+    assert_eq!(
+        session.new_count(),
+        15,
+        "activity: {:?}",
+        session.activity()
+    );
+    assert!(session.activity().starts_with("back: 15 new"));
+    let visited = session.walk_n(15).await;
+    assert_eq!(
+        visited, order,
+        "n doesn't go through the changes in their order"
+    );
+    let mut sorted = visited.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted, {
+        let mut all = stream_hunks();
+        all.sort();
+        all
+    });
+    assert_eq!(session.new_count(), 0);
+    assert!(session.following());
+}
+
+/// The same file rewritten five times in a row (atomic writes, no sleep), each time with one more
+/// inserted line far from the others, after `Esc`: the end state has the five hunks, and on
+/// return all five are new and reachable with `n`.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_same_file_rewritten_five_times_after_esc_has_the_hunks_of_all() {
+    let Some(_) = enter("agent_same_file_rewritten_five_times_after_esc_has_the_hunks_of_all")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.start_and_leave().await;
+    let before = focus(&session.app);
+
+    for k in 1..=5 {
+        let mut text = String::new();
+        for i in 1..=10 {
+            text.push_str(&format!("b{i}\n"));
+            if i % 2 == 1 && i / 2 < k {
+                text.push_str(&format!("inserted {i}\n"));
+            }
+        }
+        agent_write("b.txt", &text);
+    }
+    session
+        .wait_watch("b.txt in the session", |app| file(app, "b.txt").is_some())
+        .await;
+    session.run_for(Duration::from_secs(1)).await;
+    assert_eq!(
+        hunks(&session.app, "b.txt"),
+        [(1, 2), (4, 5), (7, 8), (10, 11), (13, 14)]
+    );
+    assert_eq!(focus(&session.app), before, "something was followed");
+
+    session.keys(":watch<ret>").await;
+    assert_eq!(session.new_count(), 5, "activity: {:?}", session.activity());
+    let mut visited = session.walk_n(5).await;
+    visited.sort();
+    visited.dedup();
+    assert_eq!(
+        visited,
+        [
+            at("b.txt", 1),
+            at("b.txt", 4),
+            at("b.txt", 7),
+            at("b.txt", 10),
+            at("b.txt", 13)
+        ]
+    );
+    assert_eq!(session.new_count(), 0);
+}
+
+/// Control: the burst of four files while watch mode is on and following: all four are recorded,
+/// following ends on the newest file, and nothing is new.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_burst_over_four_files_while_watching_is_recorded_and_followed() {
+    let Some(_) = enter("agent_burst_over_four_files_while_watching_is_recorded_and_followed")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.keys(":open a.txt<ret>").await;
+    session.start_watch().await;
+
+    agent_burst(Duration::ZERO);
+    session.check_burst_recorded().await;
+    assert!(session.following());
+    assert_eq!(session.new_count(), 0);
+    assert_eq!(focus(&session.app), at("notes.txt", 0));
+
+    session.keys("<esc>").await;
+    session.keys(":watch<ret>").await;
+    assert_eq!(session.new_count(), 0);
+}
+
+/// `:watch` in the middle of a stream that goes on: what was recorded while left counts as new
+/// on return, and still does after the stream ends (following the later writes doesn't make
+/// the earlier ones seen), and `n` from the oldest reaches every one of them.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_watch_in_the_middle_of_a_stream_keeps_the_changes_made_while_left_new() {
+    let Some(_) =
+        enter("agent_watch_in_the_middle_of_a_stream_keeps_the_changes_made_while_left_new")
+    else {
+        return;
+    };
+    let mut session = Session::new();
+    session.start_and_leave().await;
+
+    let mut meanwhile = Vec::new();
+    let mut at_return = 0;
+    for k in 0..66 {
+        agent_stream_write(k);
+        session.run_for(Duration::from_millis(30)).await;
+        if k == 40 {
+            // about 1.3 s in
+            meanwhile = order_of(&session.app);
+            assert!(
+                !meanwhile.is_empty(),
+                "nothing recorded 1.3 s into a stream"
+            );
+            session.keys(":watch<ret>").await;
+            assert!(session.watching());
+            at_return = meanwhile.len();
+            assert_eq!(
+                session.new_count(),
+                at_return,
+                "right after :watch, activity: {:?}",
+                session.activity()
+            );
+        }
+    }
+    session
+        .wait_watch("the 15 hunks of the stream", |app| {
+            session_of(app).hunks_in_order().len() == 15
+        })
+        .await;
+    session.run_for(Duration::from_secs(1)).await;
+    assert!(
+        session.new_count() >= at_return,
+        "after the stream: {} new, but {at_return} were recorded while left (activity: {:?}, \
+         focus {:?}, following {})",
+        session.new_count(),
+        session.activity(),
+        focus(&session.app),
+        session.following()
+    );
+
+    // from the oldest change, n reaches every change made while left
+    session.keys("NNNNNNNNNNNNNNNNNNNN").await;
+    let visited = session.walk_n(15).await;
+    for change in &meanwhile {
+        assert!(
+            visited.contains(change),
+            "n never reached {change:?}, made while left; it went to {visited:?}"
+        );
+    }
+}
