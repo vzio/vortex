@@ -205,7 +205,8 @@ impl Application {
                         // NOTE: this isn't necessarily true anymore. If
                         // `--vsplit` or `--hsplit` are used, the file which is
                         // opened last is focused on.
-                        let view_id = editor.tree.focus;
+                        // (a binary file is a screen over the window, its document under it)
+                        let view_id = editor.tree.text_focus();
                         let doc = doc_mut!(editor, &doc_id);
                         let selection = pos
                             .into_iter()
@@ -692,15 +693,7 @@ impl Application {
             .remove(&doc_save_event.doc_id)
             .unwrap_or_else(|| {
                 let name = get_relative_path(&doc_save_event.path);
-                match doc_save_event.hex_written {
-                    // the hex view writes the bytes it changed, in place
-                    Some(bytes) => format!(
-                        "'{}' written, {bytes} byte{} changed in place",
-                        name.to_string_lossy(),
-                        if bytes == 1 { "" } else { "s" },
-                    ),
-                    None => format!("'{}' written, {lines}L {size}", name.to_string_lossy()),
-                }
+                format!("'{}' written, {lines}L {size}", name.to_string_lossy())
             });
         self.editor.set_status(message);
     }

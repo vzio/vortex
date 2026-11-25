@@ -75,7 +75,8 @@ pub fn render(
             );
         }
         ScreenKind::DebugPanel => crate::debug::render(editor, area, surface),
-        ScreenKind::Hex | ScreenKind::Diff => {}
+        ScreenKind::Hex => crate::ui::hex_view::render_screen(editor, view, surface, focused),
+        ScreenKind::Diff => {}
     }
     if !own_status_row(kind) {
         render_statusline(editor, view, surface, focused);
@@ -133,7 +134,10 @@ fn kept_by_history(screen: &mut Screen) -> bool {
             }
             true
         }
-        ScreenKind::Hex => true,
+        // bytes overwritten and not written stay with the open screen
+        ScreenKind::Hex => !screen
+            .state::<vortex_view::hex::HexView>()
+            .is_some_and(|hex| hex.is_modified()),
         ScreenKind::Terminal | ScreenKind::DebugPanel => false,
     }
 }
@@ -174,7 +178,13 @@ pub fn reopen(editor: &mut Editor, screen: Screen) -> bool {
         }
         ScreenKind::Hex | ScreenKind::Terminal | ScreenKind::DebugPanel => {}
     }
-    editor.open_screen(id, Placement::Cover);
+    let view = editor.open_screen(id, Placement::Cover);
+    if kind == ScreenKind::Hex {
+        // the cursor goes to the new window
+        if let Some(hex) = editor.screens.state_mut::<vortex_view::hex::HexView>(id) {
+            hex.buffer.adopt_cursor(view);
+        }
+    }
     true
 }
 
@@ -236,7 +246,11 @@ pub fn render_statusline(editor: &Editor, view: &ScreenView, surface: &mut Surfa
         surface.set_stringn(x, area.y, &text, area.width as usize, style);
         x += text.len() as u16;
     }
-    let name = format!(" {}", screen.name);
+    // bytes overwritten and not written
+    let modified = screen
+        .state::<vortex_view::hex::HexView>()
+        .is_some_and(|hex| hex.is_modified());
+    let name = format!(" {}{}", screen.name, if modified { " [+]" } else { "" });
     let right = status_of(editor, view.screen);
     let room = area.right().saturating_sub(x) as usize;
     surface.set_stringn(x, area.y, &name, room, base);
@@ -250,6 +264,21 @@ pub fn render_statusline(editor: &Editor, view: &ScreenView, surface: &mut Surfa
 
 /// The mode a screen shows in its statusline, and the theme's scope for it.
 fn mode_of(editor: &Editor, screen: ScreenId) -> (&'static str, &'static str) {
+    // the hex view: its layout and whether typing overwrites
+    if let Some(hex) = editor.screens.state::<vortex_view::hex::HexView>(screen) {
+        let cursor = editor
+            .view_of(screen)
+            .map(|view| hex.buffer.cursor(view))
+            .unwrap_or_default();
+        let scope = if cursor.overwrite {
+            "ui.statusline.insert"
+        } else if cursor.anchor.is_some() {
+            "ui.statusline.select"
+        } else {
+            "ui.statusline.normal"
+        };
+        return (crate::ui::hex_view::mode_label(&cursor), scope);
+    }
     match editor.mode() {
         Mode::Insert if editor.screens.kind(screen) == Some(ScreenKind::Terminal) => {
             ("INS", "ui.statusline.insert")
@@ -260,8 +289,11 @@ fn mode_of(editor: &Editor, screen: ScreenId) -> (&'static str, &'static str) {
 }
 
 /// What a screen says of itself on the right of its statusline.
-fn status_of(_editor: &Editor, _screen: ScreenId) -> String {
-    String::new()
+fn status_of(editor: &Editor, screen: ScreenId) -> String {
+    match editor.screens.kind(screen) {
+        Some(ScreenKind::Hex) => crate::ui::hex_view::status(editor, screen),
+        _ => String::new(),
+    }
 }
 
 /// The cursor of the focused screen, if the focus is on one (or on a terminal's lines).
@@ -356,7 +388,15 @@ fn handle_key(cx: &mut compositor::Context, key: KeyEvent, idle: bool) -> Option
                 }
             }
         }
-        ScreenKind::Hex => None,
+        ScreenKind::Hex => {
+            // its own keys; not while keys are pending (a register for `y` is not pending)
+            if !idle && cx.editor.selected_register.is_none() {
+                return None;
+            }
+            let (taken, callback) =
+                with_commands(cx, |ccx| commands::hex::handle_screen_key(ccx, key));
+            taken.then_some(EventResult::Consumed(callback))
+        }
     }
 }
 
@@ -410,6 +450,13 @@ fn handle_mouse(editor: &mut Editor, mouse: &MouseEvent) -> bool {
     if crate::terminal::handle_mouse(editor, mouse) {
         return true;
     }
+    // dragging a selection goes on in the hex window where it started, also outside it
+    if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left))
+        && focused_kind(editor) == Some(ScreenKind::Hex)
+    {
+        commands::hex::handle_mouse(editor, mouse);
+        return true;
+    }
     let over = |area: Rect| {
         mouse.column >= area.x
             && mouse.column < area.right()
@@ -431,10 +478,10 @@ fn handle_mouse(editor: &mut Editor, mouse: &MouseEvent) -> bool {
                 page.handle_mouse(mouse, editor);
             });
         }
-        Some(
-            ScreenKind::Hex | ScreenKind::Diff | ScreenKind::DebugPanel | ScreenKind::Terminal,
-        )
-        | None => {}
+        Some(ScreenKind::Hex) => {
+            commands::hex::handle_mouse(editor, mouse);
+        }
+        Some(ScreenKind::Diff | ScreenKind::DebugPanel | ScreenKind::Terminal) | None => {}
     }
     true
 }

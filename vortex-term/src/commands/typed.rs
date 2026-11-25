@@ -73,7 +73,7 @@ fn exit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
         return Ok(());
     }
 
-    if doc!(cx.editor).is_modified() {
+    if focused_is_modified(cx.editor) {
         write_impl(
             cx,
             args.first(),
@@ -93,7 +93,7 @@ fn force_exit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> a
         return Ok(());
     }
 
-    if doc!(cx.editor).is_modified() {
+    if focused_is_modified(cx.editor) {
         write_impl(
             cx,
             args.first(),
@@ -112,6 +112,20 @@ fn quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow
     log::debug!("quitting...");
 
     if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    // the hex view (this fork) is a window of its own: bytes overwritten and not written stay
+    if super::hex::focused(cx.editor) {
+        if let Some(name) = super::hex::unwritten(cx.editor) {
+            bail!("1 unsaved buffer remaining: {:?}", [name]);
+        }
+        // last window and we have unsaved changes
+        if cx.editor.tree.windows().count() == 1 {
+            buffers_remaining_impl(cx.editor)?
+        }
+        cx.block_try_flush_writes()?;
+        cx.editor.close(cx.editor.tree.focus);
         return Ok(());
     }
 
@@ -137,8 +151,23 @@ fn quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow
     Ok(())
 }
 
+/// Whether what the focused window shows has unsaved changes: the text buffer, or the bytes of
+/// the hex view.
+fn focused_is_modified(editor: &Editor) -> bool {
+    if super::hex::focused(editor) {
+        return super::hex::unwritten(editor).is_some();
+    }
+    doc!(editor).is_modified()
+}
+
 fn force_quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    if super::hex::focused(cx.editor) {
+        cx.block_try_flush_writes()?;
+        cx.editor.close(cx.editor.tree.focus);
         return Ok(());
     }
 
@@ -417,6 +446,13 @@ fn write_impl(
     path: Option<&str>,
     options: WriteOptions,
 ) -> anyhow::Result<()> {
+    // the hex view (this fork) writes the bytes it changed, in place
+    if super::hex::focused(cx.editor) {
+        if path.is_some() {
+            bail!("the hex view writes its own file only, in place");
+        }
+        return super::hex::write(cx.editor, options.force);
+    }
     // a terminal's command line (this fork) isn't a file: `:w` sends it back to the shell's line
     if cx
         .editor
@@ -428,13 +464,6 @@ fn write_impl(
             bail!("a command line isn't a file: it can't be written to one (:w sends it to the shell)");
         }
         return crate::terminal::edit::send(cx.editor);
-    }
-    // memory (this fork) isn't a file: `:w` sends its overwritten bytes to the program
-    if doc!(cx.editor).memory().is_some() {
-        if path.is_some() {
-            bail!("memory isn't a file: it can't be written to one (:w writes it to the program)");
-        }
-        return crate::debug::memory::write(cx.editor);
     }
     // a buffer that is not modified is brought up to date instead of overwritten
     if !options.force && path.is_none() {
@@ -885,17 +914,27 @@ pub(super) fn buffers_remaining_impl(editor: &mut Editor) -> anyhow::Result<()> 
         .map(|doc| doc.id())
         .collect();
 
-    if let Some(first) = modified_ids.first() {
-        let current = doc!(editor);
-        // If the current document is unmodified, and there are modified
-        // documents, switch focus to the first modified doc.
-        if !modified_ids.contains(&current.id()) {
-            editor.switch(*first, Action::Replace);
+    // the hex views (this fork) with bytes overwritten and not written
+    let hex = editor.unwritten_hex_screens();
+
+    if !modified_ids.is_empty() || !hex.is_empty() {
+        if let Some(first) = modified_ids.first() {
+            let current = doc!(editor);
+            // If the current document is unmodified, and there are modified
+            // documents, switch focus to the first modified doc (not from a screen's window,
+            // which a switch would close).
+            if !modified_ids.contains(&current.id()) && !editor.is_screen_view(editor.tree.focus)
+            {
+                editor.switch(*first, Action::Replace);
+            }
+        } else if let Some((screen, _)) = hex.first() {
+            editor.show_screen(*screen);
         }
 
         let modified_names: Vec<_> = modified_ids
             .iter()
-            .map(|doc_id| doc!(editor, doc_id).display_name())
+            .map(|doc_id| doc!(editor, doc_id).display_name().into_owned())
+            .chain(hex.into_iter().map(|(_, name)| name))
             .collect();
 
         bail!(
@@ -924,6 +963,13 @@ pub fn write_all_impl(
     // buffers that are not modified are brought up to date instead of overwritten
     if !options.force {
         crate::handlers::disk::check_all(cx.editor);
+    }
+    // the hex views (this fork) write their bytes in place
+    for (screen, name) in cx.editor.unwritten_hex_screens() {
+        if let Err(err) = super::hex::write_screen(cx.editor, screen, options.force) {
+            cx.editor.set_error(format!("{name}: {err}"));
+            errors.push("cannot write a hex view");
+        }
     }
     let config = cx.editor.config();
     let saves: Vec<_> = cx
@@ -1690,6 +1736,10 @@ fn reload(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyh
         return Ok(());
     }
 
+    // the hex view (this fork): the bytes as they are on disk, the overwritten ones dropped
+    if super::hex::focused(cx.editor) {
+        return super::hex::reload(cx.editor);
+    }
     let scrolloff = cx.editor.config().scrolloff;
     let trust_full = doc_trust_full(cx.editor);
     let (view, doc) = current!(cx.editor);
@@ -1793,8 +1843,7 @@ fn update(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyho
         return Ok(());
     }
 
-    let (_view, doc) = current!(cx.editor);
-    if doc.is_modified() {
+    if focused_is_modified(cx.editor) {
         write_impl(
             cx,
             None,
@@ -2399,7 +2448,7 @@ pub(super) fn goto_line_number(
     event: PromptEvent,
 ) -> anyhow::Result<()> {
     // in the hex view (this fork), an offset: `:goto 0x1a4`, `:goto 420`
-    if doc!(cx.editor).is_hex() {
+    if super::hex::focused(cx.editor) {
         if event == PromptEvent::Validate {
             super::hex::goto(cx.editor, &args[0])?;
         }
@@ -4794,7 +4843,7 @@ fn execute_command_line(
 
     // If command is numeric, interpret as line number and go there (an offset in the hex view,
     // where `:0x1a4` goes to one in hex).
-    let hex_offset = command.starts_with("0x") && doc!(cx.editor).is_hex();
+    let hex_offset = command.starts_with("0x") && super::hex::focused(cx.editor);
     if (command.parse::<usize>().is_ok() || hex_offset) && rest.trim().is_empty() {
         let cmd = TYPABLE_COMMAND_MAP.get("goto").unwrap();
         return execute_command(cx, cmd, command, event);

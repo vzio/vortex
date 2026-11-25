@@ -4,21 +4,22 @@
 //!
 //! Everything is generic DAP: whether memory is offered depends only on the adapter's
 //! capabilities (`supportsReadMemoryRequest`, `supportsWriteMemoryRequest`) and on each value's
-//! `memoryReference`. The bytes themselves live in the document's
-//! [`MemorySource`](vortex_view::hex::MemorySource): drawing notes the pages it lacks, and
-//! [`load_wanted`], called after each frame, reads them.
+//! `memoryReference`. A memory view is a hex screen without a file; its bytes live in the
+//! [`MemorySource`](vortex_view::hex::MemorySource) of its state: drawing notes the pages it
+//! lacks, and [`load_wanted`], called after each frame, reads them.
 
 use std::time::{Duration, Instant};
 
 use vortex_dap::{parse_address, registry::DebugAdapterId, Requester};
 use vortex_view::{
     debug::{history::MemoryWindow, spectator::Mode, Target},
-    editor::Action,
     hex::{
         memory::{page_bytes, span_bytes, Recorded, PAGE},
-        MemorySource, Rows,
+        HexView, MemorySource, Rows,
     },
-    Document, DocumentId, Editor,
+    screen::{Placement, ScreenId},
+    tree::Window,
+    Editor,
 };
 
 use super::panel;
@@ -196,9 +197,9 @@ pub fn command(editor: &mut Editor, input: Option<&str>) -> anyhow::Result<()> {
 /// of the session already open, with an offset (DAP's references point into one address
 /// space), else the address itself, which is what most adapters' references are.
 fn open_address(editor: &mut Editor, session: DebugAdapterId, address: u64) {
-    let known = memory_docs(editor)
+    let known = memory_screens(editor)
         .into_iter()
-        .filter_map(|doc| editor.documents.get(&doc)?.memory())
+        .filter_map(|screen| memory_of(editor, screen))
         .find(|memory| memory.session == session && !memory.ended)
         .map(|memory| (memory.reference.clone(), memory.base));
     let label = format!("0x{address:x}");
@@ -251,13 +252,41 @@ fn resolve(
     });
 }
 
-/// The documents showing memory.
-fn memory_docs(editor: &Editor) -> Vec<DocumentId> {
+/// The screens showing memory.
+fn memory_screens(editor: &Editor) -> Vec<ScreenId> {
     editor
-        .documents()
-        .filter(|doc| doc.memory().is_some())
-        .map(Document::id)
+        .hex_screens()
+        .filter(|(_, view)| view.buffer.is_memory())
+        .map(|(id, _)| id)
         .collect()
+}
+
+/// The memory a screen shows.
+fn memory_of(editor: &Editor, screen: ScreenId) -> Option<&MemorySource> {
+    editor.screens.state::<HexView>(screen)?.buffer.memory()
+}
+
+fn memory_mut(editor: &mut Editor, screen: ScreenId) -> Option<&mut MemorySource> {
+    editor
+        .screens
+        .state_mut::<HexView>(screen)?
+        .buffer
+        .memory_mut()
+}
+
+/// The focused window's screen, if it shows memory.
+fn focused_memory(editor: &Editor) -> Option<(ScreenId, &HexView)> {
+    let screen = editor.tree.focused_screen()?;
+    let view = editor.screens.state::<HexView>(screen)?;
+    view.buffer.is_memory().then_some((screen, view))
+}
+
+/// The windows shown of the memory screen `screen`.
+fn windows_of(editor: &Editor, screen: ScreenId) -> impl Iterator<Item = &vortex_view::tree::ScreenView> {
+    editor.tree.windows().filter_map(move |(window, _)| match window {
+        Window::Screen(view) if view.screen == screen => Some(view),
+        _ => None,
+    })
 }
 
 /// Shows memory of `session` at `address` in a split (or the view showing it already), the
@@ -274,22 +303,14 @@ fn show(
         return;
     }
     editor.unfocus_debug_panel();
-    let existing = memory_docs(editor).into_iter().find(|&id| {
-        editor.documents[&id]
-            .memory()
+    let existing = memory_screens(editor).into_iter().find(|&id| {
+        memory_of(editor, id)
             .is_some_and(|memory| memory.session == session && memory.base == base && !memory.ended)
     });
-    match existing {
-        Some(doc) => {
-            let view = editor
-                .tree
-                .views()
-                .find(|(view, _)| view.doc == doc)
-                .map(|(view, _)| view.id);
-            match view {
-                Some(view) => editor.focus(view),
-                None => editor.switch(doc, Action::VerticalSplit),
-            }
+    let screen = match existing {
+        Some(screen) => {
+            editor.show_screen(screen);
+            screen
         }
         None => {
             let memory = MemorySource::new(
@@ -299,26 +320,29 @@ fn show(
                 label.clone(),
                 supports_write(editor, session),
             );
-            let doc =
-                Document::open_memory(memory, editor.config.clone(), editor.syn_loader.clone());
-            editor.new_file_from_document(Action::VerticalSplit, doc);
+            editor.open_memory(memory, Placement::Cover)
         }
-    }
-    center(editor, address);
+    };
+    center(editor, screen, address);
 }
 
-/// Puts the cursor of the focused memory view on `address`, in the middle of the view.
-fn center(editor: &mut Editor, address: u64) {
-    let (view, doc) = current!(editor);
-    let area = hex_view::rows_area(view);
-    let view_id = view.id;
-    let Some(hex) = doc.hex_mut() else {
+/// Puts the cursor of the memory view `screen` on `address`, in the middle of the view.
+fn center(editor: &mut Editor, screen: ScreenId, address: u64) {
+    let Some(view) = editor.view_of(screen) else {
         return;
     };
-    let layout = hex.cursor(view_id).layout;
+    let Some(window) = editor.tree.screen_view(view) else {
+        return;
+    };
+    let area = hex_view::rows_area(window);
+    let Some(state) = editor.screens.state_mut::<HexView>(screen) else {
+        return;
+    };
+    let hex = &mut state.buffer;
+    let layout = hex.cursor(view).layout;
     let rows = Rows::new(layout, hex.len(), area.width);
     let per_row = rows.bytes_per_row as u64;
-    let cursor = hex.cursor_mut(view_id);
+    let cursor = hex.cursor_mut(view);
     cursor.offset = address;
     cursor.anchor = None;
     cursor.overwrite = false;
@@ -333,9 +357,8 @@ fn center(editor: &mut Editor, address: u64) {
 /// recorded at the stop shown instead.
 pub fn load_wanted(editor: &mut Editor) {
     let playing = editor.debug.spectator.mode != Mode::Paused;
-    let docs = memory_docs(editor);
-    for id in docs {
-        let Some(memory) = editor.documents[&id].memory() else {
+    for id in memory_screens(editor) {
+        let Some(memory) = memory_of(editor, id) else {
             continue;
         };
         if memory.recorded.is_some() || memory.ended || !memory.has_wanted() {
@@ -365,8 +388,7 @@ pub fn load_wanted(editor: &mut Editor) {
                 continue;
             }
         }
-        let doc = editor.documents.get_mut(&id).unwrap();
-        let Some(memory) = doc.hex_mut().and_then(|hex| hex.memory_mut()) else {
+        let Some(memory) = memory_mut(editor, id) else {
             continue;
         };
         memory.refreshed = Some(now);
@@ -383,10 +405,10 @@ pub fn load_wanted(editor: &mut Editor) {
     }
 }
 
-/// Reads one page in the background and puts it back in its document.
+/// Reads one page in the background and puts it back in its screen.
 fn read_page(
     requester: Requester,
-    doc: DocumentId,
+    screen: ScreenId,
     reference: String,
     page: u64,
     offset: i64,
@@ -402,12 +424,7 @@ fn read_page(
             Ok(None) | Err(_) => vec![None; PAGE as usize],
         };
         job::dispatch(move |editor, _| {
-            if let Some(memory) = editor
-                .documents
-                .get_mut(&doc)
-                .and_then(|doc| doc.hex_mut())
-                .and_then(|hex| hex.memory_mut())
-            {
+            if let Some(memory) = memory_mut(editor, screen) {
                 memory.fill(page, bytes, stop);
             }
         })
@@ -417,14 +434,8 @@ fn read_page(
 
 /// The program of `session` stopped: its memory views read what they show again.
 pub fn on_stop(editor: &mut Editor, session: DebugAdapterId) {
-    for id in memory_docs(editor) {
-        if let Some(memory) = editor
-            .documents
-            .get_mut(&id)
-            .and_then(|doc| doc.hex_mut())
-            .and_then(|hex| hex.memory_mut())
-            .filter(|memory| memory.session == session)
-        {
+    for id in memory_screens(editor) {
+        if let Some(memory) = memory_mut(editor, id).filter(|memory| memory.session == session) {
             memory.next_stop();
         }
     }
@@ -437,14 +448,8 @@ pub fn on_memory_event(editor: &mut Editor, session: DebugAdapterId) {
 
 /// Session `session` ended: its memory views keep their last bytes.
 pub fn session_ended(editor: &mut Editor, session: DebugAdapterId) {
-    for id in memory_docs(editor) {
-        if let Some(memory) = editor
-            .documents
-            .get_mut(&id)
-            .and_then(|doc| doc.hex_mut())
-            .and_then(|hex| hex.memory_mut())
-            .filter(|memory| memory.session == session)
-        {
+    for id in memory_screens(editor) {
+        if let Some(memory) = memory_mut(editor, id).filter(|memory| memory.session == session) {
             memory.ended = true;
         }
     }
@@ -452,8 +457,8 @@ pub fn session_ended(editor: &mut Editor, session: DebugAdapterId) {
 
 /// What the statusline says about a memory view, after the position: the stop it shows when
 /// that isn't the live one.
-pub fn note(editor: &Editor, doc: &Document) -> Option<String> {
-    let memory = doc.memory()?;
+pub fn note(editor: &Editor, view: &HexView) -> Option<String> {
+    let memory = view.buffer.memory()?;
     // (the statusline's debug element says REWIND and the step)
     if let Some(recorded) = &memory.recorded {
         return Some(if recorded.bytes.is_empty() {
@@ -491,13 +496,8 @@ pub fn sync_rewind(editor: &mut Editor) {
             previous.map(|p| p.memory.clone()),
         ))
     });
-    for id in memory_docs(editor) {
-        let Some(memory) = editor
-            .documents
-            .get_mut(&id)
-            .and_then(|doc| doc.hex_mut())
-            .and_then(|hex| hex.memory_mut())
-        else {
+    for id in memory_screens(editor) {
+        let Some(memory) = memory_mut(editor, id) else {
             continue;
         };
         match &shown {
@@ -506,10 +506,10 @@ pub fn sync_rewind(editor: &mut Editor) {
                 if memory.recorded.as_ref().is_some_and(|r| r.step == *step) {
                     continue;
                 }
-                let window = windows.iter().find(|window| window.doc == id);
+                let window = windows.iter().find(|window| window.screen == id);
                 let before = previous
                     .as_ref()
-                    .and_then(|windows| windows.iter().find(|window| window.doc == id));
+                    .and_then(|windows| windows.iter().find(|window| window.screen == id));
                 memory.recorded = Some(match window {
                     Some(window) => Recorded {
                         step: *step,
@@ -552,7 +552,7 @@ fn changed_since(window: &MemoryWindow, before: Option<&MemoryWindow>) -> Vec<bo
 
 /// A memory view's window to record at a stop.
 pub struct ToRecord {
-    pub doc: DocumentId,
+    pub screen: ScreenId,
     pub reference: String,
     pub base: u64,
     pub start: u64,
@@ -560,15 +560,18 @@ pub struct ToRecord {
 }
 
 /// The windows of the memory views of `session` to record at a stop: what each view shows and
-/// a margin, at most `cap` bytes per memory document (`None`: all of it).
+/// a margin, at most `cap` bytes per memory view (`None`: all of it).
 pub fn to_record(editor: &Editor, session: DebugAdapterId, cap: Option<usize>) -> Vec<ToRecord> {
     if cap == Some(0) {
         return Vec::new();
     }
     let mut windows = Vec::new();
-    for id in memory_docs(editor) {
-        let doc = &editor.documents[&id];
-        let (Some(hex), Some(memory)) = (doc.hex(), doc.memory()) else {
+    for id in memory_screens(editor) {
+        let Some(state) = editor.screens.state::<HexView>(id) else {
+            continue;
+        };
+        let hex = &state.buffer;
+        let Some(memory) = hex.memory() else {
             continue;
         };
         if memory.session != session || memory.ended {
@@ -576,7 +579,7 @@ pub fn to_record(editor: &Editor, session: DebugAdapterId, cap: Option<usize>) -
         }
         // what its views show
         let mut span: Option<(u64, u64)> = None;
-        for (view, _) in editor.tree.views().filter(|(view, _)| view.doc == id) {
+        for view in windows_of(editor, id) {
             let cursor = hex.cursor(view.id);
             let area = hex_view::rows_area(view);
             let rows = Rows::new(cursor.layout, hex.len(), area.width);
@@ -602,7 +605,7 @@ pub fn to_record(editor: &Editor, session: DebugAdapterId, cap: Option<usize>) -
             }
         }
         windows.push(ToRecord {
-            doc: id,
+            screen: id,
             reference: memory.reference.clone(),
             base: memory.base,
             start,
@@ -641,13 +644,12 @@ pub fn open_views(editor: &Editor) -> usize {
     let Some(session) = session(editor) else {
         return 0;
     };
-    memory_docs(editor)
+    memory_screens(editor)
         .into_iter()
-        .filter(|id| {
-            editor.documents[id]
-                .memory()
+        .filter(|&id| {
+            memory_of(editor, id)
                 .is_some_and(|memory| memory.session == session && !memory.ended)
-                && editor.tree.views().any(|(view, _)| view.doc == *id)
+                && windows_of(editor, id).next().is_some()
         })
         .count()
 }
@@ -656,8 +658,8 @@ pub fn open_views(editor: &Editor) -> usize {
 
 /// Why the focused memory view can't overwrite memory now, if it can't.
 pub fn not_editable(editor: &Editor) -> Option<String> {
-    let doc = doc!(editor);
-    let memory = doc.memory()?;
+    let (_, view) = focused_memory(editor)?;
+    let memory = view.buffer.memory()?;
     if !memory.can_write {
         return Some(format!(
             "this debugger ({}) can't write memory",
@@ -687,12 +689,10 @@ pub fn write(editor: &mut Editor) -> anyhow::Result<()> {
     if let Some(why) = not_editable(editor) {
         anyhow::bail!(why);
     }
-    let doc = doc!(editor);
-    let id = doc.id();
-    let Some(hex) = doc.hex() else {
+    let Some((id, view)) = focused_memory(editor) else {
         return Ok(());
     };
-    let runs = hex.edit_runs(None);
+    let runs = view.buffer.edit_runs(None);
     if runs.is_empty() {
         crate::debug::mode::say(editor, "no overwritten bytes to write");
         return Ok(());
@@ -704,28 +704,26 @@ pub fn write(editor: &mut Editor) -> anyhow::Result<()> {
 /// After `u` or `U` changed bytes already written to memory: writes them again, so memory
 /// has what the view shows.
 pub fn write_back(editor: &mut Editor, offsets: Vec<u64>, undo: bool) {
-    let doc = doc!(editor);
-    let id = doc.id();
-    let Some(hex) = doc.hex() else {
+    let Some((id, view)) = focused_memory(editor) else {
         return;
     };
-    let runs = hex.edit_runs(Some(&offsets));
+    let runs = view.buffer.edit_runs(Some(&offsets));
     if !runs.is_empty() {
         let what = if undo { "wrote back" } else { "wrote again" };
         send(editor, id, runs, Some(offsets), what);
     }
 }
 
-/// Writes `runs` of bytes to the memory of document `id`, then marks them written (only
+/// Writes `runs` of bytes to the memory of the view `id`, then marks them written (only
 /// `offsets` when given, else all the overwritten bytes).
 fn send(
     editor: &mut Editor,
-    id: DocumentId,
+    id: ScreenId,
     runs: Vec<(u64, Vec<u8>)>,
     offsets: Option<Vec<u64>>,
     what: &'static str,
 ) {
-    let Some(memory) = editor.documents[&id].memory() else {
+    let Some(memory) = memory_of(editor, id) else {
         return;
     };
     let Some(requester) = editor
@@ -764,7 +762,11 @@ fn send(
                 editor.set_error(format!("writing memory failed {err}"));
                 return;
             }
-            if let Some(hex) = editor.documents.get_mut(&id).and_then(|doc| doc.hex_mut()) {
+            if let Some(hex) = editor
+                .screens
+                .state_mut::<HexView>(id)
+                .map(|view| &mut view.buffer)
+            {
                 match offsets {
                     Some(_) => hex.memory_written(Some(&written_offsets)),
                     None if hex

@@ -128,11 +128,9 @@ impl Preview<'_, '_> {
         }
     }
 
-    /// The bytes of a binary file, or of a document in the hex view.
+    /// The bytes of a binary file.
     fn hex(&self) -> Option<&vortex_view::hex::HexBuffer> {
         match self {
-            Preview::EditorDocument(doc) => doc.hex(),
-            Preview::Cached(CachedPreview::Document(doc)) => doc.hex(),
             Preview::Cached(CachedPreview::Binary(hex)) => Some(hex),
             _ => None,
         }

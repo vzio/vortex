@@ -40,7 +40,7 @@ pub fn in_source_view<R>(editor: &mut Editor, f: impl FnOnce(&mut Editor) -> R) 
     let focused = editor.tree.focus;
     let shows_memory = |editor: &Editor, view: crate::ViewId| {
         let doc = editor.tree.get(view).doc;
-        editor.documents[&doc].memory().is_some() || !editor.is_buffer(doc)
+        !editor.is_buffer(doc)
     };
     if !shows_memory(editor, focused) {
         return f(editor);

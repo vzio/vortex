@@ -1,6 +1,6 @@
-//! Drawing the hex view (this fork): a document whose bytes are shown in rows of offsets, hex
-//! digits (or bits) and ASCII characters, instead of its text. See `commands/hex.rs` for its
-//! keys and `vortex_view::hex` for the bytes.
+//! Drawing the hex view (this fork): a screen that shows bytes in rows of offsets, hex digits (or
+//! bits) and ASCII characters. See `commands/hex.rs` for its keys and `vortex_view::hex` for the
+//! bytes.
 //!
 //! ```text
 //! 0x00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52  .PNG........IHDR
@@ -11,19 +11,16 @@ use std::ops::Range;
 use tui::buffer::Buffer as Surface;
 use vortex_view::{
     graphics::{Modifier, Rect, UnderlineStyle},
-    hex::{ascii_char, ByteKind, Cell, Column, HexBuffer, HexCursor, Layout, Rows},
+    hex::{ascii_char, ByteKind, Cell, Column, HexBuffer, HexCursor, HexView, Layout, Rows},
+    screen::ScreenId,
     theme::Style,
-    Document, Theme, View,
+    tree::ScreenView,
+    Editor, Theme,
 };
 
-/// The area of a view the rows are drawn in: all of it but the statusline.
-pub fn rows_area(view: &View) -> Rect {
-    view.area.clip_bottom(1)
-}
-
-/// The rows of `view`, which depend on its width.
-pub fn rows_of(hex: &HexBuffer, cursor: &HexCursor, view: &View) -> Rows {
-    Rows::new(cursor.layout, hex.len(), rows_area(view).width)
+/// The area of a hex window the rows are drawn in: all of it but the statusline.
+pub fn rows_area(view: &ScreenView) -> Rect {
+    view.inner_area()
 }
 
 /// The first style of `scopes` that the theme has, else the last one with its broader scopes,
@@ -100,13 +97,43 @@ impl Styles {
     }
 }
 
-/// Draws the rows of a document in the hex view, in its view (above its statusline).
-pub fn render(theme: &Theme, doc: &Document, view: &View, surface: &mut Surface, focused: bool) {
-    let Some(hex) = doc.hex() else {
+/// Draws the rows of a hex screen in its window (above the statusline).
+pub fn render_screen(editor: &Editor, view: &ScreenView, surface: &mut Surface, focused: bool) {
+    let Some(hex) = editor.screens.state::<HexView>(view.screen) else {
         return;
     };
-    let cursor = hex.cursor(view.id);
-    render_rows(theme, hex, &cursor, rows_area(view), surface, focused);
+    let cursor = hex.buffer.cursor(view.id);
+    render_rows(
+        &editor.theme,
+        &hex.buffer,
+        &cursor,
+        rows_area(view),
+        surface,
+        focused,
+    );
+}
+
+/// What the screen's statusline says on its right: the cursor's offset and the byte under it, the
+/// size (or, for memory, where it is and what stop it shows), the percentage through the file.
+pub fn status(editor: &Editor, screen: ScreenId) -> String {
+    let Some(hex) = editor.screens.state::<HexView>(screen) else {
+        return String::new();
+    };
+    let Some(view) = editor.view_of(screen) else {
+        return String::new();
+    };
+    let cursor = hex.buffer.cursor(view);
+    let mut text = position(&hex.buffer, &cursor);
+    // memory: which stop the bytes are from, when not the live one
+    if let Some(note) = crate::debug::memory::note(editor, hex) {
+        text = format!("{text}  {note}");
+    }
+    // memory has no size to be a percentage of
+    if !hex.buffer.is_memory() {
+        let percent = (cursor.offset + 1) * 100 / hex.buffer.len().max(1);
+        text = format!("{text}  {}%", percent.min(100));
+    }
+    text
 }
 
 /// Draws the rows of `hex` in `area`, with `cursor` (its `top` gives the first row).
@@ -245,8 +272,8 @@ pub fn render_rows(
     }
 }
 
-/// What the statusline's position element shows for a document in the hex view: the cursor's
-/// offset, the byte under it, and the size of the file.
+/// What the statusline shows for a hex view's position: the cursor's offset, the byte under it,
+/// and the size of the file.
 ///
 /// `0x1A4 (420)  1a 26 00011010 '&'  of 4.0 GiB`
 pub fn position(hex: &HexBuffer, cursor: &HexCursor) -> String {
@@ -332,7 +359,7 @@ pub fn size(bytes: u64) -> String {
     format!("{size:.1} {}", UNITS[unit])
 }
 
-/// The mode of the view, for the statusline's mode element: `HEX RO`, `BIN OVR`...
+/// The mode of the view, for the statusline's mode: `HEX RO`, `BIN OVR`...
 pub fn mode_label(cursor: &HexCursor) -> &'static str {
     match (cursor.layout, cursor.overwrite) {
         (Layout::Hex, false) => "HEX RO",
