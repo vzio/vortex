@@ -200,7 +200,7 @@ pub fn capture(
             let (bytes, requests) = super::memory::read_window(&requester, window).await;
             counters.requests.fetch_add(requests, Ordering::Relaxed);
             memory.push(MemoryWindow {
-                doc: window.doc,
+                screen: window.screen,
                 start: window.start,
                 bytes,
             });

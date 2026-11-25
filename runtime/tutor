@@ -678,7 +678,8 @@
  A binary file (an image, an executable...) opens in the hex
  view: offsets, the bytes in hex, and the same bytes as ASCII.
  It reads only what it shows, so even a huge file opens at once.
- :hex shows any file this way, and back as text.
+ :hex shows any file this way, over its window: Esc shows the
+ text again.
 
   h l  j k       a byte, a row
   w b            the next, the previous word of 4 bytes

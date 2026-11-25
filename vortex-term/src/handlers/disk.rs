@@ -5,7 +5,8 @@
 //! and right before writing. A document without unsaved changes is reloaded silently, as an
 //! undoable step. One with unsaved changes is left alone and the user is warned once per
 //! distinct disk content; writing it is refused (see `Document::save_impl`) until `:reload` or
-//! `:write!`. A file that was deleted is ignored.
+//! `:write!`. A file that was deleted is ignored. The same goes for the hex views (screens) of
+//! files, which compare the file's metadata: unwritten bytes keep the view and warn once.
 
 use std::path::PathBuf;
 
@@ -14,6 +15,7 @@ use vortex_view::{
     document::DiskChange,
     events::{DocumentFocusLost, ScreenFocusLost},
     handlers::Handlers,
+    hex::HexView,
     DocumentId, Editor,
 };
 
@@ -38,6 +40,7 @@ pub fn check_paths(editor: &mut Editor, paths: &[PathBuf]) {
         .map(|doc| doc.id())
         .collect();
     check_docs(editor, docs);
+    check_hex(editor, Some(&paths));
 }
 
 /// Checks all open documents. Called when the editor regains focus, so it also looks at which
@@ -45,7 +48,43 @@ pub fn check_paths(editor: &mut Editor, paths: &[PathBuf]) {
 pub fn check_all(editor: &mut Editor) {
     let docs: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
     check_docs(editor, docs);
+    check_hex(editor, None);
     super::conflicts::refresh(editor);
+}
+
+/// Checks the hex views of files (those of `paths`, canonical, when given): one that changed on
+/// disk and has no unwritten bytes reads the file again, keeping its cursor; with unwritten bytes
+/// it is left alone and the user is warned once.
+fn check_hex(editor: &mut Editor, paths: Option<&[PathBuf]>) {
+    let screens: Vec<_> = editor
+        .hex_screens()
+        .filter(|(_, hex)| {
+            hex.path
+                .as_ref()
+                .is_some_and(|path| paths.is_none_or(|paths| paths.contains(path)))
+        })
+        .map(|(id, _)| id)
+        .collect();
+    for id in screens {
+        let name = editor
+            .screens
+            .get(id)
+            .map(|screen| screen.name.clone())
+            .unwrap_or_default();
+        let Some(hex) = editor.screens.state_mut::<HexView>(id) else {
+            continue;
+        };
+        if hex.disk_change() != DiskChange::Changed {
+            continue;
+        }
+        if hex.is_modified() {
+            if hex.take_disk_change_warning() {
+                editor.set_warning(format!("{name} changed on disk"));
+            }
+        } else if let Err(err) = hex.reload() {
+            editor.set_error(err.to_string());
+        }
+    }
 }
 
 fn check_doc(editor: &mut Editor, doc_id: DocumentId) {

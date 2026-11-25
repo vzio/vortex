@@ -1,7 +1,8 @@
 //! The hex view: binary files shown as bytes, which can be overwritten in place.
 //!
-//! The tests drive an `Application` with keys, read its state (`doc.hex()`, the statusline
-//! message, the registers) and the test backend's screen, and check the files on disk.
+//! The hex view is a screen (a window of its own, or covering the window of a buffer). The tests
+//! drive an `Application` with keys, read its state (the focused screen's `HexView`, the
+//! statusline message, the registers) and the test backend's screen, and check the files on disk.
 
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -14,7 +15,7 @@ use vortex_term::application::Application;
 use vortex_view::{
     editor::Severity,
     graphics::Color,
-    hex::{HexBuffer, Layout, Rows},
+    hex::{HexBuffer, HexView, Layout, Rows},
     input::parse_macro,
     Document,
 };
@@ -76,11 +77,19 @@ impl Session {
         session
     }
 
-    /// Gives the screen another size, which the application picks up with the next event
-    /// (an `<esc>`, which changes nothing in the hex view).
+    /// Gives the screen another size, which the application picks up with the next event (a
+    /// resize of the terminal: a key would reach the hex view, where `Esc` closes it).
     async fn resize(&mut self, cols: u16, rows: u16) {
         self.app.resize_screen(cols, rows);
-        self.keys("<esc>").await;
+        self.tx
+            .send(Ok(Event::WindowResized(termina::WindowSize {
+                cols,
+                rows,
+                pixel_width: None,
+                pixel_height: None,
+            })))
+            .unwrap();
+        assert!(self.app.event_loop_until_idle(&mut self.input).await);
     }
 
     async fn keys(&mut self, keys: &str) {
@@ -107,12 +116,17 @@ impl Session {
     /// Writes with `:w` (or what `command` is) and waits until the document is not modified.
     async fn write(&mut self, command: &str) {
         self.keys(&format!("{command}<ret>")).await;
-        self.wait_for("the write", |app| !doc(app).is_modified())
-            .await;
+        self.wait_for("the write", |app| !is_modified(app)).await;
     }
 
     async fn close(mut self) {
-        for key in parse_macro("<esc>:qa!<ret>").unwrap() {
+        // (`Esc` stops overwriting; in the view otherwise it closes it)
+        let esc = if is_hex(&self.app) && hex(&self.app).cursor(view_id(&self.app)).overwrite {
+            "<esc>"
+        } else {
+            ""
+        };
+        for key in parse_macro(&format!("{esc}:qa!<ret>")).unwrap() {
             self.tx.send(Ok(Event::Key(KeyEvent::from(key)))).unwrap();
         }
         // (this one ends the application)
@@ -122,16 +136,40 @@ impl Session {
     }
 }
 
+/// The text buffer of the focused window: the one a hex screen covers, if it covers one.
 fn doc(app: &Application) -> &Document {
     vortex_view::doc!(app.editor)
 }
 
-fn hex(app: &Application) -> &HexBuffer {
-    doc(app).hex().expect("the document is in the hex view")
+/// Whether the focused window shows a hex screen.
+fn is_hex(app: &Application) -> bool {
+    app.editor
+        .focused_screen()
+        .is_some_and(|screen| screen.state::<HexView>().is_some())
 }
 
+fn hex_view(app: &Application) -> &HexView {
+    app.editor
+        .focused_screen()
+        .and_then(|screen| screen.state::<HexView>())
+        .expect("a hex view is focused")
+}
+
+fn hex(app: &Application) -> &HexBuffer {
+    &hex_view(app).buffer
+}
+
+/// Whether what the focused window shows has unsaved changes: overwritten bytes, or the text.
+fn is_modified(app: &Application) -> bool {
+    if is_hex(app) {
+        return hex(app).is_modified();
+    }
+    doc(app).is_modified()
+}
+
+/// The focused window: the hex screen's.
 fn view_id(app: &Application) -> vortex_view::ViewId {
-    vortex_view::view!(app.editor).id
+    app.editor.tree.focus
 }
 
 /// The offset of the cursor of the focused view.
@@ -214,26 +252,27 @@ fn print_snapshot(title: &str, dir: &Path, rows: &[String], statusline: &str) {
 async fn binary_files_open_in_the_hex_view() {
     let (_dir, path) = file_with("image.png", &png());
     let session = Session::open(&path, 100).await;
-    assert!(doc(&session.app).is_hex());
-    assert_eq!(doc(&session.app).text().len_chars(), 0);
+    assert!(is_hex(&session.app));
+    // (a binary file never becomes a document)
+    assert!(session.app.editor.document_by_path(&path).is_none());
     assert_eq!(hex(&session.app).len(), 64);
     assert_eq!(offset(&session.app), 0);
-    assert!(!doc(&session.app).is_modified());
+    assert!(!is_modified(&session.app));
     session.close().await;
 
     // a NUL in the first KiB is enough, and so are the signatures of a PDF
     let (_dir, path) = file_with("data.bin", b"text, then a NUL: \0 and more");
     let session = Session::open(&path, 100).await;
-    assert!(doc(&session.app).is_hex());
+    assert!(is_hex(&session.app));
     session.close().await;
     let (_dir, path) = file_with("doc.pdf", b"%PDF-1.7 no NUL in here");
     let session = Session::open(&path, 100).await;
-    assert!(doc(&session.app).is_hex());
+    assert!(is_hex(&session.app));
     session.close().await;
 
     let (_dir, path) = file_with("notes.txt", b"just text\nsecond line\n");
     let session = Session::open(&path, 100).await;
-    assert!(!doc(&session.app).is_hex());
+    assert!(!is_hex(&session.app));
     assert_eq!(
         doc(&session.app).text().to_string(),
         "just text\nsecond line\n"
@@ -311,14 +350,16 @@ async fn rendering_in_hex_and_in_bin() {
 async fn rendering_in_narrow_views() {
     let (dir, path) = file_with("image.png", &png());
     let mut session = Session::open(&path, 100).await;
-    session.keys("<C-w>v").await;
-    let views: Vec<_> = session
+    session.keys("<C-w>v<C-w>h").await;
+    // (the hex view stays on the left, the new window is a buffer next to it)
+    let mut views: Vec<_> = session
         .app
         .editor
         .tree
-        .views()
-        .map(|(v, _)| v.area)
+        .windows()
+        .map(|(window, _)| window.area())
         .collect();
+    views.sort_by_key(|area| area.x);
     assert_eq!(views.len(), 2);
     assert!(views.iter().all(|area| (49..=50).contains(&area.width)));
 
@@ -354,8 +395,7 @@ async fn rendering_in_narrow_views() {
         ]
     );
 
-    // (the focus is on the right view, which `~` changes)
-    session.keys("<C-w>h~").await;
+    session.keys("~").await;
     let rows = left(&session.app, 3);
     let status_row = statusline(&session.app);
     print_snapshot(
@@ -505,9 +545,9 @@ async fn short_last_rows_and_empty_files() {
     // an empty file is text: `:hex` shows it as one row
     let (_dir, path) = file_with("empty.bin", b"");
     let mut session = Session::open(&path, 100).await;
-    assert!(!doc(&session.app).is_hex());
+    assert!(!is_hex(&session.app));
     session.keys(":hex<ret>").await;
-    assert!(doc(&session.app).is_hex());
+    assert!(is_hex(&session.app));
     assert_eq!(first_rows(&session.app, 2), ["0x00000000", ""]);
     assert!(statusline(&session.app).contains("of 0 B"));
     assert!(statusline(&session.app).contains("0x0 (0)"));
@@ -701,10 +741,11 @@ async fn typing_is_refused_in_read_only_mode() {
         session.keys(key).await;
         assert_eq!(status(&session.app), "read-only", "after {key:?}");
         assert_eq!(bytes(&session.app), png(), "after {key:?}");
-        assert!(!doc(&session.app).is_modified());
+        assert!(!is_modified(&session.app));
     }
     assert_eq!(offset(&session.app), 0);
-    assert_eq!(doc(&session.app).text().len_chars(), 0);
+    // (the scratch buffer under the view is as it was)
+    assert_eq!(doc(&session.app).text().to_string(), "\n");
 
     // `u` has nothing to undo
     session.keys("u").await;
@@ -780,7 +821,7 @@ async fn overwriting_nibbles_in_the_hex_column() {
     // only the high nibble
     assert_eq!(bytes(&session.app)[0], 0xd9);
     assert_eq!(offset(&session.app), 0);
-    assert!(doc(&session.app).is_modified());
+    assert!(is_modified(&session.app));
     assert!(hex(&session.app).is_edited(0));
     session.keys("e").await;
     assert_eq!(bytes(&session.app)[0], 0xde);
@@ -895,7 +936,7 @@ async fn undo_redo_and_write() {
     assert_eq!(offset(&session.app), 1);
     session.keys("u").await;
     assert_eq!(bytes(&session.app), original);
-    assert!(!doc(&session.app).is_modified(), "everything undone");
+    assert!(!is_modified(&session.app), "everything undone");
     session.keys("u").await;
     assert_eq!(status(&session.app), "Already at oldest change");
 
@@ -904,7 +945,7 @@ async fn undo_redo_and_write() {
     assert_eq!(offset(&session.app), 0);
     session.keys("U").await;
     assert_eq!(bytes(&session.app), second);
-    assert!(doc(&session.app).is_modified());
+    assert!(is_modified(&session.app));
     session.keys("U").await;
     assert_eq!(status(&session.app), "Already at newest change");
 
@@ -920,7 +961,7 @@ async fn undo_redo_and_write() {
     assert_eq!(std::fs::read(&path).unwrap(), original);
     session.write(":w").await;
     assert_eq!(std::fs::read(&path).unwrap(), second);
-    assert!(!doc(&session.app).is_modified());
+    assert!(!is_modified(&session.app));
     assert!(
         status(&session.app).contains("2 bytes changed in place"),
         "{}",
@@ -933,7 +974,7 @@ async fn undo_redo_and_write() {
 
     // writing can be undone like any change, and written again
     session.keys("u").await;
-    assert!(doc(&session.app).is_modified());
+    assert!(is_modified(&session.app));
     assert_eq!(bytes(&session.app)[1], 0x50);
     session.write(":w").await;
     let mut third = second.clone();
@@ -1015,7 +1056,7 @@ async fn a_file_changed_on_disk_is_not_written_over() {
     let (_dir, path) = file_with("image.png", &png());
     let mut session = Session::open(&path, 100).await;
     session.keys("ide<esc>").await;
-    assert!(doc(&session.app).is_modified());
+    assert!(is_modified(&session.app));
 
     let mut outside = png();
     outside[10] = 0xee;
@@ -1029,19 +1070,19 @@ async fn a_file_changed_on_disk_is_not_written_over() {
         outside,
         "the disk is untouched"
     );
-    assert!(doc(&session.app).is_modified());
+    assert!(is_modified(&session.app));
 
     session.write(":w!").await;
     // only the overwritten byte is written, on top of what is there
     let mut expected = outside.clone();
     expected[0] = 0xde;
     assert_eq!(std::fs::read(&path).unwrap(), expected);
-    assert!(!doc(&session.app).is_modified());
+    assert!(!is_modified(&session.app));
 
     // and the next write is fine again
     session.keys("gg").await;
     session.keys("ief<esc>").await;
-    assert!(doc(&session.app).is_modified());
+    assert!(is_modified(&session.app));
     session.write(":w").await;
     assert_eq!(std::fs::read(&path).unwrap()[0], 0xef);
     session.close().await;
@@ -1072,7 +1113,7 @@ async fn a_sparse_file_of_4_gib() {
     session.resize(100, 30).await;
     let elapsed = started.elapsed();
     assert!(elapsed < Duration::from_secs(2), "opened in {elapsed:?}");
-    assert!(doc(&session.app).is_hex());
+    assert!(is_hex(&session.app));
     assert_eq!(hex(&session.app).len(), SIZE);
     assert!(first_rows(&session.app, 1)[0].starts_with("0x00000000  89 50 4e 47"));
     assert!(statusline(&session.app).contains("of 4.0 GiB"));
@@ -1127,10 +1168,10 @@ async fn a_sparse_file_of_4_gib() {
 async fn the_hex_command_toggles_the_view() {
     let (_dir, path) = file_with("notes.txt", b"hello\nworld\n");
     let mut session = Session::open(&path, 100).await;
-    assert!(!doc(&session.app).is_hex());
+    assert!(!is_hex(&session.app));
 
     session.keys(":hex<ret>").await;
-    assert!(doc(&session.app).is_hex());
+    assert!(is_hex(&session.app));
     helpers::assert_status_not_error(&session.app.editor);
     assert_eq!(
         first_rows(&session.app, 1)[0],
@@ -1138,7 +1179,7 @@ async fn the_hex_command_toggles_the_view() {
     );
 
     session.keys(":hex<ret>").await;
-    assert!(!doc(&session.app).is_hex());
+    assert!(!is_hex(&session.app));
     assert_eq!(doc(&session.app).text().to_string(), "hello\nworld\n");
     helpers::assert_status_not_error(&session.app.editor);
     assert!(first_rows(&session.app, 1)[0].contains("hello"));
@@ -1146,88 +1187,123 @@ async fn the_hex_command_toggles_the_view() {
     // a modified text buffer would lose its changes
     session.keys("ix<esc>:hex<ret>").await;
     assert_error_containing(&session.app, "write");
-    assert!(!doc(&session.app).is_hex());
+    assert!(!is_hex(&session.app));
     assert_eq!(doc(&session.app).text().to_string(), "xhello\nworld\n");
     session.keys(":w<ret>").await;
     session
-        .wait_for("the write", |app| !doc(app).is_modified())
+        .wait_for("the write", |app| !is_modified(app))
         .await;
     session.keys(":hex<ret>").await;
-    assert!(doc(&session.app).is_hex());
+    assert!(is_hex(&session.app));
     assert_eq!(bytes(&session.app), b"xhello\nworld\n");
 
     // overwritten bytes not written would be lost too
     session.keys("i41<esc>").await;
     assert_eq!(bytes(&session.app)[0], 0x41);
     session.keys(":hex<ret>").await;
-    assert_error_containing(&session.app, "overwritten bytes not written");
-    assert!(doc(&session.app).is_hex());
+    assert_error_containing(&session.app, "unwritten bytes");
+    assert!(is_hex(&session.app));
     assert_eq!(bytes(&session.app)[0], 0x41);
 
     session.write(":w").await;
     session.keys(":hex<ret>").await;
-    assert!(!doc(&session.app).is_hex());
+    assert!(!is_hex(&session.app));
     assert_eq!(doc(&session.app).text().to_string(), "Ahello\nworld\n");
     assert_eq!(std::fs::read(&path).unwrap(), b"Ahello\nworld\n");
     session.close().await;
 }
 
-/// A binary file toggled to text and back.
+/// A hex screen of a binary file closes with `:hex` and with `Esc`, showing the window as it was.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_binary_file_can_be_shown_as_text() {
+async fn a_binary_file_has_no_text_to_come_back_to() {
     let (_dir, path) = file_with("data.bin", b"ab\0cd\n");
     let mut session = Session::open(&path, 100).await;
-    assert!(doc(&session.app).is_hex());
+    assert!(is_hex(&session.app));
     session.keys(":hex<ret>").await;
-    assert!(!doc(&session.app).is_hex());
-    assert_eq!(doc(&session.app).text().to_string(), "ab\0cd\n");
-    session.keys(":hex<ret>").await;
-    assert!(doc(&session.app).is_hex());
+    assert!(!is_hex(&session.app));
+    assert_eq!(doc(&session.app).path(), None, "the scratch buffer under it");
+    assert!(session.app.editor.document_by_path(&path).is_none());
+    assert_eq!(session.app.editor.screens.len(), 0);
     session.close().await;
 }
 
 // Views
 
-/// Each view of a document in the hex view has its own cursor.
+/// A hex screen opened in a split (`:vsplit`, then `:hex` in the new window) is drawn within its
+/// window: the other window still shows its text.
 #[tokio::test(flavor = "multi_thread")]
-async fn views_have_their_own_cursors() {
+async fn a_hex_view_in_a_split_is_drawn_within_its_window() {
+    let (_dir, path) = file_with("notes.txt", b"hello\nworld\n");
+    let mut session = Session::open(&path, 100).await;
+    session.keys(":vsplit<ret>").await;
+    let windows: Vec<_> = session.app.editor.tree.views().map(|(v, _)| (v.id, v.area)).collect();
+    assert_eq!(windows.len(), 2);
+    session.keys(":hex<ret>").await;
+    assert!(is_hex(&session.app));
+    let hex_window = session.app.editor.tree.screen_view(view_id(&session.app)).unwrap().clone();
+    // the hex screen is in the new window (the focused one), the other still shows its text
+    let other = windows
+        .iter()
+        .find(|(id, _)| *id != session.app.editor.tree.under(hex_window.id).unwrap())
+        .unwrap()
+        .1;
+    assert_ne!(hex_window.area.x, other.x, "side by side");
+    assert!(hex_window.area.width <= 50 && other.width <= 50);
+
+    let rows = screen_rows(&session.app);
+    let in_window = |row: &str, area: vortex_view::graphics::Rect| -> String {
+        row.chars()
+            .skip(area.x as usize)
+            .take(area.width as usize)
+            .collect()
+    };
+    let hex_rows: Vec<String> = rows
+        .iter()
+        .map(|row| in_window(row, hex_window.area).trim_end().to_owned())
+        .collect();
+    let text_rows: Vec<String> = rows
+        .iter()
+        .map(|row| in_window(row, other).trim_end().to_owned())
+        .collect();
+    // 8 bytes a row in a window this narrow
+    assert_eq!(
+        hex_rows[0],
+        "0x00000000  68 65 6c 6c 6f 0a 77 6f  hello.wo"
+    );
+    assert_eq!(hex_rows[1], "0x00000008  72 6c 64 0a              rld.");
+    assert!(text_rows.iter().any(|row| row.contains("hello")), "{text_rows:#?}");
+    assert!(text_rows.iter().all(|row| !row.contains("0x0000")), "{text_rows:#?}");
+    // the statusline of the hex window is its own
+    let height = hex_window.area.height as usize;
+    let status_row = in_window(&rows[hex_window.area.y as usize + height - 1], hex_window.area);
+    assert!(status_row.contains("HEX RO"), "{status_row}");
+    assert!(status_row.contains("notes.txt"), "{status_row}");
+    assert!(!in_window(&rows[other.y as usize + other.height as usize - 1], other).contains("HEX"));
+
+    // Esc shows the text of the window again, the other one is as it was
+    session.keys("<esc>").await;
+    assert!(!is_hex(&session.app));
+    assert_eq!(session.app.editor.tree.views().count(), 2);
+    assert_eq!(doc(&session.app).text().to_string(), "hello\nworld\n");
+    session.close().await;
+}
+
+/// The cursor goes with the hex screen when history shows it again in another window.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_cursor_goes_with_the_screen_when_history_shows_it_again() {
     let (_dir, path) = file_with("image.png", &png());
     let mut session = Session::open(&path, 100).await;
     session.keys("lll").await;
     let first = view_id(&session.app);
     assert_eq!(offset(&session.app), 3);
-
-    session.keys("<C-w>v").await;
-    let second = view_id(&session.app);
-    assert_ne!(first, second);
-    let cursors = |app: &Application| {
-        (
-            hex(app).cursor(first).offset,
-            hex(app).cursor(second).offset,
-        )
-    };
-    let (_, start) = cursors(&session.app);
-    // a split starts with a copy of the cursor of the view it was split from
-    assert_eq!(start, 3);
-    assert_eq!(cursors(&session.app), (3, 3));
-
-    session.keys("gg").await;
-    assert_eq!(cursors(&session.app), (3, 0));
-    // (a row of the views is 8 bytes)
-    session.keys("jjl").await;
-    assert_eq!(cursors(&session.app), (3, 17));
-
-    session.keys("<C-w>h").await;
-    assert_eq!(view_id(&session.app), first);
-    session.keys("j").await;
-    assert_eq!(cursors(&session.app), (11, 17));
-
-    // the cursor of a view closed is dropped, the other one stays
-    session.keys("<C-w>q").await;
-    assert_eq!(session.app.editor.tree.views().count(), 1);
-    assert_eq!(view_id(&session.app), second);
-    assert_eq!(hex(&session.app).cursor(first).offset, 0);
-    assert_eq!(offset(&session.app), 17);
+    // Esc closes the screen (history keeps it), `ga` shows it again, in a new window
+    session.keys("<esc>").await;
+    assert!(!is_hex(&session.app));
+    session.keys("ga").await;
+    assert!(is_hex(&session.app));
+    assert_ne!(view_id(&session.app), first, "a new window");
+    assert_eq!(offset(&session.app), 3);
+    assert!(statusline(&session.app).contains("0x3 (3)"));
     session.close().await;
 }
 
@@ -1239,12 +1315,13 @@ async fn quitting_with_overwritten_bytes_is_refused() {
     let (_dir, path) = file_with("image.png", &png());
     let mut session = Session::open(&path, 100).await;
     session.keys("iab<esc>").await;
-    assert!(doc(&session.app).is_modified());
+    assert!(is_modified(&session.app));
 
     session.keys(":q<ret>").await;
+    assert_error_containing(&session.app, "image.png");
     assert_error_containing(&session.app, "unsaved");
-    assert!(doc(&session.app).is_hex());
-    assert!(doc(&session.app).is_modified());
+    assert!(is_hex(&session.app));
+    assert!(is_modified(&session.app));
     session.keys(":qa<ret>").await;
     assert_error_containing(&session.app, "unsaved");
 

@@ -270,11 +270,6 @@ fn go_to_place(_compositor: &mut Compositor, editor: &mut Editor, index: usize) 
 /// `C-s`: sets a bookmark on the line of each cursor, or removes the one there.
 pub fn toggle_bookmark(cx: &mut Context) {
     let (view, doc) = current_ref!(cx.editor);
-    if doc.is_hex() {
-        cx.editor
-            .set_error("Bookmarks are lines of text: the hex view has none");
-        return;
-    }
     let text = doc.text().slice(..);
     let mut lines: Vec<usize> = doc
         .selection(view.id)

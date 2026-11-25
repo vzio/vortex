@@ -46,7 +46,6 @@ pub struct EditorView {
     /// Tracks if the terminal window is focused by reaction to terminal focus events
     terminal_focused: bool,
     /// The keys of the hex view kept between keys (this fork).
-    hex_keys: commands::hex::HexKeys,
     /// The glitch over the ghost text of error diagnostics (this fork, `glitch-diagnostics` in
     /// the theme's `[effects]`), and the cells of that ghost text in the frame being drawn.
     diagnostic_glitch: crate::ui::glitch::Slot,
@@ -88,7 +87,6 @@ impl EditorView {
             completion: None,
             spinners: ProgressSpinners::default(),
             terminal_focused: true,
-            hex_keys: Default::default(),
             diagnostic_glitch: Default::default(),
             diagnostic_cells: Default::default(),
             watch_spots: Default::default(),
@@ -252,13 +250,6 @@ impl EditorView {
             self.render_view_frame(editor, doc, view, viewport, surface, is_focused);
             return;
         }
-        // a document in the hex view (this fork) draws its bytes, not its text
-        if doc.is_hex() {
-            crate::ui::hex_view::render(&editor.theme, doc, view, surface, is_focused);
-            self.render_view_frame(editor, doc, view, viewport, surface, is_focused);
-            return;
-        }
-
         let inner = view.inner_area(doc);
         let theme = &editor.theme;
         let config = editor.config();
@@ -1500,10 +1491,6 @@ impl EditorView {
             }
         }
 
-        if let Some(result) = commands::hex::handle_mouse(cxt.editor, event) {
-            return result;
-        }
-
         let config = cxt.editor.config();
         let MouseEvent {
             kind,
@@ -1850,20 +1837,10 @@ impl Component for EditorView {
 
                 let mode = cx.editor.mode();
 
-                // a hex view (this fork) overwriting or selecting takes Esc to stop that
-                let hex_uses_esc = {
-                    let (view, doc) = current_ref!(cx.editor);
-                    doc.hex().is_some_and(|hex| {
-                        let cursor = hex.cursor(view.id);
-                        cursor.overwrite || cursor.anchor.is_some()
-                    })
-                };
-
                 // Esc in normal mode, with nothing pending, hides the debug panel (popups,
                 // which are above, take it first)
                 if key == key!(Esc)
                     && !layer_handled
-                    && !hex_uses_esc
                     && mode == Mode::Normal
                     && crate::terminal::focused(cx.editor).is_none()
                     && cx.editor.debug.visible
@@ -1921,16 +1898,7 @@ impl Component for EditorView {
                     }
                 }
 
-                // a document in the hex view (this fork) takes its keys first
-                // (not while a sticky menu is open)
-                let hex_handled = layer_handled
-                    || self.keymaps.pending().is_empty()
-                        && self.keymaps.sticky().is_none()
-                        && self.pseudo_pending.is_empty()
-                        && self.on_next_key.is_none()
-                        && commands::hex::handle_key(&mut cx, key, &mut self.hex_keys);
-
-                if !hex_handled && !self.on_next_key(OnKeyCallbackKind::PseudoPending, &mut cx, key)
+                if !layer_handled && !self.on_next_key(OnKeyCallbackKind::PseudoPending, &mut cx, key)
                 {
                     match mode {
                         Mode::Insert => {
@@ -2264,8 +2232,8 @@ impl Component for EditorView {
         if let Some(cursor) = crate::screens::cursor(editor) {
             return cursor;
         }
-        // the hex view draws its own cursor, and the debug panel has none
-        if editor.debug.is_focused() || doc!(editor).is_hex() {
+        // the debug panel has no cursor
+        if editor.debug.is_focused() {
             return (None, CursorKind::Hidden);
         }
         let mut cursor = editor.cursor();

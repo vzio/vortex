@@ -16,8 +16,9 @@ use vortex_term::{application::Application, debug, debug::panel};
 use vortex_view::{
     current_ref,
     debug::{history::Setting, spectator::Mode, Section, Status},
-    hex::{Cell, MemorySource, Rows},
-    Document,
+    hex::{Cell, HexView, MemorySource, Rows},
+    screen::ScreenId,
+    tree::ScreenView,
 };
 
 use super::{
@@ -169,7 +170,7 @@ impl Env {
             .keys(&format!(":debug-memory<space>0x{address:x}<ret>"))
             .await?;
         self.h
-            .until("the memory view", |app| memory_doc(app).is_some())
+            .until("the memory view", |app| memory_view(app).is_some())
             .await;
         Ok(())
     }
@@ -223,29 +224,62 @@ fn status(app: &Application) -> String {
         .unwrap_or_default()
 }
 
-/// The document showing memory, if one is open.
-/// Whether the cursor of the current view (the memory view) is on `address`.
-fn cursor_is(app: &Application, address: u64) -> bool {
-    let (view, doc) = current_ref!(app.editor);
-    doc.hex()
-        .is_some_and(|hex| hex.cursor(view.id).offset == address)
+/// The focused window's hex view: the window and its state.
+fn focused_hex(app: &Application) -> (&ScreenView, &HexView) {
+    let view = app
+        .editor
+        .tree
+        .screen_view(app.editor.tree.focus)
+        .expect("a screen is focused");
+    let hex = app
+        .editor
+        .screens
+        .state::<HexView>(view.screen)
+        .expect("the focused screen is a hex view");
+    (view, hex)
 }
 
-fn memory_doc(app: &Application) -> Option<&Document> {
-    app.editor.documents().find(|doc| doc.memory().is_some())
+/// The offset of the cursor of the focused (memory) view.
+fn focused_offset(app: &Application) -> u64 {
+    let (view, hex) = focused_hex(app);
+    hex.buffer.cursor(view.id).offset
+}
+
+/// Whether the cursor of the focused view (the memory view) is on `address`.
+fn cursor_is(app: &Application, address: u64) -> bool {
+    let Some(view) = app.editor.tree.screen_view(app.editor.tree.focus) else {
+        return false;
+    };
+    app.editor
+        .screens
+        .state::<HexView>(view.screen)
+        .is_some_and(|hex| hex.buffer.cursor(view.id).offset == address)
+}
+
+/// The screen showing memory, if one is open.
+fn memory_screen(app: &Application) -> Option<ScreenId> {
+    app.editor
+        .hex_screens()
+        .find(|(_, view)| view.buffer.is_memory())
+        .map(|(id, _)| id)
+}
+
+/// The state of the memory view, if one is open.
+fn memory_view(app: &Application) -> Option<&HexView> {
+    memory_screen(app).and_then(|id| app.editor.screens.state::<HexView>(id))
 }
 
 fn memory(app: &Application) -> &MemorySource {
-    memory_doc(app)
-        .and_then(Document::memory)
+    memory_view(app)
+        .and_then(|view| view.buffer.memory())
         .expect("a memory view is open")
 }
 
 /// How the bytes `address..address + len` are drawn.
 fn cells(app: &Application, address: u64, len: u64) -> Vec<Cell> {
-    memory_doc(app)
-        .and_then(Document::hex)
+    memory_view(app)
         .expect("a memory view is open")
+        .buffer
         .cells(address..address + len)
 }
 
@@ -269,11 +303,19 @@ fn screen_has(app: &Application, text: &str) -> bool {
     screen_rows(app).iter().any(|row| row.contains(text))
 }
 
+/// The windows shown of memory views.
 fn memory_views(app: &Application) -> usize {
     app.editor
         .tree
-        .views()
-        .filter(|(view, _)| app.editor.documents[&view.doc].memory().is_some())
+        .windows()
+        .filter(|(window, _)| {
+            window.screen().is_some_and(|screen| {
+                app.editor
+                    .screens
+                    .state::<HexView>(screen)
+                    .is_some_and(|view| view.buffer.is_memory())
+            })
+        })
         .count()
 }
 
@@ -337,7 +379,7 @@ async fn an_adapter_that_cannot_read_memory_offers_none() -> anyhow::Result<()> 
     e.panel("jjj").await?;
     e.h.keys("M").await?;
     assert_eq!(status(&e.h.app), message);
-    assert!(memory_doc(&e.h.app).is_none());
+    assert!(memory_view(&e.h.app).is_none());
     assert_eq!(memory_views(&e.h.app), 0);
     e.h.pump_for(std::time::Duration::from_millis(200)).await;
     assert!(e.fake.requests_named("readMemory").is_empty());
@@ -373,28 +415,25 @@ async fn values_with_a_memory_reference_get_a_badge_and_m_opens_their_memory() -
     );
     e.h.keys("M").await?;
     e.says("x has no memory to show").await;
-    assert!(memory_doc(&e.h.app).is_none());
+    assert!(memory_view(&e.h.app).is_none());
 
-    // p: opens a vertical split, the cursor on 0x1010 in the middle of the view
+    // p: opens a screen over the window for documents, the cursor on 0x1010 in the middle of
+    // the view
     e.h.keys("jM").await?;
-    e.h.until("the memory view", |app| memory_doc(app).is_some())
+    e.h.until("the memory view", |app| memory_view(app).is_some())
         .await;
     assert!(cursor_is(&e.h.app, 0x1010));
     assert_eq!(memory_views(&e.h.app), 1);
-    assert_eq!(e.h.app.editor.tree.views().count(), 2);
-    let areas: Vec<_> = e.h.app.editor.tree.views().map(|(v, _)| v.area).collect();
-    assert_eq!(areas[0].y, areas[1].y, "side by side: {areas:?}");
-    assert_ne!(areas[0].x, areas[1].x);
     assert!(!e.h.app.editor.debug.is_focused(), "the view has the focus");
     assert_eq!(memory(&e.h.app).base, 0x1010);
     assert_eq!(memory(&e.h.app).label, "p");
-    let (view, doc) = current_ref!(e.h.app.editor);
-    assert!(doc.memory().is_some(), "the memory view is the focused one");
-    let cursor = doc.hex().unwrap().cursor(view.id);
+    let (view, hex) = focused_hex(&e.h.app);
+    assert!(hex.buffer.is_memory(), "the memory view is the focused one");
+    let cursor = hex.buffer.cursor(view.id);
     assert_eq!(cursor.offset, 0x1010);
     let per_row =
-        Rows::new(cursor.layout, doc.hex().unwrap().len(), view.area.width).bytes_per_row as u64;
-    let rows_shown = view.area.height as u64 - 1;
+        Rows::new(cursor.layout, hex.buffer.len(), view.inner_area().width).bytes_per_row as u64;
+    let rows_shown = view.inner_area().height as u64;
     let from_top = (cursor.offset - cursor.top) / per_row;
     assert!(
         from_top.abs_diff(rows_shown / 2) <= 1,
@@ -410,7 +449,6 @@ async fn values_with_a_memory_reference_get_a_badge_and_m_opens_their_memory() -
         .await;
     assert!(cursor_is(&e.h.app, 0x1010));
     assert_eq!(memory_views(&e.h.app), 1);
-    assert_eq!(e.h.app.editor.tree.views().count(), 2);
     e.h.finish().await
 }
 
@@ -421,8 +459,7 @@ async fn debug_memory_at_an_address_opens_there_and_reuses_the_view() -> anyhow:
     e.open(0x1234).await?;
     assert!(cursor_is(&e.h.app, 0x1234));
     assert_eq!(memory(&e.h.app).base, 0x1234);
-    let (view, doc) = current_ref!(e.h.app.editor);
-    assert_eq!(doc.hex().unwrap().cursor(view.id).offset, 0x1234);
+    assert_eq!(focused_offset(&e.h.app), 0x1234);
     e.has_byte(0x1234, Cell::Byte(initial(0x1234))).await;
     // the first request finds the address the reference means, then the pages come
     let reads = e.fake.memory_reads();
@@ -435,14 +472,13 @@ async fn debug_memory_at_an_address_opens_there_and_reuses_the_view() -> anyhow:
     assert_eq!(
         e.h.app
             .editor
-            .documents()
-            .filter(|d| d.memory().is_some())
+            .hex_screens()
+            .filter(|(_, view)| view.buffer.is_memory())
             .count(),
         1
     );
     assert_eq!(memory_views(&e.h.app), 1);
-    let (view, doc) = current_ref!(e.h.app.editor);
-    assert_eq!(doc.hex().unwrap().cursor(view.id).offset, 0x1800);
+    assert_eq!(focused_offset(&e.h.app), 0x1800);
     e.has_byte(0x1800, Cell::Byte(initial(0x1800))).await;
     e.h.finish().await
 }
@@ -454,7 +490,7 @@ async fn debug_memory_of_an_expression_evaluates_it_in_the_current_frame() -> an
     // a value that doesn't point to memory
     e.h.keys(":debug-memory<space>x<ret>").await?;
     e.says("x doesn't point to memory").await;
-    assert!(memory_doc(&e.h.app).is_none());
+    assert!(memory_view(&e.h.app).is_none());
     // one that does
     e.h.keys(":debug-memory<space>p<ret>").await?;
     e.cursor_at(0x1010).await;
@@ -492,10 +528,10 @@ async fn offsets_are_absolute_addresses_of_16_hex_digits() -> anyhow::Result<()>
         screen_has(app, "0x0000000000001010")
     })
     .await;
-    let (view, doc) = current_ref!(e.h.app.editor);
-    let hex = doc.hex().unwrap();
+    let (view, hex) = focused_hex(&e.h.app);
+    let hex = &hex.buffer;
     assert_eq!(hex.len(), u64::MAX);
-    let rows = Rows::new(hex.cursor(view.id).layout, hex.len(), view.area.width);
+    let rows = Rows::new(hex.cursor(view.id).layout, hex.len(), view.inner_area().width);
     assert_eq!(rows.offset_digits, 16);
     assert_eq!(rows.bytes_per_row, 16);
     // 16 bytes a row, from the row of the cursor
@@ -522,8 +558,7 @@ async fn gg_and_ge_are_refused_in_memory() -> anyhow::Result<()> {
             "memory has no first or last byte",
             "{keys}"
         );
-        let (view, doc) = current_ref!(e.h.app.editor);
-        assert_eq!(doc.hex().unwrap().cursor(view.id).offset, 0x1234, "{keys}");
+        assert_eq!(focused_offset(&e.h.app), 0x1234, "{keys}");
     }
     e.h.finish().await
 }
@@ -565,8 +600,8 @@ async fn only_the_pages_drawn_are_read_a_page_at_a_time() -> anyhow::Result<()> 
         .memory_reads()
         .iter()
         .all(|(_, count)| *count == 1 || *count == 1024));
-    let (view, _) = current_ref!(e.h.app.editor);
-    let shown = (view.area.height as u64 - 1) * 16;
+    let (view, _) = focused_hex(&e.h.app);
+    let shown = view.inner_area().height as u64 * 16;
     assert!(first.len() as u64 * 1024 >= shown, "the screen is covered");
 
     // the cache has them: more drawing reads nothing, scrolling reads the new pages
@@ -722,7 +757,7 @@ async fn while_running_the_view_keeps_the_last_stops_bytes_and_says_so() -> anyh
     e.open(0x1010).await?;
     e.has_byte(0x1010, Cell::Byte(16)).await;
     {
-        let (_, doc) = current_ref!(e.h.app.editor);
+        let doc = memory_view(&e.h.app).unwrap();
         assert_eq!(debug::memory::note(&e.h.app.editor, doc), None);
     }
 
@@ -735,7 +770,7 @@ async fn while_running_the_view_keeps_the_last_stops_bytes_and_says_so() -> anyh
     let reads = e.fake.memory_reads().len();
     e.h.pump_for(std::time::Duration::from_millis(300)).await;
     {
-        let doc = memory_doc(&e.h.app).unwrap();
+        let doc = memory_view(&e.h.app).unwrap();
         assert_eq!(
             debug::memory::note(&e.h.app.editor, doc).as_deref(),
             Some("running · the last stop's bytes")
@@ -759,7 +794,7 @@ async fn while_running_the_view_keeps_the_last_stops_bytes_and_says_so() -> anyh
     // the stop reads what is there now
     e.settled(2).await;
     e.has_byte(0x1010, Cell::Changed(0x55)).await;
-    let doc = memory_doc(&e.h.app).unwrap();
+    let doc = memory_view(&e.h.app).unwrap();
     assert_eq!(debug::memory::note(&e.h.app.editor, doc), None);
     e.h.finish().await
 }
@@ -886,9 +921,9 @@ async fn a_failed_write_is_an_error_and_keeps_the_overwrite() -> anyhow::Result<
     assert_eq!(e.fake.memory_writes().len(), 1);
     assert_eq!(e.fake.memory_at(0x1010, 2), [None, None]);
     // still overwritten, not written
-    let doc = memory_doc(&e.h.app).unwrap();
+    let doc = memory_view(&e.h.app).unwrap();
     assert_eq!(
-        doc.hex().unwrap().edit_runs(None),
+        doc.buffer.edit_runs(None),
         [(0x1010, vec![0xab, 0xcd])]
     );
     assert_eq!(cells(&e.h.app, 0x1010, 2), bytes(&[0xab, 0xcd]));
@@ -908,8 +943,8 @@ async fn an_adapter_that_cannot_write_memory_refuses_overwriting() -> anyhow::Re
     assert!(!memory(&e.h.app).can_write);
     e.h.keys("i").await?;
     e.says("this debugger (fake) can't write memory").await;
-    let (view, doc) = current_ref!(e.h.app.editor);
-    assert!(!doc.hex().unwrap().cursor(view.id).overwrite);
+    let (view, hex) = focused_hex(&e.h.app);
+    assert!(!hex.buffer.cursor(view.id).overwrite);
     // the typed keys are the view's, which reads
     e.h.keys("ab").await?;
     e.h.pump_for(std::time::Duration::from_millis(100)).await;
@@ -926,8 +961,8 @@ async fn refused(e: &mut Env, why: &str) -> anyhow::Result<()> {
     e.h.errors.clear();
     e.h.keys("i").await?;
     e.says(why).await;
-    let (view, doc) = current_ref!(e.h.app.editor);
-    assert!(!doc.hex().unwrap().cursor(view.id).overwrite, "{why}");
+    let (view, hex) = focused_hex(&e.h.app);
+    assert!(!hex.buffer.cursor(view.id).overwrite, "{why}");
     e.h.keys(":w<ret>").await?;
     command_error(e, "write", why).await;
     Ok(())
@@ -959,8 +994,8 @@ async fn writes_are_refused_while_running_and_in_rewind() -> anyhow::Result<()> 
     e.editor("p").await?;
     e.h.keys("i").await?;
     e.h.until("overwriting", |app| {
-        let (view, doc) = current_ref!(app.editor);
-        doc.hex().unwrap().cursor(view.id).overwrite
+        let (view, hex) = focused_hex(app);
+        hex.buffer.cursor(view.id).overwrite
     })
     .await;
     e.h.keys("<esc>").await?;
@@ -969,7 +1004,7 @@ async fn writes_are_refused_while_running_and_in_rewind() -> anyhow::Result<()> 
     e.editor("l").await?;
     e.h.until("running", |app| {
         matches!(app.editor.debug.status, Status::Running)
-            && memory_doc(app)
+            && memory_view(app)
                 .and_then(|doc| debug::memory::note(&app.editor, doc))
                 .is_some_and(|note| note.starts_with("running"))
     })
@@ -1044,14 +1079,14 @@ async fn writes_are_refused_while_playing_and_fast_forwarding() -> anyhow::Resul
 
 /// The rows the focused memory view shows: (first byte shown, its height in bytes).
 fn shown(app: &Application) -> (u64, u64) {
-    let (view, doc) = current_ref!(app.editor);
-    let hex = doc.hex().unwrap();
+    let (view, hex) = focused_hex(app);
+    let hex = &hex.buffer;
     let cursor = hex.cursor(view.id);
-    let rows = Rows::new(cursor.layout, hex.len(), view.area.width);
+    let rows = Rows::new(cursor.layout, hex.len(), view.inner_area().width);
     let per_row = rows.bytes_per_row as u64;
     (
         rows.row(cursor.top) * per_row,
-        (view.area.height as u64 - 1) * per_row,
+        view.inner_area().height as u64 * per_row,
     )
 }
 
@@ -1090,7 +1125,7 @@ async fn every_stop_records_the_window_of_each_memory_view_with_a_margin() -> an
     assert!(last_windows(&e.h.app).is_empty(), "no memory view yet");
     e.open(0x12000).await?;
     e.has_byte(0x12000, Cell::Byte(original(0x12000))).await;
-    let doc = memory_doc(&e.h.app).unwrap().id();
+    let doc = memory_screen(&e.h.app).unwrap();
     let (top, height) = shown(&e.h.app);
     assert!(height + 1024 <= 4096);
 
@@ -1098,7 +1133,7 @@ async fn every_stop_records_the_window_of_each_memory_view_with_a_margin() -> an
     let windows = last_windows(&e.h.app);
     assert_eq!(windows.len(), 1);
     let window = &windows[0];
-    assert_eq!(window.doc, doc);
+    assert_eq!(window.screen, doc);
     assert_eq!(
         window.start,
         top - 512,
@@ -1166,7 +1201,7 @@ async fn rewind_shows_the_recorded_bytes_and_never_live_memory() -> anyhow::Resu
     // what is shown is all in the window
     assert!(!screen_has(&e.h.app, "··"));
     {
-        let doc = memory_doc(&e.h.app).unwrap();
+        let doc = memory_view(&e.h.app).unwrap();
         let note = debug::memory::note(&e.h.app.editor, doc).unwrap();
         assert!(note.ends_with(" recorded at this stop"), "{note}");
         assert!(!note.starts_with("not recorded"), "{note}");
@@ -1200,7 +1235,7 @@ async fn rewind_shows_the_recorded_bytes_and_never_live_memory() -> anyhow::Resu
         "not live memory"
     );
     {
-        let doc = memory_doc(&e.h.app).unwrap();
+        let doc = memory_view(&e.h.app).unwrap();
         let note = debug::memory::note(&e.h.app.editor, doc).unwrap();
         assert_eq!(note, "not recorded at this stop");
     }
@@ -1244,7 +1279,7 @@ async fn opening_memory_in_rewind_is_refused() -> anyhow::Result<()> {
     assert_eq!(status(&e.h.app), why);
     e.panel("jjM").await?;
     assert_eq!(status(&e.h.app), why);
-    assert!(memory_doc(&e.h.app).is_none());
+    assert!(memory_view(&e.h.app).is_none());
     e.h.finish().await
 }
 

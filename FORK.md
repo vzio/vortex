@@ -142,7 +142,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Terminals | `vortex-terminal/` (the shell, pty and emulator, OSC 133 and 7, the command line report, bash/zsh integration, the snapshot of the lines), `vortex-view/src/terminal.rs` (the terminals' state, `[editor.terminal]`), `vortex-view/src/screen.rs` (screen documents, the window for documents, showing and hiding screens), the tree's shares and places in `vortex-view/src/tree.rs`, `vortex-term/src/screens.rs` (what each screen kind draws and takes), `vortex-term/src/terminal/` (`window.rs` starting, showing and closing terminals, `:sh`, the `vx` requests; `modes.rs` the keys of the three modes, view mode, prompts; `edit.rs` the command line in a buffer; `render.rs` drawing; `mouse.rs` the mouse; `input.rs` the encoding of keys, mouse and paste; `shim.rs` the `vx` shim; `phosphor.rs` the filter), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
 | API browser (in progress) | `vortex-term/src/api/` (`mod.rs` the browser: the tree, its tasks and their cancellation; `load.rs` the providers; `node.rs` the nodes; `temp.rs` temporary documents; `tags.rs` the tree-sitter skeleton; `picker.rs` `:api-browse`), `Client::cancellable_call` and `Client::set_config_overlay` in `vortex-lsp/src/client.rs`, `HiddenDocuments` in `vortex-lsp/src/lib.rs`, `vortex-term/tests/fake_lsp/main.rs` (a scripted fake language server), `vortex-term/tests/test/fake_lsp.rs`, `vortex-term/tests/test/api_browser.rs`, `vortex-term/tests/test/api_report.rs` (the measurements against real servers) |
-| Hex view | `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`), `vortex-term/tests/test/hex_view.rs` |
+| Hex view | `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-view/src/hex/view.rs` (`HexView`, the state of the hex screen: bytes, file, disk state; `Editor::open_hex`, `open_memory`, binary files in `Editor::open`), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`, `:w`), `vortex-term/src/screens.rs` (its arms), `vortex-term/tests/test/hex_view.rs` |
 | Dashboard | `vortex-term/src/dashboard.rs` (when it is up, its keys), `vortex-term/src/dashboard/` (`stats.rs` the background reading, `languages.rs` the line counts, `render.rs` the layout and the panels, `timeline.rs` when things move, `title.rs` the title, `vortex.rs` the vortex, `charset.rs` blocks or ASCII, `wrap.rs` long values on two rows, `snapshots/` the drawings the tests compare with), `vortex-vcs/src/git/summary.rs` (the git summary), `vortex-term/tests/test/dashboard.rs` |
 | Worktrees | `vortex-term/src/commands/worktrees.rs` (the `:worktrees` picker: its rows, columns, background jobs and `Enter`), `vortex-vcs/src/git/summary.rs` (the worktrees, missing ones flagged; `Repo::status`, the last modified time; `Repo::dated_worktrees`; `Worktree::details`), `vortex-stdx/src/time.rs` (`format_ago`), the dashboard's worktree rows and `t` in `vortex-term/src/dashboard/`, `vortex-term/tests/test/worktrees.rs` |
 | Watch mode | `vortex-view/src/watch.rs` (the session: the baseline, the files and hunks numbered in the order they changed, following, `n`/`N`, the new count), `vortex-term/src/watch.rs` (`:watch` and the other commands, the keys of the mode, reading the changed files on the watcher's thread, following, the flash, which commands are held, the mode bar's rows, the statusline element and its blinking, catching up, review (`watch_accept`, `watch_reject`, `watch_yank`), the `:watch-changes` picker), `RepoWatch::start_tapped` in `vortex-term/src/live.rs`, the session's gutter markers and review marks (`reviews`) in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/watch.rs` |
@@ -231,12 +231,9 @@ not opening a frame's missing file in `handlers/dap.rs`; the time-per-line decor
 `capabilities` in `DebugAdapterConfig` (`vortex-core`); the step requests' `singleThread` and
 granularity, paged `variables`, the configured capabilities and the arrival time of `stopped`
 events in `vortex-dap`; `supportsSingleThreadExecutionRequests` and `SteppingGranularity` in
-`vortex-dap-types`. Memory in the hex view adds: `Document::open_memory`, the memory's name in
-`display_name` and `save_impl` refusing it in `vortex-view/src/document.rs`; `in_source_view` in
-`handlers/dap.rs` (a stop moves the source in another view than a memory view); reading memory
-after each frame, `Esc` going first to a hex view that overwrites or selects, and the hex view
-leaving its keys to an open sticky menu, in `ui/editor.rs`; `:debug-memory` and `:w` writing memory
-in `typed.rs`; a name for buffers without a path and the memory note in `ui/statusline.rs`;
+`vortex-dap-types`. Memory in the hex view adds: `in_source_view` in `handlers/dap.rs` (a stop
+moves the source in the window for documents, not in a screen); reading memory after each frame
+in `ui/editor.rs`; `:debug-memory` and `:w` writing memory in `typed.rs`;
 `readMemory`/`writeMemory`, `supportsMemoryReferences` and `supportsMemoryEvent` in `vortex-dap`
 and `vortex-dap-types`; a `capabilities` event merged into the capabilities instead of replacing
 them, in `vortex-term/src/debug/session.rs`. The engine adds: `stopped` events going through the
@@ -277,16 +274,13 @@ handler dropping hidden documents' diagnostics and the configuration answer in
 `commands/lsp.rs`; `autotests = false` and the test targets listed in `vortex-term/Cargo.toml`, for
 the fake server's binary.
 
-The hex view changes core files: the `hex` field of `Document` and what it changes there
-(`open_hex`, `enter_hex`/`leave_hex`, `apply` refusing transactions, `is_modified`, `save_impl`
-writing in place, `disk_change` and `reload`, `remove_view`) and `DocumentSavedEvent::hex_written`
-in `vortex-view/src/document.rs`; binary files opening with `open_hex` in `Editor::open`
-(`vortex-view/src/editor.rs`); `is_binary`, moved from `vortex-term/src/lib.rs` to
-`vortex_view::hex`; the key, mouse, drawing and cursor hooks in `ui/editor.rs`
-(`render_view_frame` is the border and statusline the hex view shares); the mode, position and
-other elements in `ui/statusline.rs`; `:hex`, and `:goto`/`:0x…` going to an offset, in
-`typed.rs`; the write message in `application.rs`; the hex preview of binary files in
-`ui/picker.rs`; the blame request skipping it in `handlers/blame.rs`; `ui.hex.*` in `theme.toml`.
+The hex view is a screen, so `Document` knows nothing of it. It changes core files: binary files
+opening a hex screen in `Editor::open` (`vortex-view/src/editor.rs`, with `leave_screen_for_text`
+shared with `switch`); `is_binary`, moved from `vortex-term/src/lib.rs` to `vortex_view::hex`; its
+arms in `vortex-term/src/screens.rs` (drawing, keys, mouse, mode, statusline, kept in history
+unless bytes are unwritten); `:hex`, `:w`, `:reload`, `:q`, `:qa`, `:wa` and `:goto`/`:0x…` going to
+an offset in `typed.rs`; the check of hex screens' files in `handlers/disk.rs`; the hex preview of
+binary files in `ui/picker.rs`; `ui.hex.*` in `theme.toml`.
 
 The dashboard changes core files: the `dashboard` field of `EditorView`, its keys first in
 `handle_event`, its drawing in `render` (over the views, under the infobox and the command line)
@@ -3174,11 +3168,13 @@ deletes a byte, and it never loads the file: a file of several GB opens at once.
 ### When it appears
 
 - Opening a file that looks binary (Vortex's check: a NUL byte in its first KiB, or the signature of
-  a PDF or a PNG) shows it in the hex view, from any picker, `:open`, `gf` or the command line.
-- `:hex` shows the current file in the hex view, text files too, and `:hex` again shows it as text.
-  It shows the file on disk, so a buffer with unsaved changes must be written (or reloaded) first,
-  and going back to text is refused while overwritten bytes aren't written (`:w`, or `:reload` to
-  drop them).
+  a PDF or a PNG) shows it in the hex view, from any picker, `:open`, `gf` or the command line. The
+  view covers the window the file would open in, and `Esc` shows what the window held before
+  (a binary file is never a buffer, so there is no text of it to come back to).
+- `:hex` covers the window of the current file with its hex view, text files too, and `Esc` (or
+  `:hex` again) shows the text again. It shows the file on disk, so a buffer with unsaved changes
+  must be written (or reloaded) first, and closing the view is refused while overwritten bytes
+  aren't written (`:w`, or `:reload` to drop them).
 - The file pickers preview binary files in hex too (instead of `<Binary file>`), whatever their
   size.
 
@@ -3218,9 +3214,10 @@ deletes a byte, and it never loads the file: a file of several GB opens at once.
 | `i` | Overwrite mode (`OVR`), until `Esc` |
 | `u` `U` | Undo, redo (one step per stay in overwrite mode) |
 | `:w` | Write the overwritten bytes, in place |
+| `Esc` | Stop selecting or overwriting; with neither, close the view (refused while bytes are unwritten) |
 
 `:`, `space` and the keys with `Ctrl` or `Alt` the view doesn't use go to the keymap as in any
-buffer: `:q`, `:w`, the pickers, the windows (`Ctrl-w`), the bookmarks (`Ctrl-o`/`Ctrl-i`)... Any
+buffer: `:q`, `:w`, the pickers, the windows (`Ctrl-w`)... Any
 other character is refused in read-only mode with `read-only` (`?` lists the keys: `i` overwrites).
 
 ### Overwrite mode
@@ -3246,41 +3243,41 @@ or last written, the write is refused until `:reload` (or `:w!`).
 
 ### Statusline
 
-The mode element says `HEX RO`, `HEX OVR`, `BIN RO` or `BIN OVR` (in the colors of normal, insert
-and select mode). The position element says where the cursor is and what it is on, and the size of
-the file:
+The statusline of the hex window says `HEX RO`, `HEX OVR`, `BIN RO` or `BIN OVR` (in the colors of
+normal, insert and select mode), the file's name (`[+]` after it while bytes are overwritten and not
+written), and on the right where the cursor is and what it is on, and the size of the file:
 
 ```text
  HEX RO   image.png                          0x1A4 (420)  26 38 00100110 '&'  of 4.0 GiB
 ```
 
 That is the offset in hex and decimal, the byte in hex, decimal and bits, the character (or `\0`,
-`\t`, `\n`, `\r`), `[N B sel]` while selecting, and the size. The selection length element counts
-bytes; the elements about text (line ending, indentation, encoding, total lines) are hidden.
+`\t`, `\n`, `\r`), `[N B sel]` while selecting, the size, and how far through the file it is.
 
 ### How it lives in the editor
 
-The hex view is a mode of the document, not a separate view or component: a `Document` in the hex
-view has a `HexBuffer` (`vortex-view/src/hex.rs`) and draws its rows instead of its text. So it is a
-buffer like any other: splits (each view with its own cursor and hex or bin mode, a new split
-starting where the view it splits is), the buffer picker, `:q`, `:w`, `:bc`, history (`ga`,
-`gA`) between buffers, the modified flag.
+The hex view is a screen (`ScreenKind::Hex`, see the `screens` module), not a mode of a document: a
+window shows either a text document or a screen, and the bytes never touch a `Document`. Its state
+is a `HexView` (`vortex-view/src/hex/view.rs`): the `HexBuffer`, the file (none for memory), what
+the file looked like on disk, and the first key of a `g` sequence. `:hex` and binary files open it
+over a window (`Placement::Cover`); `Esc` (once it has stopped overwriting and dropped its
+selection) closes it, unless bytes are overwritten and not written. History (`ga`) keeps a closed
+view and shows it again, over the window it was closed in.
 
 - **The bytes are read in windows**: a `HexBuffer` holds the open file and reads what it is asked
   for, through a 64 KiB window cache, with positioned reads. Drawing reads a screen of rows; a
   search reads 1 MiB chunks. Positioned reads rather than a memory map: a file that another program
   truncates can't crash the editor (reading past its new end only returns less).
 - **Overwritten bytes** are a sparse map over the file (offset → byte), holding only the bytes that
-  differ from the file, so the buffer is modified exactly when the map isn't empty. Undo steps
-  record each byte's old and new values.
-- **A debugged program's memory** is another source of bytes for the same buffer, with the
-  addresses as offsets and pages read through the debug adapter as they are drawn: see the
-  debugger's [Memory](#memory).
-- **The text of the document** stays as it was (empty for a file opened in the hex view), and
-  `Document::apply` refuses every transaction meanwhile: the keys that reach the keymap can't
-  change it unseen. Going back to text reloads it from the file.
-- **Files changed on disk**: the check compares the modification time and size only, since hashing
-  the content (what text buffers do) would read the whole file.
+  differ from the file, so the view is modified exactly when the map isn't empty. Undo steps
+  record each byte's old and new values. `:w` writes them in place; `:q`, `:qa`, `:wq` and `:x`
+  refuse while some are unwritten (`!` forces).
+- **A debugged program's memory** is another source of bytes for the same view (a screen without
+  a file), with the addresses as offsets and pages read through the debug adapter as they are
+  drawn: see the debugger's [Memory](#memory).
+- **Files changed on disk**: the check (when the editor regains focus, and after a write) compares
+  the modification time and size only, since hashing the content (what text buffers do) would read
+  the whole file. A view without unwritten bytes reads the file again; with some, it warns once.
 
 ### Hex view theme
 

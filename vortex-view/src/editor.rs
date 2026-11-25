@@ -2479,18 +2479,12 @@ impl Editor {
         view.ensure_cursor_in_view(doc, scrolloff)
     }
 
-    pub fn switch(&mut self, id: DocumentId, mut action: Action) {
-        use crate::tree::Layout;
-
-        if !self.documents.contains_key(&id) {
-            log::error!("cannot switch to document that does not exist (anymore)");
-            return;
-        }
-
-        // from a screen's window (this fork), a document opens in the window for documents;
-        // else in the window of the screen, when the screen covers a text window (it closes);
-        // else in a new split
-        if matches!(action, Action::Replace | Action::Load) && self.is_screen_view(self.tree.focus)
+    /// From a screen's window (this fork), a document opens in the window for documents; else
+    /// in the window of the screen, when the screen covers a text window (it closes); else in a
+    /// new split (`action` becomes a split). Does nothing for the split actions, or from a text
+    /// window. Leaves the focus on the text window the document opens in.
+    pub(crate) fn leave_screen_for_text(&mut self, action: &mut Action) {
+        if matches!(*action, Action::Replace | Action::Load) && self.is_screen_view(self.tree.focus)
         {
             let focus = self.tree.focus;
             match self.document_view() {
@@ -2514,9 +2508,20 @@ impl Editor {
                         }
                     }
                 }
-                None => action = Action::VerticalSplit,
+                None => *action = Action::VerticalSplit,
             }
         }
+    }
+
+    pub fn switch(&mut self, id: DocumentId, mut action: Action) {
+        use crate::tree::Layout;
+
+        if !self.documents.contains_key(&id) {
+            log::error!("cannot switch to document that does not exist (anymore)");
+            return;
+        }
+
+        self.leave_screen_for_text(&mut action);
 
         if !matches!(action, Action::Load) {
             self.enter_normal_mode();
@@ -2682,7 +2687,15 @@ impl Editor {
         self.document_by_path(path).map(|doc| doc.id)
     }
 
-    // ??? possible use for integration tests
+    /// Opens the file at `path`, in the window `action` says.
+    ///
+    /// A binary file is shown in the hex view, a screen ([`crate::hex::HexView`]) over the window
+    /// the file would open in (`Replace`: the window [`Self::switch`] would use; the split
+    /// actions: a split of the current buffer, which the screen covers), and never becomes a
+    /// document. The result is then the document the covered window still shows under the
+    /// screen (a new scratch buffer when there was no window): a caller that moves the cursor
+    /// afterwards moves the hidden text window's, which is harmless. `Action::Load` fails for a
+    /// binary file: it has no window to load in.
     pub fn open(&mut self, path: &Path, action: Action) -> Result<DocumentId, DocumentOpenError> {
         let path = vortex_stdx::path::canonicalize(path);
         let id = self.document_id_by_path(&path);
@@ -2691,17 +2704,16 @@ impl Editor {
             id
         } else {
             // a binary file opens in the hex view (this fork), without being read
-            let mut doc = if crate::hex::file_is_binary(&path) {
-                Document::open_hex(&path, self.config.clone(), self.syn_loader.clone())?
-            } else {
-                Document::open(
-                    &path,
-                    None,
-                    true,
-                    self.config.clone(),
-                    self.syn_loader.clone(),
-                )?
-            };
+            if crate::hex::file_is_binary(&path) {
+                return self.open_binary(&path, action);
+            }
+            let mut doc = Document::open(
+                &path,
+                None,
+                true,
+                self.config.clone(),
+                self.syn_loader.clone(),
+            )?;
 
             let diagnostics =
                 Editor::doc_diagnostics(&self.language_servers, &self.diagnostics, &doc);
@@ -2711,10 +2723,8 @@ impl Editor {
                 .workspace_trust
                 .query(doc.workspace_root(), TrustQuery::Git)
                 .is_trusted();
-            if !doc.is_hex() {
-                if let Some(diff_base) = self.diff_providers.get_diff_base(&path, trust_full) {
-                    doc.set_diff_base(diff_base);
-                }
+            if let Some(diff_base) = self.diff_providers.get_diff_base(&path, trust_full) {
+                doc.set_diff_base(diff_base);
             }
             doc.set_version_control_head(
                 self.diff_providers.get_current_head_name(&path, trust_full),
