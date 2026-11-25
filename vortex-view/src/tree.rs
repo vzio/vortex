@@ -514,10 +514,12 @@ impl Tree {
 
     /// Every text window, the parked ones too, see [`Self::all_views`].
     pub fn all_views_mut(&mut self) -> impl Iterator<Item = &mut View> {
-        self.nodes.values_mut().filter_map(|node| match &mut node.content {
-            Content::View(view) => Some(view.as_mut()),
-            _ => None,
-        })
+        self.nodes
+            .values_mut()
+            .filter_map(|node| match &mut node.content {
+                Content::View(view) => Some(view.as_mut()),
+                _ => None,
+            })
     }
 
     /// The windows shown, text and screens' (this fork), with whether each has the focus.
@@ -1094,7 +1096,9 @@ impl Tree {
         let focus_parent = self.nodes[focus].parent;
         let target_parent = self.nodes[target].parent;
         let focus_pos = match &self.nodes[focus_parent].content {
-            Content::Container(container) => container.children.iter().position(|&id| id == focus)?,
+            Content::Container(container) => {
+                container.children.iter().position(|&id| id == focus)?
+            }
             _ => return None,
         };
         let target_pos = match &self.nodes[target_parent].content {

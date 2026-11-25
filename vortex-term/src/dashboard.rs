@@ -312,11 +312,7 @@ impl Component for Dashboard {
         self.render_now(cx.editor, area, surface);
     }
 
-    fn cursor(
-        &self,
-        _area: Rect,
-        _editor: &Editor,
-    ) -> (Option<vortex_core::Position>, CursorKind) {
+    fn cursor(&self, _area: Rect, _editor: &Editor) -> (Option<vortex_core::Position>, CursorKind) {
         (None, CursorKind::Hidden)
     }
 

@@ -109,7 +109,11 @@ fn exited(editor: &mut Editor, screen: ScreenId) {
         return;
     }
     let was_focused = super::modes::focused(editor).is_some_and(|(focused, _)| focused == screen);
-    if let Some(doc) = editor.terminals.get_mut(screen).and_then(|t| t.lines.take()) {
+    if let Some(doc) = editor
+        .terminals
+        .get_mut(screen)
+        .and_then(|t| t.lines.take())
+    {
         editor.uncover_document(doc);
     }
     editor.close_screen(screen);

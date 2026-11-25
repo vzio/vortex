@@ -76,7 +76,10 @@ impl ScreenKind {
     /// panel, windows of their own, may not (a screen opened from them goes to the window for
     /// documents).
     pub fn can_be_covered(self) -> bool {
-        matches!(self, ScreenKind::Hex | ScreenKind::Diff | ScreenKind::Markdown)
+        matches!(
+            self,
+            ScreenKind::Hex | ScreenKind::Diff | ScreenKind::Markdown
+        )
     }
 }
 
@@ -95,6 +98,9 @@ pub struct Screen {
     /// The place of history it was shown again from, refilled when it closes again, so that
     /// walking through history finds it there.
     pub place: Option<crate::history::Stash>,
+    /// The window came to it by a jump (a page's link followed to another page): going back
+    /// leaves it and its source together, for the place the jump left.
+    pub arrived: bool,
 }
 
 impl Screen {
@@ -106,6 +112,7 @@ impl Screen {
             state: None,
             source: None,
             place: None,
+            arrived: false,
         }
     }
 
@@ -150,6 +157,9 @@ impl fmt::Debug for Screen {
 pub struct Screens {
     list: BTreeMap<ScreenId, Screen>,
     next: NonZeroUsize,
+    /// The focused screen lends the command running now to the text window it covers (a
+    /// page's text commands run on its source at the reading line).
+    pub lent: Option<ScreenId>,
 }
 
 impl Default for Screens {
@@ -157,6 +167,7 @@ impl Default for Screens {
         Self {
             list: BTreeMap::new(),
             next: NonZeroUsize::MIN,
+            lent: None,
         }
     }
 }
@@ -300,7 +311,8 @@ impl Editor {
     /// terminal's in view mode), which the buffer picker, the buffer cycling and the window for
     /// documents leave out.
     pub fn is_buffer(&self, doc: DocumentId) -> bool {
-        self.document(doc).is_some_and(|doc| doc.lines_of().is_none())
+        self.document(doc)
+            .is_some_and(|doc| doc.lines_of().is_none())
     }
 
     /// The window for documents: a text window shown, of a buffer of its own: the focused one,
@@ -318,15 +330,12 @@ impl Editor {
         if usable(focus) {
             return Some(focus);
         }
-        self.tree
-            .last_text()
-            .filter(|&id| usable(id))
-            .or_else(|| {
-                self.tree
-                    .traverse()
-                    .map(|(id, _)| id)
-                    .find(|&id| usable(id))
-            })
+        self.tree.last_text().filter(|&id| usable(id)).or_else(|| {
+            self.tree
+                .traverse()
+                .map(|(id, _)| id)
+                .find(|&id| usable(id))
+        })
     }
 
     /// Runs `f` with the focus in the window for documents, and gives the focus back to the
@@ -394,9 +403,7 @@ impl Editor {
         let id = match placement {
             Placement::Cover => match self.window_to_cover() {
                 Some(covered) => self.tree.cover(covered, window),
-                None if self.tree.is_visible(from) => {
-                    self.tree.split(window, Layout::Vertical)
-                }
+                None if self.tree.is_visible(from) => self.tree.split(window, Layout::Vertical),
                 None => self.tree.split_root(window, Layout::Vertical, true, None),
             },
             Placement::Edge {

@@ -469,3 +469,64 @@ async fn a_theme_without_either_scope_leaves_the_screen_alone() {
     session.keys(":debug-mode<ret>").await;
     assert_eq!(background(&session), plain);
 }
+
+// ---------------------------------------------------------------------------------------------
+// A screen focused in a mode
+
+/// Opens `notes.md` in `dir`, rendered: a page focused over its window.
+async fn a_page(session: &mut Session, dir: &Path) {
+    let path = dir.join("notes.md");
+    std::fs::write(&path, "# Notes\n\nSome text.\n").unwrap();
+    session
+        .keys(&format!(":open {}<ret>", path.display()))
+        .await;
+    session.keys(":markdown-view<ret>").await;
+    assert!(session
+        .app
+        .editor
+        .is_screen_view(session.app.editor.tree.focus));
+}
+
+/// With a screen focused, a mode and its screen stay atomic: `Esc` closes the screen first and
+/// the window shows the buffer again, the mode on, with its screen; the next `Esc` leaves the
+/// mode and its screen together (the bug: `Esc` left the mode and kept its screen).
+async fn esc_closes_the_screen_then_leaves(session: &mut Session, mode: modes::Mode, how: &str) {
+    assert_eq!(modes::current(&session.app.editor), Some(mode), "{how}");
+    assert!(session
+        .app
+        .editor
+        .is_screen_view(session.app.editor.tree.focus));
+    session.keys("<esc>").await;
+    assert!(
+        !session
+            .app
+            .editor
+            .is_screen_view(session.app.editor.tree.focus),
+        "{how}: Esc closes the page"
+    );
+    assert_eq!(modes::current(&session.app.editor), Some(mode), "{how}");
+    assert!(on_mode_screen(session), "{how}: {:#?}", session.rows());
+    session.keys("<esc>").await;
+    assert_editing(session, how).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn esc_on_a_screen_in_debug_mode_closes_the_screen_and_then_leaves_the_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session();
+    a_page(&mut session, dir.path()).await;
+    session.keys(":debug-mode<ret>").await;
+    esc_closes_the_screen_then_leaves(&mut session, modes::Mode::Debug, "debug mode").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn esc_on_a_screen_in_watch_mode_closes_the_screen_and_then_leaves_the_mode() {
+    let Some(_) = enter("esc_on_a_screen_in_watch_mode_closes_the_screen_and_then_leaves_the_mode")
+    else {
+        return;
+    };
+    let mut session = session();
+    a_page(&mut session, &cwd()).await;
+    session.keys(":watch<ret>").await;
+    esc_closes_the_screen_then_leaves(&mut session, modes::Mode::Watch, "watch mode").await;
+}

@@ -61,6 +61,7 @@ pub fn step(
     }
     let _ = compositor;
     let focus = editor.tree.focus;
+    let mut here = None;
     if editor.is_screen_view(focus) {
         if editor.tree.under(focus).is_none() {
             editor.set_status("A screen's window has no history");
@@ -71,13 +72,22 @@ pub fn step(
             .get(editor.tree.text_focus())
             .history
             .is_walking();
-        crate::screens::close(editor, focus);
-        if !walking {
-            // back to what the window showed: that was the step
-            return step == Step::Back;
+        let arrived = editor.focused_screen().is_some_and(|screen| screen.arrived);
+        if arrived && !walking && step == Step::Back {
+            // came by a jump: back past it and its source, to the place the jump left; the walk
+            // starts from the screen, so going forward shows it again
+            if let Some((_, screen)) = crate::screens::leave(editor, focus) {
+                here = Some(Place::Screen(vortex_view::history::Screen::stashed(screen)));
+            }
+        } else {
+            crate::screens::close(editor, focus);
+            if !walking {
+                // back to what the window showed: that was the step
+                return step == Step::Back;
+            }
         }
     }
-    let here = editor.place();
+    let here = here.unwrap_or_else(|| editor.place());
     match editor.history_step(step, count, here) {
         Ok(place) => {
             show(editor, place);

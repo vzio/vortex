@@ -123,7 +123,6 @@ pub enum Place {
     Screen(Screen),
 }
 
-
 /// The places a view jumped away from, oldest first, and where a walk through them is.
 #[derive(Debug, Clone, Default)]
 pub struct History {
@@ -462,9 +461,9 @@ impl Editor {
         };
         // shown again from a place still in the history: back there, nothing new
         if let Some(stash) = screen.place.take() {
-            let there = window.history.places().any(|place| {
-                matches!(place, Place::Screen(kept) if Rc::ptr_eq(&kept.stash, &stash))
-            });
+            let there = window.history.places().any(
+                |place| matches!(place, Place::Screen(kept) if Rc::ptr_eq(&kept.stash, &stash)),
+            );
             if there {
                 *stash.borrow_mut() = Some(screen);
                 return;
@@ -473,7 +472,9 @@ impl Editor {
         if self.history_paused {
             return;
         }
-        window.history.push(Place::Screen(Screen::stashed(screen)), false);
+        window
+            .history
+            .push(Place::Screen(Screen::stashed(screen)), false);
     }
 }
 
@@ -504,7 +505,9 @@ mod tests {
     }
 
     fn screen(kind: ScreenKind) -> Place {
-        Place::Screen(Screen::stashed(crate::screen::Screen::new(kind, "a screen")))
+        Place::Screen(Screen::stashed(crate::screen::Screen::new(
+            kind, "a screen",
+        )))
     }
 
     #[test]

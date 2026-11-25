@@ -99,7 +99,10 @@ fn cursor_style(editor: &Editor, primary: bool) -> Style {
 /// Draws a terminal's lines in view mode, `doc` in its text window `view` over the terminal's:
 /// in the colors they had. Returns whether `doc` is a terminal's lines.
 pub fn render_lines(editor: &Editor, doc: &Document, view: &View, surface: &mut Surface) -> bool {
-    let Some(terminal) = doc.lines_of().and_then(|screen| editor.terminals.get(screen)) else {
+    let Some(terminal) = doc
+        .lines_of()
+        .and_then(|screen| editor.terminals.get(screen))
+    else {
         return false;
     };
     let Some(snapshot) = &terminal.snapshot else {

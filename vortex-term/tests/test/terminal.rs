@@ -727,11 +727,11 @@ fn config_at(shell: &[&str], position: TerminalPosition, size: u16) -> Config {
 }
 
 fn windows(app: &Application) -> usize {
-    app.editor.tree.views().count()
+    app.editor.tree.windows().count()
 }
 
 fn area_of(app: &Application, view: ViewId) -> Rect {
-    app.editor.tree.get(view).area
+    app.editor.tree.window(view).expect("a window").area()
 }
 
 fn near(actual: u16, expected: f64, tolerance: f64) -> bool {
@@ -1081,7 +1081,12 @@ async fn splits_resize_the_shell() -> anyhow::Result<()> {
     let first_view = h.app.editor.tree.focus;
     let _ = first;
     let inner_size = |app: &Application| {
-        let inner = app.editor.tree.screen_view(first_view).unwrap().inner_area();
+        let inner = app
+            .editor
+            .tree
+            .screen_view(first_view)
+            .unwrap()
+            .inner_area();
         (inner.height, inner.width)
     };
     let shell_size = |app: &Application| {
@@ -1406,11 +1411,7 @@ async fn e_refuses_while_a_program_runs() -> anyhow::Result<()> {
     );
     assert_eq!(windows(&h.app), windows_before, "no buffer opened");
     assert!(focused_terminal(&h.app).is_some());
-    assert!(h
-        .app
-        .editor
-        .documents()
-        .all(|d| d.path().is_none()));
+    assert!(h.app.editor.documents().all(|d| d.path().is_none()));
     // let go of the program
     h.keys("i<C-c>").await?;
     h.finish().await

@@ -3511,12 +3511,13 @@ fn buffer_picker(cx: &mut Context) {
             }
             flags.into()
         }),
-        PickerColumn::new("path", |meta: &BufferMeta, config: &PathStyleConfig| {
-            match &meta.name {
+        PickerColumn::new(
+            "path",
+            |meta: &BufferMeta, config: &PathStyleConfig| match &meta.name {
                 Some(name) => name.as_str().into(),
                 None => config.stylize(meta.path.as_deref(), None),
-            }
-        }),
+            },
+        ),
     ];
 
     let initial_cursor = if cx
@@ -6407,27 +6408,29 @@ fn vsplit_new(cx: &mut Context) {
 }
 
 fn wclose(cx: &mut Context) {
-    if cx.editor.tree.views().count() == 1 {
+    // the last window (this fork: of either kind)
+    if cx.editor.tree.windows().count() == 1 {
         if let Err(err) = typed::buffers_remaining_impl(cx.editor) {
             cx.editor.set_error(err.to_string());
             return;
         }
     }
-    let view_id = view!(cx.editor).id;
-    // close current split
-    cx.editor.close(view_id);
+    // close the focused window, a screen's too (this fork), with what it covers
+    let focus = cx.editor.tree.focus;
+    cx.editor.close(focus);
 }
 
 fn wonly(cx: &mut Context) {
-    let views = cx
+    // every other window, of either kind (this fork)
+    let windows = cx
         .editor
         .tree
-        .views()
-        .map(|(v, focus)| (v.id, focus))
+        .windows()
+        .map(|(window, focus)| (window.id(), focus))
         .collect::<Vec<_>>();
-    for (view_id, focus) in views {
-        if !focus {
-            cx.editor.close(view_id);
+    for (id, focus) in windows {
+        if !focus && cx.editor.tree.contains(id) {
+            cx.editor.close(id);
         }
     }
 }

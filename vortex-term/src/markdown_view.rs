@@ -37,10 +37,9 @@ use vortex_core::Selection;
 use vortex_view::document::Mode;
 use vortex_view::editor::{Action, MarkdownViewStartup};
 use vortex_view::graphics::{Rect, Style};
-use vortex_view::history::Jump;
-use vortex_view::screen::{Placement, Screen, ScreenKind};
 use vortex_view::input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use vortex_view::keyboard::{KeyCode, KeyModifiers};
+use vortex_view::screen::{Placement, Screen, ScreenKind};
 use vortex_view::view::ViewPosition;
 use vortex_view::{Document, DocumentId, Editor, ViewId};
 
@@ -202,6 +201,16 @@ impl MarkdownView {
             .tree
             .try_get(self.view)
             .is_some_and(|view| view.doc == self.doc)
+    }
+
+    /// Whether it stays after a text command ran on its source: still covering it, in normal
+    /// mode, the text unedited (a reload from disk keeps it, and the page follows).
+    fn stays(&self, editor: &Editor) -> bool {
+        editor.mode() == Mode::Normal
+            && self.covers(editor)
+            && editor
+                .document(self.doc)
+                .is_some_and(|doc| doc.version() == self.version || !doc.is_modified())
     }
 
     /// Shown again over the text window `view` (history).
@@ -936,7 +945,13 @@ impl MarkdownView {
     }
 
     /// Draws the page over `area` (its window), its last row the status row.
-    pub fn render(&mut self, editor: &mut Editor, area: Rect, surface: &mut Surface, focused: bool) {
+    pub fn render(
+        &mut self,
+        editor: &mut Editor,
+        area: Rect,
+        surface: &mut Surface,
+        focused: bool,
+    ) {
         self.area = area;
         self.lay_out(editor);
         self.apply_search();
@@ -1225,7 +1240,10 @@ fn open_link(
     path: PathBuf,
     fragment: Option<String>,
 ) {
-    let opened = editor.teleport(Jump::Switch, |editor| editor.open(&path, Action::Replace));
+    // the page it leaves is the place: history keeps it, and the window goes on to the file
+    let page = editor.tree.focus;
+    crate::screens::close(editor, page);
+    let opened = editor.without_history(|editor| editor.open(&path, Action::Replace));
     if let Err(err) = opened {
         editor.set_error(format!("Failed to open {}: {err}", path.display()));
         return;
@@ -1236,7 +1254,13 @@ fn open_link(
             Some(anchor) if !anchor.is_empty() => Start::Anchor(anchor),
             _ => Start::Source,
         };
-        open(editor, start);
+        if open(editor, start) {
+            if let Some(screen) = editor.tree.focused_screen() {
+                if let Some(screen) = editor.screens.get_mut(screen) {
+                    screen.arrived = true;
+                }
+            }
+        }
     } else if let Some(line) = fragment.as_deref().and_then(fragment_line) {
         let (view, doc) = vortex_view::current!(editor);
         let text = doc.text().slice(..);
@@ -1327,12 +1351,30 @@ pub fn through(command: &MappableCommand, cx: &mut commands::Context) -> bool {
         }
         Some(CommandResult::Run) => {
             if !crate::screens::allows(cx.editor, command.name()) {
-                // a text command: on the source, synced to the reading line
-                close(cx.editor, false);
+                // a text command: the page lends it to its source, synced to the reading line
+                cx.editor.screens.lent = Some(screen);
             }
             true
         }
         None => true,
+    }
+}
+
+/// After the commands of a key (this fork): a page that lent one to its source goes when the
+/// command edited the text or left normal mode, and the window shows the source.
+pub fn after_commands(editor: &mut Editor) {
+    let Some(screen) = editor.screens.lent.take() else {
+        return;
+    };
+    if editor.tree.focused_screen() != Some(screen) {
+        return;
+    }
+    let stays = editor
+        .screens
+        .state::<MarkdownView>(screen)
+        .is_some_and(|markdown| markdown.stays(editor));
+    if !stays {
+        close(editor, false);
     }
 }
 

@@ -234,7 +234,10 @@ async fn a_breakpoint_set_before_the_launch_is_configured_and_the_stop_fills_the
     assert!(!list[0].verified);
 
     e.launch()?;
-    assert!(e.h.app.editor.debug_panel_shown(), "the panel opens at the start");
+    assert!(
+        e.h.app.editor.debug_panel_shown(),
+        "the panel opens at the start"
+    );
     assert!(!e.h.app.editor.debug_panel_focused());
     e.stopped("x = 1").await;
 
@@ -836,10 +839,16 @@ async fn focus_and_keys_of_the_panel() -> anyhow::Result<()> {
     // Esc leaves debug mode and the panel stays
     e.h.keys("<esc>").await?;
     assert!(!e.h.app.editor.debug.mode_on());
-    assert!(e.h.app.editor.debug_panel_shown(), "Esc left debug mode only");
+    assert!(
+        e.h.app.editor.debug_panel_shown(),
+        "Esc left debug mode only"
+    );
     e.h.keys("<space>G").await?;
     e.h.keys("<esc>").await?;
-    assert!(e.h.app.editor.debug_panel_shown(), "Esc left debug mode only");
+    assert!(
+        e.h.app.editor.debug_panel_shown(),
+        "Esc left debug mode only"
+    );
     // V focuses Variables
     e.h.keys("<space>GV").await?;
     assert!(e.h.app.editor.debug_panel_focused(), "V focuses Variables");
@@ -849,7 +858,10 @@ async fn focus_and_keys_of_the_panel() -> anyhow::Result<()> {
     assert!(!e.h.app.editor.debug_panel_shown(), "P toggled it off");
     e.h.keys("P").await?;
     e.h.keys("<esc>").await?;
-    assert!(e.h.app.editor.debug_panel_shown(), "Esc left debug mode only");
+    assert!(
+        e.h.app.editor.debug_panel_shown(),
+        "Esc left debug mode only"
+    );
 
     // Esc in normal mode with nothing pending hides the visible, unfocused panel
     e.h.keys("<esc>").await?;

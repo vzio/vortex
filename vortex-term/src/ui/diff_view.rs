@@ -26,8 +26,8 @@ use vortex_view::editor::Action;
 use vortex_view::graphics::{Color, CursorKind, Modifier, Rect, Style};
 use vortex_view::history::Step;
 use vortex_view::input::{Event, KeyEvent, MouseEventKind};
-use vortex_view::screen::{Placement, Screen, ScreenKind};
 use vortex_view::keyboard::{KeyCode, KeyModifiers};
+use vortex_view::screen::{Placement, Screen, ScreenKind};
 use vortex_view::{align_view, current, Align, DocumentId, Editor, Theme};
 
 use crate::commands::hunks;

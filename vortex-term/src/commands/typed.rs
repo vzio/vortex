@@ -1113,7 +1113,13 @@ fn quit_all_impl(cx: &mut compositor::Context, force: bool) -> anyhow::Result<()
 
     // close all windows, the screens' too (this fork)
     loop {
-        let Some(window) = cx.editor.tree.windows().next().map(|(window, _)| window.id()) else {
+        let Some(window) = cx
+            .editor
+            .tree
+            .windows()
+            .next()
+            .map(|(window, _)| window.id())
+        else {
             break;
         };
         cx.editor.close_window(window);

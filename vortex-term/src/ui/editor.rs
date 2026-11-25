@@ -1234,6 +1234,7 @@ impl EditorView {
             }
             KeymapResult::NotFound | KeymapResult::Cancelled(_) => return Some(key_result),
         }
+        crate::markdown_view::after_commands(cxt.editor);
         None
     }
 
@@ -1771,8 +1772,9 @@ impl Component for EditorView {
         };
 
         match event {
-            Event::Paste(_) if cx.editor.is_screen_view(cx.editor.tree.focus)
-                || crate::terminal::focused(cx.editor).is_some() =>
+            Event::Paste(_)
+                if cx.editor.is_screen_view(cx.editor.tree.focus)
+                    || crate::terminal::focused(cx.editor).is_some() =>
             {
                 // a screen (this fork) takes the paste: a terminal types it, the others have no
                 // text to put it in

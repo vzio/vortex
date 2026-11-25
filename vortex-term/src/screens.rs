@@ -101,21 +101,26 @@ pub fn with_state<T: 'static, R>(
 /// window's history, so that `ga` shows it again, lightened of what only an open screen needs
 /// (a diff's watch of the working tree).
 pub fn close(editor: &mut Editor, view: ViewId) {
-    let Some(screen) = editor.tree.screen_view(view).map(|view| view.screen) else {
-        return;
-    };
+    if let Some((shown, screen)) = leave(editor, view) {
+        editor.record_closed_screen(shown, screen);
+    }
+}
+
+/// Closes the screen of window `view` without recording it: the text window it uncovered and
+/// the screen, when history is to keep it (lightened). A window of its own hides or goes.
+pub fn leave(editor: &mut Editor, view: ViewId) -> Option<(ViewId, Screen)> {
+    let screen = editor.tree.screen_view(view)?.screen;
     if editor.tree.under(view).is_none() {
         editor.close_screen_window(view);
-        return;
+        return None;
     }
     let mut kept = editor.screens.remove(screen);
-    if let Closed::Uncovered(shown) = editor.close_screen_window(view) {
-        if let Some(mut screen) = kept.take() {
-            if editor.tree.try_get(shown).is_some() && kept_by_history(&mut screen) {
-                editor.record_closed_screen(shown, screen);
-            }
-        }
-    }
+    let Closed::Uncovered(shown) = editor.close_screen_window(view) else {
+        return None;
+    };
+    let mut screen = kept.take()?;
+    (editor.tree.try_get(shown).is_some() && kept_by_history(&mut screen))
+        .then_some((shown, screen))
 }
 
 /// Whether history keeps the closed `screen` to show it again, lightening it first.
@@ -190,11 +195,13 @@ fn with_commands<R>(
     let result = f(&mut ccx);
     let callbacks = std::mem::take(&mut ccx.callback);
     let callback: Option<compositor::Callback> = (!callbacks.is_empty()).then(|| {
-        Box::new(move |compositor: &mut Compositor, cx: &mut compositor::Context| {
-            for callback in callbacks {
-                callback(compositor, cx)
-            }
-        }) as compositor::Callback
+        Box::new(
+            move |compositor: &mut Compositor, cx: &mut compositor::Context| {
+                for callback in callbacks {
+                    callback(compositor, cx)
+                }
+            },
+        ) as compositor::Callback
     });
     (result, callback)
 }
@@ -236,13 +243,7 @@ pub fn render_statusline(editor: &Editor, view: &ScreenView, surface: &mut Surfa
     if !right.is_empty() {
         let width = right.chars().count() as u16 + 1;
         if area.width > width + (x - area.x) + name.len() as u16 {
-            surface.set_stringn(
-                area.right() - width,
-                area.y,
-                &right,
-                width as usize,
-                base,
-            );
+            surface.set_stringn(area.right() - width, area.y, &right, width as usize, base);
         }
     }
 }
@@ -370,10 +371,7 @@ fn handle_paste(editor: &mut Editor, text: &str) -> bool {
 
 /// A mouse event over a screen's window. Returns what the screen did with it: a click focuses
 /// the window, then the screen has it. `None` when it isn't over a screen.
-pub fn handle_mouse_event(
-    cx: &mut compositor::Context,
-    mouse: &MouseEvent,
-) -> Option<EventResult> {
+pub fn handle_mouse_event(cx: &mut compositor::Context, mouse: &MouseEvent) -> Option<EventResult> {
     let editor = &mut *cx.editor;
     let over = |area: Rect| {
         mouse.column >= area.x
@@ -385,7 +383,9 @@ pub fn handle_mouse_event(
         vortex_view::tree::Window::Screen(view) if over(view.area) => Some(view.screen),
         _ => None,
     });
-    if let Some(screen) = screen.filter(|&screen| editor.screens.kind(screen) == Some(ScreenKind::Diff)) {
+    if let Some(screen) =
+        screen.filter(|&screen| editor.screens.kind(screen) == Some(ScreenKind::Diff))
+    {
         use crate::compositor::Component;
         if let Some(view) = editor.view_of(screen) {
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
@@ -417,15 +417,12 @@ fn handle_mouse(editor: &mut Editor, mouse: &MouseEvent) -> bool {
             && mouse.row < area.bottom()
     };
     let Some((view, screen)) = editor.tree.windows().find_map(|(window, _)| match window {
-        vortex_view::tree::Window::Screen(view) if over(view.area) => {
-            Some((view.id, view.screen))
-        }
+        vortex_view::tree::Window::Screen(view) if over(view.area) => Some((view.id, view.screen)),
         _ => None,
     }) else {
         return false;
     };
-    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) && editor.tree.focus != view
-    {
+    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) && editor.tree.focus != view {
         editor.focus(view);
     }
     match editor.screens.kind(screen) {
@@ -434,7 +431,9 @@ fn handle_mouse(editor: &mut Editor, mouse: &MouseEvent) -> bool {
                 page.handle_mouse(mouse, editor);
             });
         }
-        Some(ScreenKind::Hex | ScreenKind::Diff | ScreenKind::DebugPanel | ScreenKind::Terminal)
+        Some(
+            ScreenKind::Hex | ScreenKind::Diff | ScreenKind::DebugPanel | ScreenKind::Terminal,
+        )
         | None => {}
     }
     true
@@ -447,6 +446,9 @@ pub fn allows(editor: &Editor, name: &str) -> bool {
     let Some(kind) = focused_kind(editor) else {
         return true;
     };
+    if editor.screens.lent.is_some() && editor.screens.lent == editor.tree.focused_screen() {
+        return true;
+    }
     if kind == ScreenKind::Terminal && crate::terminal::modes::takes(name) {
         return true;
     }

@@ -665,7 +665,6 @@ impl DebugState {
         }
         self.spectator.end_session();
         self.engine.end_session();
-
     }
 
     /// Whether the node at `path` is shown expanded.
