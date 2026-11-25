@@ -124,8 +124,12 @@ impl Session {
 /// The footer of the diff on the screen, `hunk 2/5 staged · file 1/3`: the row that starts with
 /// the hunk (the diff covers the screen).
 pub(super) fn footer_of(rows: &[String]) -> Option<String> {
+    // after the window's badge
     rows.iter()
-        .map(|row| row.trim())
+        .map(|row| {
+            let row = row.trim();
+            row.strip_prefix("DIFF").map_or(row, str::trim_start)
+        })
         .find(|row| row.starts_with("hunk ") || row.starts_with("no changes"))
         .map(str::to_string)
 }

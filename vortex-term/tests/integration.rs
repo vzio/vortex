@@ -25,6 +25,7 @@ mod test {
     mod conflicts;
     mod dashboard;
     mod debug;
+    mod editing_cost;
     mod explorer;
     #[allow(dead_code)]
     mod fake_lsp;

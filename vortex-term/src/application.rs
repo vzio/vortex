@@ -290,7 +290,8 @@ impl Application {
         Ok(app)
     }
 
-    async fn render(&mut self) {
+    #[doc(hidden)]
+    pub async fn render(&mut self) {
         if self.compositor.full_redraw {
             self.terminal.clear().expect("Cannot clear the terminal");
             self.compositor.full_redraw = false;
