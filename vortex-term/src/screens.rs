@@ -31,7 +31,10 @@ fn focused_kind(editor: &Editor) -> Option<ScreenKind> {
 /// Whether a screen of this kind draws its own status row, the last of its window (a page's
 /// position, a diff's hunks); the others get [`render_statusline`].
 fn own_status_row(kind: ScreenKind) -> bool {
-    matches!(kind, ScreenKind::Markdown | ScreenKind::Diff)
+    matches!(
+        kind,
+        ScreenKind::Markdown | ScreenKind::Diff | ScreenKind::DebugPanel
+    )
 }
 
 /// Draws the screen's window `view` (its screen and its statusline), within its area.
@@ -71,7 +74,8 @@ pub fn render(
                 |markdown, editor| markdown.render(editor, area, surface, focused),
             );
         }
-        ScreenKind::Hex | ScreenKind::Diff | ScreenKind::DebugPanel => {}
+        ScreenKind::DebugPanel => crate::debug::render(editor, area, surface),
+        ScreenKind::Hex | ScreenKind::Diff => {}
     }
     if !own_status_row(kind) {
         render_statusline(editor, view, surface, focused);
@@ -333,7 +337,25 @@ fn handle_key(cx: &mut compositor::Context, key: KeyEvent, idle: bool) -> Option
                 result => Some(result),
             }
         }
-        ScreenKind::Hex | ScreenKind::DebugPanel => None,
+        ScreenKind::DebugPanel => {
+            // in normal mode, with nothing pending; a key it doesn't take goes on to debug mode's
+            // layer and the keymap (`Space` and what follows)
+            if !idle || cx.editor.mode() != Mode::Normal {
+                return None;
+            }
+            match crate::debug::handle_key(cx.editor, key) {
+                crate::debug::Handled::No => None,
+                crate::debug::Handled::Yes => Some(EventResult::Consumed(None)),
+                crate::debug::Handled::Prompt(prompt) => {
+                    Some(EventResult::Consumed(Some(Box::new(
+                        move |compositor: &mut Compositor, _: &mut compositor::Context| {
+                            compositor.push(prompt)
+                        },
+                    ))))
+                }
+            }
+        }
+        ScreenKind::Hex => None,
     }
 }
 
@@ -482,7 +504,9 @@ fn acts_on_windows(name: &str) -> bool {
         "goto_last_accessed_file",
         "goto_last_modified_file",
         "markdown_view",
+        "markdown_view_vsplit",
         "git_diff_view",
+        "git_diff_view_vsplit",
         "line_history",
     ];
     PREFIXES.iter().any(|prefix| name.starts_with(prefix)) || NAMES.contains(&name)

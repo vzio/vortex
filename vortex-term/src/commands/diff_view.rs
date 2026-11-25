@@ -194,8 +194,9 @@ pub(crate) fn open_from_picker(cx: &mut crate::compositor::Context, change: &Fil
 }
 
 /// Opens the diff for the file of the current buffer, or, for a buffer without a file, the diff
-/// against its diff base (a `:practice` buffer).
-pub(crate) fn open_current(editor: &mut Editor, compositor: &mut Compositor) {
+/// against its diff base (a `:practice` buffer): over its window, or in a split beside it
+/// (`split`).
+pub(crate) fn open_current(editor: &mut Editor, compositor: &mut Compositor, split: bool) {
     let doc = vortex_view::doc!(editor);
     let view = match doc.path() {
         Some(path) => head_view(
@@ -211,6 +212,10 @@ pub(crate) fn open_current(editor: &mut Editor, compositor: &mut Compositor) {
     };
     match view {
         Ok(view) if view.has_changes() => {
+            if split {
+                let doc = vortex_view::doc!(editor).id();
+                editor.switch(doc, vortex_view::editor::Action::VerticalSplit);
+            }
             crate::ui::diff_view::open(compositor, editor, view)
         }
         Ok(_) => editor.set_status(format!("No changes in {}", doc_name(editor))),

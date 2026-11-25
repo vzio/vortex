@@ -118,7 +118,7 @@ async fn assert_editing(session: &mut Session, how: &str) {
     assert!(!session.app.editor.watch.is_active(), "{how}");
     assert!(!session.app.editor.debug.mode_on(), "{how}");
     assert_eq!(session.app.editor.mode(), Mode::Normal, "{how}");
-    assert!(!session.app.editor.debug.is_focused(), "{how}");
+    assert!(!session.app.editor.debug_panel_focused(), "{how}");
     assert_eq!(session.app.cursor_kind(), CursorKind::Hidden, "{how}");
     assert!(!on_mode_screen(session), "{how}: the mode's screen stayed");
 
@@ -303,14 +303,14 @@ async fn starting_watch_mode_while_debugging_leaves_debug_mode() {
         Some(modes::Mode::Debug)
     );
     session.keys("<tab>").await;
-    assert!(session.app.editor.debug.is_focused());
+    assert!(session.app.editor.debug_panel_focused());
     session.keys(":watch<ret>").await;
     assert_eq!(
         modes::current(&session.app.editor),
         Some(modes::Mode::Watch)
     );
     assert!(!session.app.editor.debug.mode_on());
-    assert!(!session.app.editor.debug.is_focused());
+    assert!(!session.app.editor.debug_panel_focused());
     assert!(on_mode_screen(&session));
     session.keys("<esc>").await;
     assert_editing(&mut session, ":watch from debug mode").await;
@@ -393,12 +393,12 @@ async fn leaving_debug(how: &str, keys: &str) {
     debug_on(&mut session, ":debug-mode<ret>").await;
     session.keys("<tab>").await;
     assert!(
-        session.app.editor.debug.is_focused(),
+        session.app.editor.debug_panel_focused(),
         "{how}: Tab focuses the debug panel"
     );
     session.keys(keys).await;
     assert_editing(&mut session, how).await;
-    assert!(!session.app.editor.debug.is_focused());
+    assert!(!session.app.editor.debug_panel_focused());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -406,10 +406,10 @@ async fn esc_in_the_focused_panel_unfocuses_it_and_then_esc_leaves_debug_mode() 
     let mut session = session();
     debug_on(&mut session, ":debug-mode<ret>").await;
     session.keys("<tab>").await;
-    assert!(session.app.editor.debug.is_focused());
+    assert!(session.app.editor.debug_panel_focused());
     session.keys("<esc>").await;
     // the panel's Esc: back to debug mode's keys, the mode is still on
-    assert!(!session.app.editor.debug.is_focused());
+    assert!(!session.app.editor.debug_panel_focused());
     assert_eq!(
         modes::current(&session.app.editor),
         Some(modes::Mode::Debug)

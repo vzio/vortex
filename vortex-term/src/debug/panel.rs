@@ -32,45 +32,40 @@ pub const FOCUS_KEY: KeyEvent = KeyEvent {
     modifiers: KeyModifiers::CONTROL,
 };
 
-/// Shows the panel.
+/// Shows the panel's window (this fork: a window of the tree, where `[editor.debugger.panel]`
+/// says), the focus staying where it is.
 pub fn show(editor: &mut Editor) {
-    editor.debug.show();
+    editor.show_debug_panel(false);
 }
 
-/// Shows or hides the panel.
+/// Shows or hides the panel's window.
 pub fn toggle(editor: &mut Editor) {
-    if editor.debug.visible {
-        editor.debug.hide();
+    if editor.debug_panel_shown() {
+        editor.hide_debug_panel();
     } else {
         show(editor);
     }
 }
 
-/// `C-g`: from the editor, shows and focuses the panel; from the panel, back to the editor.
+/// `C-g`: from the editor, shows and focuses the panel; from the panel, back to the window for
+/// documents.
 pub fn toggle_focus(editor: &mut Editor) {
-    if editor.debug.is_focused() {
-        editor.debug.unfocus();
+    if editor.debug_panel_focused() {
+        editor.unfocus_debug_panel();
     } else {
-        show(editor);
         enter(editor);
     }
 }
 
 /// Shows and focuses `section`.
 pub fn focus_section(editor: &mut Editor, section: Section) {
-    show(editor);
     enter(editor);
     editor.debug.select(section);
 }
 
-/// Focuses the panel: a screen, so going to it from the editor is a jump (this fork: history).
+/// Shows and focuses the panel's window.
 fn enter(editor: &mut Editor) {
-    if editor.debug.is_focused() {
-        return;
-    }
-    let from = editor.place();
-    editor.debug.focus();
-    editor.record_jump(vortex_view::history::Jump::Screen, from);
+    editor.show_debug_panel(true);
 }
 
 /// The rows of `section`, searched.
@@ -209,7 +204,9 @@ pub fn handle_key(editor: &mut Editor, key: KeyEvent) -> Handled {
         // the editor's: the command line, the terminal panel
         Char(':') if plain => return Handled::No,
         Char('t') if ctrl => return Handled::No,
-        Char('g') if ctrl => editor.debug.unfocus(),
+        Char('g') if ctrl => editor.unfocus_debug_panel(),
+        // its search first; then, as any screen's `Esc`, its window closes (hidden: it comes
+        // back where it was)
         Esc => {
             if editor
                 .debug
@@ -219,13 +216,13 @@ pub fn handle_key(editor: &mut Editor, key: KeyEvent) -> Handled {
             {
                 editor.debug.filters.remove(&section);
             } else {
-                editor.debug.unfocus();
+                editor.hide_debug_panel();
             }
         }
-        Char('q') if plain => editor.debug.unfocus(),
+        Char('q') if plain => editor.hide_debug_panel(),
         Tab if key.modifiers == KeyModifiers::SHIFT => editor.debug.select(section.cycle(-1)),
         // in debug mode, `Tab` brought you here and takes you back
-        Tab if plain && editor.debug.mode_on() => editor.debug.unfocus(),
+        Tab if plain && editor.debug.mode_on() => editor.unfocus_debug_panel(),
         Tab | Char('w') if plain => editor.debug.select(section.cycle(1)),
         Char('b') if plain => editor.debug.select(section.cycle(-1)),
         Char(digit @ '1'..='5') if plain => editor
@@ -690,7 +687,7 @@ fn yank(editor: &mut Editor) {
 /// elsewhere gives the keys back to the editor. Returns whether the event was the panel's.
 pub fn handle_mouse(mouse: &MouseEvent, editor: &mut Editor, compositor: &mut Compositor) -> bool {
     // a picker or a popup over the panel gets its clicks
-    if !editor.debug.visible || compositor.layer_count() > 1 {
+    if !editor.debug_panel_shown() || compositor.layer_count() > 1 {
         return false;
     }
     let area = editor.debug.area;
@@ -698,10 +695,8 @@ pub fn handle_mouse(mouse: &MouseEvent, editor: &mut Editor, compositor: &mut Co
         && mouse.column < area.right()
         && mouse.row >= area.y
         && mouse.row < area.bottom();
+    // elsewhere: the window under the mouse takes it (and the focus)
     if !over {
-        if matches!(mouse.kind, MouseEventKind::Down(_)) {
-            editor.debug.unfocus();
-        }
         return false;
     }
     match mouse.kind {
@@ -873,7 +868,7 @@ fn settings_key(editor: &mut Editor, key: KeyEvent) {
         Char('h') | Left | Char('-') => change_setting(editor, setting, -1),
         Char('g') if key.modifiers == KeyModifiers::CONTROL => {
             editor.debug.spectator.settings = None;
-            editor.debug.unfocus();
+            editor.unfocus_debug_panel();
         }
         _ => {}
     }

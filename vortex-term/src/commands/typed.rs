@@ -117,18 +117,22 @@ fn quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow
 
     // a buffer a `vx` in a terminal waits on (`git commit`), or a terminal's command line being
     // edited: close it, and go back to the terminal, rather than closing the split or the editor
-    let doc_id = view!(cx.editor).doc;
-    if cx.editor.terminals.is_awaited(doc_id) || cx.editor.terminals.edits.contains_key(&doc_id) {
-        return buffer_close_by_ids_impl(cx, &[doc_id], false);
+    let focus = cx.editor.tree.focus;
+    if let Some(doc_id) = cx.editor.tree.try_get(focus).map(|view| view.doc) {
+        if cx.editor.terminals.is_awaited(doc_id) || cx.editor.terminals.edits.contains_key(&doc_id)
+        {
+            return buffer_close_by_ids_impl(cx, &[doc_id], false);
+        }
     }
 
-    // last view and we have unsaved changes
-    if cx.editor.tree.views().count() == 1 {
+    // the last window (this fork: of either kind) and we have unsaved changes
+    if cx.editor.tree.windows().count() == 1 {
         buffers_remaining_impl(cx.editor)?
     }
 
     cx.block_try_flush_writes()?;
-    cx.editor.close(view!(cx.editor).id);
+    // the focused window, a screen's too (this fork), with what it covers
+    cx.editor.close(focus);
 
     Ok(())
 }
@@ -140,13 +144,16 @@ fn force_quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
 
     // a buffer a `vx` in a terminal waits on (`git commit`), or a terminal's command line being
     // edited: close it, and go back to the terminal, rather than closing the split or the editor
-    let doc_id = view!(cx.editor).doc;
-    if cx.editor.terminals.is_awaited(doc_id) || cx.editor.terminals.edits.contains_key(&doc_id) {
-        return buffer_close_by_ids_impl(cx, &[doc_id], true);
+    let focus = cx.editor.tree.focus;
+    if let Some(doc_id) = cx.editor.tree.try_get(focus).map(|view| view.doc) {
+        if cx.editor.terminals.is_awaited(doc_id) || cx.editor.terminals.edits.contains_key(&doc_id)
+        {
+            return buffer_close_by_ids_impl(cx, &[doc_id], true);
+        }
     }
 
     cx.block_try_flush_writes()?;
-    cx.editor.close(view!(cx.editor).id);
+    cx.editor.close(focus);
 
     Ok(())
 }
@@ -270,6 +277,14 @@ fn buffer_close(
         return Ok(());
     }
 
+    // a screen's window (this fork): its screen closes, as its buffer would (a terminal's shell
+    // is killed); what it covered is shown again
+    if args.is_empty() {
+        if let Some(screen) = cx.editor.tree.focused_screen() {
+            cx.editor.close_screen(screen);
+            return Ok(());
+        }
+    }
     let document_ids = buffer_gather_paths_impl(cx.editor, args);
     buffer_close_by_ids_impl(cx, &document_ids, false)
 }
@@ -283,6 +298,12 @@ fn force_buffer_close(
         return Ok(());
     }
 
+    if args.is_empty() {
+        if let Some(screen) = cx.editor.tree.focused_screen() {
+            cx.editor.close_screen(screen);
+            return Ok(());
+        }
+    }
     let document_ids = buffer_gather_paths_impl(cx.editor, args);
     buffer_close_by_ids_impl(cx, &document_ids, true)
 }
@@ -1090,10 +1111,12 @@ fn quit_all_impl(cx: &mut compositor::Context, force: bool) -> anyhow::Result<()
         buffers_remaining_impl(cx.editor)?;
     }
 
-    // close all views
-    let views: Vec<_> = cx.editor.tree.views().map(|(view, _)| view.id).collect();
-    for view_id in views {
-        cx.editor.close(view_id);
+    // close all windows, the screens' too (this fork)
+    loop {
+        let Some(window) = cx.editor.tree.windows().next().map(|(window, _)| window.id()) else {
+            break;
+        };
+        cx.editor.close_window(window);
     }
 
     Ok(())

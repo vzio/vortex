@@ -234,8 +234,8 @@ async fn a_breakpoint_set_before_the_launch_is_configured_and_the_stop_fills_the
     assert!(!list[0].verified);
 
     e.launch()?;
-    assert!(e.h.app.editor.debug.visible, "the panel opens at the start");
-    assert!(!e.h.app.editor.debug.focused);
+    assert!(e.h.app.editor.debug_panel_shown(), "the panel opens at the start");
+    assert!(!e.h.app.editor.debug_panel_focused());
     e.stopped("x = 1").await;
 
     let (_, args) = e.request("setBreakpoints", 1).await;
@@ -249,8 +249,8 @@ async fn a_breakpoint_set_before_the_launch_is_configured_and_the_stop_fills_the
     assert!(position("setBreakpoints") < position("configurationDone"));
 
     let app = &e.h.app;
-    assert!(app.editor.debug.visible);
-    assert!(!app.editor.debug.focused);
+    assert!(app.editor.debug_panel_shown());
+    assert!(!app.editor.debug_panel_focused());
     assert_eq!(
         app.editor.debug.status,
         Status::Stopped {
@@ -313,7 +313,7 @@ async fn an_expanded_node_is_reloaded_after_a_step_and_changes_are_marked() -> a
 
     // C-g, down to p, l
     e.h.keys("<C-g>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     e.h.keys("jjl").await?;
     e.has_row(Section::Variables, "a = 5").await;
     assert!(
@@ -350,7 +350,7 @@ async fn an_expanded_node_is_reloaded_after_a_step_and_changes_are_marked() -> a
             .any(|t| t.starts_with("x = 2"))
     })
     .await;
-    assert!(e.h.app.editor.debug.visible);
+    assert!(e.h.app.editor.debug_panel_shown());
 
     let new_p_ref = e.h.app.editor.debug.scopes[0].children.as_ref().unwrap()[1].reference;
     assert_ne!(new_p_ref, p_ref, "the fake changes references per stop");
@@ -492,7 +492,7 @@ async fn debug_eval_runs_in_the_repl_context_and_the_console_shows_it() -> anyho
     })
     .await;
     assert!(console(&e.h.app).contains(&(LineKind::Input, "nope".into())));
-    assert!(e.h.app.editor.debug.visible);
+    assert!(e.h.app.editor.debug_panel_shown());
     e.h.finish().await
 }
 
@@ -542,8 +542,8 @@ async fn running_to_the_end_ends_the_session_and_keeps_the_console() -> anyhow::
     e.h.until("the end of the session", no_sessions).await;
     // the panel hides and the status says how it ended
     let app = &e.h.app;
-    assert!(!app.editor.debug.visible);
-    assert!(!app.editor.debug.focused);
+    assert!(!app.editor.debug_panel_shown());
+    assert!(!app.editor.debug_panel_focused());
     assert_eq!(app.editor.debug.status, Status::Ended { code: Some(7) });
     assert_eq!(app.editor.debug.status.label(), "exited 7");
     assert!(no_sessions(app));
@@ -641,7 +641,7 @@ async fn a_child_session_is_configured_once_and_the_panel_follows_it() -> anyhow
     e.h.keys("<esc>").await?;
     e.h.until("the end of the session", no_sessions).await;
     let app = &e.h.app;
-    assert!(!app.editor.debug.visible);
+    assert!(!app.editor.debug_panel_shown());
     assert!(matches!(app.editor.debug.status, Status::Ended { .. }));
     assert!(e.h.errors.is_empty(), "{:?}", e.h.errors);
     e.h.finish().await
@@ -791,20 +791,20 @@ async fn focus_and_keys_of_the_panel() -> anyhow::Result<()> {
     .await?;
     e.launch()?;
     e.stopped("x = 1").await;
-    assert!(e.h.app.editor.debug.visible && !e.h.app.editor.debug.focused);
+    assert!(e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
 
     // C-g focuses, C-g again gives the keys back
     e.h.keys("<C-g>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     e.h.keys("<C-g>").await?;
-    assert!(e.h.app.editor.debug.visible && !e.h.app.editor.debug.focused);
+    assert!(e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
 
     // q gives them back too
     e.h.keys("<C-g>").await?;
     e.h.keys("q").await?;
-    assert!(e.h.app.editor.debug.visible && !e.h.app.editor.debug.focused);
+    assert!(e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
     e.h.keys("<C-g>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
 
     // j moves the panel's cursor, not the editor's
     let line = cursor_line(&e.h.app);
@@ -818,7 +818,7 @@ async fn focus_and_keys_of_the_panel() -> anyhow::Result<()> {
     // debug mode, from the editor: `l` is one playback step (the focused panel takes `l`
     // for itself), and the view follows it
     e.h.keys("<C-g>").await?;
-    assert!(!e.h.app.editor.debug.focused);
+    assert!(!e.h.app.editor.debug_panel_focused());
     e.h.keys("<space>Gl").await?;
     e.h.until("the step", |app| {
         texts(app, Section::Variables)
@@ -829,31 +829,31 @@ async fn focus_and_keys_of_the_panel() -> anyhow::Result<()> {
     assert_eq!(cursor_line(&e.h.app), 4);
     // Tab focuses the panel in debug mode, and gives the keys back
     e.h.keys("<tab>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     e.h.keys("<tab>").await?;
-    assert!(!e.h.app.editor.debug.focused);
+    assert!(!e.h.app.editor.debug_panel_focused());
 
     // Esc leaves debug mode and the panel stays
     e.h.keys("<esc>").await?;
     assert!(!e.h.app.editor.debug.mode_on());
-    assert!(e.h.app.editor.debug.visible, "Esc left debug mode only");
+    assert!(e.h.app.editor.debug_panel_shown(), "Esc left debug mode only");
     e.h.keys("<space>G").await?;
     e.h.keys("<esc>").await?;
-    assert!(e.h.app.editor.debug.visible, "Esc left debug mode only");
+    assert!(e.h.app.editor.debug_panel_shown(), "Esc left debug mode only");
     // V focuses Variables
     e.h.keys("<space>GV").await?;
-    assert!(e.h.app.editor.debug.is_focused(), "V focuses Variables");
+    assert!(e.h.app.editor.debug_panel_focused(), "V focuses Variables");
     e.h.keys("<C-g>").await?;
     e.h.keys("<esc>").await?;
     e.h.keys("<space>GP").await?;
-    assert!(!e.h.app.editor.debug.visible, "P toggled it off");
+    assert!(!e.h.app.editor.debug_panel_shown(), "P toggled it off");
     e.h.keys("P").await?;
     e.h.keys("<esc>").await?;
-    assert!(e.h.app.editor.debug.visible, "Esc left debug mode only");
+    assert!(e.h.app.editor.debug_panel_shown(), "Esc left debug mode only");
 
     // Esc in normal mode with nothing pending hides the visible, unfocused panel
     e.h.keys("<esc>").await?;
-    assert!(!e.h.app.editor.debug.visible);
+    assert!(!e.h.app.editor.debug_panel_shown());
     assert!(e.h.errors.is_empty(), "{:?}", e.h.errors);
     e.h.finish().await
 }
@@ -929,7 +929,7 @@ async fn debug_remote_starts_a_session_from_a_template() -> anyhow::Result<()> {
     assert_eq!(args["program"], "/work/prog");
     assert!(args["cwd"].is_string(), "{args}");
     assert_eq!(e.h.app.editor.debug.session_name, "fake: run");
-    assert!(e.h.app.editor.debug.visible);
+    assert!(e.h.app.editor.debug_panel_shown());
     assert!(e.h.errors.is_empty(), "{:?}", e.h.errors);
     // a second session is refused while this one runs
     e.h.keys(&command).await?;
@@ -974,9 +974,9 @@ async fn esc_in_the_focused_panel_gives_the_keys_back_and_the_panel_stays() -> a
     e.launch()?;
     e.stopped("x = 1").await;
     e.h.keys("<C-g>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     e.h.keys("<esc>").await?;
-    assert!(e.h.app.editor.debug.visible && !e.h.app.editor.debug.focused);
+    assert!(e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
     e.h.finish().await
 }
 
@@ -1006,7 +1006,7 @@ async fn question_mark_in_the_focused_panel_opens_the_key_help() -> anyhow::Resu
 
     assert!(!help_is_open(&e.h.app));
     e.h.keys("<C-g>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     assert!(!help_is_open(&e.h.app));
 
     e.h.keys("?").await?;
@@ -1020,7 +1020,7 @@ async fn question_mark_in_the_focused_panel_opens_the_key_help() -> anyhow::Resu
     // any key closes it, and the panel keeps the keys
     e.h.keys("x").await?;
     assert!(!help_is_open(&e.h.app));
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     assert!(e.h.errors.is_empty(), "{:?}", e.h.errors);
     e.h.finish().await
 }

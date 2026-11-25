@@ -154,8 +154,8 @@ impl EditorView {
     }
 
     /// The key of the layer of the fork's mode that is on (watch mode, debug mode), run before
-    /// the keymap: `None` when it isn't one of the layer's. While the debug panel has the keys, it
-    /// takes them first: [`Self::debug_layer_key`] runs after it.
+    /// the keymap: `None` when it isn't one of the layer's. A focused screen (a terminal, the
+    /// debug panel) took its own keys before.
     fn layer_key(&mut self, key: KeyEvent, cx: &mut commands::Context) -> Option<()> {
         // a screen's own keys (a terminal's normal and view modes) before the modes'
         if let Some(layer) = crate::screens::layer(cx.editor) {
@@ -166,20 +166,12 @@ impl EditorView {
         }
         let layer = if cx.editor.watch.is_active() {
             crate::keymap::Layer::Watch
-        } else if cx.editor.debug.mode_on() && !cx.editor.debug.is_focused() {
+        } else if cx.editor.debug.mode_on() {
             crate::keymap::Layer::Debug
         } else {
             return None;
         };
         self.run_layer_key(layer, key, cx, false)
-    }
-
-    /// Debug mode's key, after the focused debug panel didn't take it.
-    fn debug_layer_key(&mut self, key: KeyEvent, cx: &mut commands::Context) -> Option<()> {
-        if !cx.editor.debug.mode_on() {
-            return None;
-        }
-        self.run_layer_key(crate::keymap::Layer::Debug, key, cx, false)
     }
 
     fn run_layer_key(
@@ -195,7 +187,7 @@ impl EditorView {
             || self.on_next_key.is_some()
             || (!counts && cx.editor.count.is_some())
             || cx.editor.mode() == Mode::Insert
-            || (layer == crate::keymap::Layer::Watch && cx.editor.debug.is_focused())
+            || (layer == crate::keymap::Layer::Watch && cx.editor.debug_panel_focused())
         {
             return None;
         }
@@ -1850,77 +1842,6 @@ impl Component for EditorView {
 
                 let mode = cx.editor.mode();
 
-                // a hex view (this fork) overwriting or selecting takes Esc to stop that
-                let hex_uses_esc = {
-                    let (view, doc) = current_ref!(cx.editor);
-                    doc.hex().is_some_and(|hex| {
-                        let cursor = hex.cursor(view.id);
-                        cursor.overwrite || cursor.anchor.is_some()
-                    })
-                };
-
-                // Esc in normal mode, with nothing pending, hides the debug panel (popups,
-                // which are above, take it first)
-                if key == key!(Esc)
-                    && !layer_handled
-                    && !hex_uses_esc
-                    && mode == Mode::Normal
-                    && crate::terminal::focused(cx.editor).is_none()
-                    && cx.editor.debug.visible
-                    // the focused debug panel takes Esc itself: back to the editor
-                    && !cx.editor.debug.is_focused()
-                    && cx.editor.count.is_none()
-                    && self.keymaps.pending().is_empty()
-                    && self.keymaps.sticky().is_none()
-                    && self.pseudo_pending.is_empty()
-                    && self.on_next_key.is_none()
-                {
-                    cx.editor.debug.hide();
-                    return EventResult::Consumed(None);
-                }
-
-                // the debug panel (this fork), while focused, takes its keys first; Space and
-                // what follows go to the keymap
-                if !layer_handled
-                    && cx.editor.debug.is_focused()
-                    && self.keymaps.pending().is_empty()
-                    && self.keymaps.sticky().is_none()
-                    && self.pseudo_pending.is_empty()
-                    && self.on_next_key.is_none()
-                    && cx.editor.count.is_none()
-                    && mode == Mode::Normal
-                {
-                    match crate::debug::handle_key(cx.editor, key) {
-                        // a key the panel doesn't take is debug mode's, when it is on
-                        crate::debug::Handled::No => {
-                            if self.debug_layer_key(key, &mut cx).is_some() {
-                                let callbacks = take(&mut cx.callback);
-                                let callback: Option<crate::compositor::Callback> =
-                                    (!callbacks.is_empty()).then(|| {
-                                        Box::new(
-                                            move |compositor: &mut crate::compositor::Compositor,
-                                                  cx: &mut Context| {
-                                                for callback in callbacks {
-                                                    callback(compositor, cx)
-                                                }
-                                            },
-                                        )
-                                            as crate::compositor::Callback
-                                    });
-                                return EventResult::Consumed(callback);
-                            }
-                        }
-                        crate::debug::Handled::Yes => return EventResult::Consumed(None),
-                        crate::debug::Handled::Prompt(prompt) => {
-                            return EventResult::Consumed(Some(Box::new(
-                                move |compositor: &mut crate::compositor::Compositor, _| {
-                                    compositor.push(prompt)
-                                },
-                            )))
-                        }
-                    }
-                }
-
                 // a document in the hex view (this fork) takes its keys first
                 // (not while a sticky menu is open)
                 let hex_handled = layer_handled
@@ -2091,9 +2012,6 @@ impl Component for EditorView {
             area
         });
 
-        // the debug panel goes below all the splits
-        let (editor_area, debug_area) = crate::debug::split_area(cx.editor, editor_area);
-
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
 
@@ -2104,20 +2022,11 @@ impl Component for EditorView {
         // memory views (this fork) show the bytes recorded at the rewind marker, if any
         crate::debug::memory::sync_rewind(cx.editor);
 
-        // with the debug panel focused, no split is
-        let panel_focused = cx.editor.debug.is_focused();
         self.diagnostic_cells.get_mut().clear();
         self.watch_spots.get_mut().clear();
         for (view, is_focused) in cx.editor.tree.views() {
             let doc = cx.editor.document(view.doc).unwrap();
-            self.render_view(
-                cx.editor,
-                doc,
-                view,
-                area,
-                surface,
-                is_focused && !panel_focused,
-            );
+            self.render_view(cx.editor, doc, view, area, surface, is_focused);
         }
         // the screens' windows (this fork), each within its own area
         let screens: Vec<(vortex_view::tree::ScreenView, bool)> = cx
@@ -2130,7 +2039,7 @@ impl Component for EditorView {
             })
             .collect();
         for (view, focused) in &screens {
-            crate::screens::render(cx, view, surface, *focused && !panel_focused);
+            crate::screens::render(cx, view, surface, *focused);
         }
         self.glitch_diagnostics(cx.editor, surface);
         // a mode's screen (this fork) has a background of its own: over the text windows' plain
@@ -2149,9 +2058,6 @@ impl Component for EditorView {
             }
         }
 
-        if let Some(debug_area) = debug_area {
-            crate::debug::render(cx.editor, debug_area, surface);
-        }
         // memory views (this fork) read the bytes they just drew without having them
         crate::debug::memory::load_wanted(cx.editor);
 
@@ -2264,8 +2170,8 @@ impl Component for EditorView {
         if let Some(cursor) = crate::screens::cursor(editor) {
             return cursor;
         }
-        // the hex view draws its own cursor, and the debug panel has none
-        if editor.debug.is_focused() || doc!(editor).is_hex() {
+        // the hex view draws its own cursor
+        if doc!(editor).is_hex() {
             return (None, CursorKind::Hidden);
         }
         let mut cursor = editor.cursor();

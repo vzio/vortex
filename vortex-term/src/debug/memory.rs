@@ -273,7 +273,7 @@ fn show(
     if editor.debug_adapters.get_client(session).is_none() {
         return;
     }
-    editor.debug.unfocus();
+    editor.unfocus_debug_panel();
     let existing = memory_docs(editor).into_iter().find(|&id| {
         editor.documents[&id]
             .memory()

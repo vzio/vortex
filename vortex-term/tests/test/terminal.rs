@@ -164,10 +164,9 @@ fn scratch_view(app: &Application) -> Option<ViewId> {
     app.editor.view_of(app.editor.terminals.scratch?)
 }
 
-/// The focused window's terminal document, if it is one.
-fn focused_terminal(app: &Application) -> Option<DocumentId> {
-    let doc = app.editor.tree.get(app.editor.tree.focus).doc;
-    app.editor.terminals.is_terminal(doc).then_some(doc)
+/// The focused window's terminal (its own window or its lines in view mode), if it is one.
+fn focused_terminal(app: &Application) -> Option<vortex_view::screen::ScreenId> {
+    vortex_term::terminal::focused(&app.editor).map(|(screen, _)| screen)
 }
 
 /// The terminal shown in the focused window, else the scratch one.
@@ -404,7 +403,7 @@ async fn exit_closes_the_window() -> anyhow::Result<()> {
     assert!(scratch_view(&h.app).is_none());
     assert!(in_editor(&h.app));
     assert_eq!(h.app.editor.mode(), Mode::Normal);
-    assert!(h.app.editor.documents().all(|doc| !doc.is_screen()));
+    assert!(h.app.editor.screens.is_empty());
 
     // a fresh shell
     h.keys("<C-t>").await?;

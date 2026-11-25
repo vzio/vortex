@@ -1,6 +1,6 @@
 //! The debugger (fork feature): sessions with the debug adapters configured in
-//! `languages.toml`, and the debug panel below the splits (variables, watch, call stack,
-//! breakpoints, console). The state the panel shows is `vortex-view`'s `editor.debug`; this
+//! `languages.toml`, and the debug panel, a screen in a window of its own (variables, watch,
+//! call stack, breakpoints, console). The state the panel shows is `vortex-view`'s `editor.debug`; this
 //! module talks to the adapters, loads that state, draws it and routes keys to it.
 
 pub mod bar;
@@ -25,7 +25,7 @@ pub use panel::{
 pub use render::render;
 pub use session::{end, end_with, handle_message, start};
 
-use vortex_view::{debug::ThreadKey, graphics::Rect, Editor};
+use vortex_view::debug::ThreadKey;
 
 /// The key of thread `thread` of `session`.
 pub fn spectator_key(
@@ -33,19 +33,4 @@ pub fn spectator_key(
     thread: vortex_dap::ThreadId,
 ) -> ThreadKey {
     ThreadKey { session, thread }
-}
-
-/// The panel's area below the splits, when it is shown: the splits get `area` without it. It
-/// takes `[editor.terminal] size` percent of the height, as the scratch terminal does.
-pub fn split_area(editor: &Editor, area: Rect) -> (Rect, Option<Rect>) {
-    if !editor.debug.visible || area.height < 6 {
-        return (area, None);
-    }
-    let percent = editor.config().terminal.share() as u32;
-    let height = ((area.height as u32 * percent / 100) as u16)
-        .min(area.height.saturating_sub(3))
-        .max(4);
-    let editor_area = area.clip_bottom(height);
-    let panel = Rect::new(area.x, editor_area.bottom(), area.width, height);
-    (editor_area, Some(panel))
 }

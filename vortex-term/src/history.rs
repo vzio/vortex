@@ -359,7 +359,7 @@ pub fn go_to(editor: &mut Editor, bookmark: &Bookmark) -> bool {
                 .find(|&(seq, _)| seq == bookmark.seq)
         })
         .map_or(bookmark.line(), |(_, line)| line);
-    editor.debug.unfocus();
+    editor.unfocus_debug_panel();
     editor.without_history(|editor| {
         let view_id = editor.tree.focus;
         if editor.tree.get(view_id).doc != doc {

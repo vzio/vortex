@@ -568,6 +568,7 @@ impl MappableCommand {
         history_forward, "Go one jump forward in history, after going back",
         history_picker, "Open the history picker: the jumps, newest first",
         markdown_view, "Toggle the Markdown render mode: the buffer rendered, read-only",
+        markdown_view_vsplit, "The buffer rendered as a Markdown page, in a split beside it",
         toggle_bookmark, "Set or remove a bookmark on the cursor's line",
         next_bookmark, "Go to the next bookmark",
         prev_bookmark, "Go to the previous bookmark",
@@ -691,6 +692,7 @@ impl MappableCommand {
         shell_keep_pipe, "Filter selections with shell predicate",
         suspend, "Suspend and return to shell",
         git_diff_view, "Open a side by side git diff of the current file",
+        git_diff_view_vsplit, "The git diff of the current file, in a split beside it",
         move_lines_up, "Move selected lines up",
         move_lines_down, "Move selected lines down",
         blame_line, "Show the git blame of the current line",
@@ -3442,38 +3444,63 @@ impl PathStyleConfig {
 
 fn buffer_picker(cx: &mut Context) {
     let current = view!(cx.editor).doc;
+    let focused_screen = cx.editor.tree.focused_screen();
+
+    /// A buffer, or a screen open in a window (this fork: shown or hidden), named by its kind.
+    enum Item {
+        Text(DocumentId),
+        Screen(vortex_view::screen::ScreenId),
+    }
 
     struct BufferMeta<'a> {
-        id: DocumentId,
+        item: Item,
+        /// The document's id, or the screen's kind.
+        id: String,
         path: Option<Cow<'a, Path>>,
+        /// A screen's name.
+        name: Option<String>,
         is_modified: bool,
         is_current: bool,
-        focused_at: std::time::Instant,
+        focused_at: Option<std::time::Instant>,
     }
 
     let new_meta = |doc: &Document| BufferMeta {
-        id: doc.id(),
+        item: Item::Text(doc.id()),
+        id: doc.id().to_string(),
         path: doc
             .path()
             .map(ToOwned::to_owned)
             .map(vortex_stdx::path::get_relative_path),
+        name: None,
         is_modified: doc.is_modified(),
-        is_current: doc.id() == current,
-        focused_at: doc.focused_at,
+        is_current: doc.id() == current && focused_screen.is_none(),
+        focused_at: Some(doc.focused_at),
     };
 
+    // the buffers, not the lines of a screen (a terminal's in view mode)
     let mut items = cx
         .editor
         .documents
         .values()
+        .filter(|doc| doc.lines_of().is_none())
         .map(new_meta)
         .collect::<Vec<BufferMeta>>();
 
     // mru
     items.sort_unstable_by_key(|item| std::cmp::Reverse(item.focused_at));
+    // then the screens open in windows, by kind
+    items.extend(cx.editor.screens.iter().map(|screen| BufferMeta {
+        item: Item::Screen(screen.id()),
+        id: screen.kind.label().to_string(),
+        path: None,
+        name: Some(screen.name.clone()),
+        is_modified: false,
+        is_current: Some(screen.id()) == focused_screen,
+        focused_at: None,
+    }));
 
     let columns = [
-        PickerColumn::new("id", |meta: &BufferMeta, _| meta.id.to_string().into()),
+        PickerColumn::new("id", |meta: &BufferMeta, _| meta.id.as_str().into()),
         PickerColumn::new("flags", |meta: &BufferMeta, _| {
             let mut flags = String::new();
             if meta.is_modified {
@@ -3485,7 +3512,10 @@ fn buffer_picker(cx: &mut Context) {
             flags.into()
         }),
         PickerColumn::new("path", |meta: &BufferMeta, config: &PathStyleConfig| {
-            config.stylize(meta.path.as_deref(), None)
+            match &meta.name {
+                Some(name) => name.as_str().into(),
+                None => config.stylize(meta.path.as_deref(), None),
+            }
         }),
     ];
 
@@ -3507,18 +3537,25 @@ fn buffer_picker(cx: &mut Context) {
         2,
         items,
         PathStyleConfig::new(&cx.editor.theme),
-        |cx, meta, action| {
-            cx.editor.switch(meta.id, action);
+        |cx, meta, action| match meta.item {
+            Item::Text(id) => cx.editor.switch(id, action),
+            // a screen goes to its window, or back where it was
+            Item::Screen(id) => {
+                cx.editor.show_screen(id);
+            }
         },
     )
     .with_initial_cursor(initial_cursor)
     .with_preview(|editor, meta| {
-        let doc = &editor.documents.get(&meta.id)?;
+        let Item::Text(id) = meta.item else {
+            return None;
+        };
+        let doc = &editor.documents.get(&id)?;
         let lines = doc.selections().values().next().map(|selection| {
             let cursor_line = selection.primary().cursor_line(doc.text().slice(..));
             (cursor_line, cursor_line)
         });
-        Some((meta.id.into(), lines))
+        Some((id.into(), lines))
     });
     cx.push_layer(Box::new(overlaid(picker)));
 }
@@ -6199,6 +6236,16 @@ fn markdown_view(cx: &mut Context) {
     crate::markdown_view::toggle(cx.editor);
 }
 
+/// `C-w V` (this fork): the page of the Markdown buffer in a split beside its source.
+fn markdown_view_vsplit(cx: &mut Context) {
+    if !crate::markdown_view::is_markdown(doc!(cx.editor)) {
+        cx.editor.set_error("Not a Markdown buffer");
+        return;
+    }
+    split(cx.editor, Action::VerticalSplit);
+    crate::markdown_view::open(cx.editor, crate::markdown_view::Start::Source);
+}
+
 fn history_back(cx: &mut Context) {
     crate::history::back(cx);
 }
@@ -7117,7 +7164,14 @@ fn shell_prompt_for_behavior(cx: &mut Context, prompt: Cow<'static, str>, behavi
 
 fn git_diff_view(cx: &mut Context) {
     cx.callback.push(Box::new(|compositor, cx| {
-        diff_view::open_current(cx.editor, compositor)
+        diff_view::open_current(cx.editor, compositor, false)
+    }));
+}
+
+/// `C-w =` (this fork): the diff of the current file in a split beside it.
+fn git_diff_view_vsplit(cx: &mut Context) {
+    cx.callback.push(Box::new(|compositor, cx| {
+        diff_view::open_current(cx.editor, compositor, true)
     }));
 }
 

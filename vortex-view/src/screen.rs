@@ -60,6 +60,17 @@ pub enum ScreenKind {
 }
 
 impl ScreenKind {
+    /// What the buffer picker calls it.
+    pub fn label(self) -> &'static str {
+        match self {
+            ScreenKind::Terminal => "terminal",
+            ScreenKind::Hex => "hex",
+            ScreenKind::Diff => "diff",
+            ScreenKind::Markdown => "page",
+            ScreenKind::DebugPanel => "debug",
+        }
+    }
+
     /// Whether another screen may cover a window of this kind (the diff of a file from its
     /// rendered page): the screens shown instead of a document may; terminals and the debug
     /// panel, windows of their own, may not (a screen opened from them goes to the window for

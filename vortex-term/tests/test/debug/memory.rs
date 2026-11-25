@@ -121,10 +121,10 @@ impl Env {
 
     /// Keys for the debug panel: focuses it first, and leaves it focused.
     async fn panel(&mut self, keys: &str) -> anyhow::Result<()> {
-        if !self.h.app.editor.debug.is_focused() {
+        if !self.h.app.editor.debug_panel_focused() {
             self.h.keys("<C-g>").await?;
         }
-        assert!(self.h.app.editor.debug.is_focused());
+        assert!(self.h.app.editor.debug_panel_focused());
         self.h.keys(keys).await
     }
 
@@ -133,7 +133,7 @@ impl Env {
     /// that follows is outside it. `c` opens the capture settings and stays in debug mode.
     async fn editor(&mut self, keys: &str) -> anyhow::Result<()> {
         let entered = !self.h.app.editor.debug.mode_on();
-        if self.h.app.editor.debug.is_focused() {
+        if self.h.app.editor.debug_panel_focused() {
             self.h.keys(if entered { "<C-g>" } else { "<tab>" }).await?;
         }
         if entered {
@@ -385,7 +385,7 @@ async fn values_with_a_memory_reference_get_a_badge_and_m_opens_their_memory() -
     let areas: Vec<_> = e.h.app.editor.tree.views().map(|(v, _)| v.area).collect();
     assert_eq!(areas[0].y, areas[1].y, "side by side: {areas:?}");
     assert_ne!(areas[0].x, areas[1].x);
-    assert!(!e.h.app.editor.debug.is_focused(), "the view has the focus");
+    assert!(!e.h.app.editor.debug_panel_focused(), "the view has the focus");
     assert_eq!(memory(&e.h.app).base, 0x1010);
     assert_eq!(memory(&e.h.app).label, "p");
     let (view, doc) = current_ref!(e.h.app.editor);
@@ -406,7 +406,7 @@ async fn values_with_a_memory_reference_get_a_badge_and_m_opens_their_memory() -
     e.panel("w").await?;
     assert_eq!(e.h.app.editor.debug.section, Section::Watch);
     e.h.keys("M").await?;
-    e.h.until("the view", |app| !app.editor.debug.is_focused())
+    e.h.until("the view", |app| !app.editor.debug_panel_focused())
         .await;
     assert!(cursor_is(&e.h.app, 0x1010));
     assert_eq!(memory_views(&e.h.app), 1);

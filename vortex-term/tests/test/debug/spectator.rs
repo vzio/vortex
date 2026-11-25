@@ -124,19 +124,19 @@ impl Env {
 
     /// The panel focused (`Tab` in debug mode): its data keys, `jjl`, `{`, `p`...
     async fn to_panel(&mut self) -> anyhow::Result<()> {
-        if !self.h.app.editor.debug.is_focused() {
+        if !self.h.app.editor.debug_panel_focused() {
             self.h.keys("<tab>").await?;
         }
-        assert!(self.h.app.editor.debug.is_focused());
+        assert!(self.h.app.editor.debug_panel_focused());
         Ok(())
     }
 
     /// The editor focused again (`Tab` from the panel in debug mode).
     async fn to_editor(&mut self) -> anyhow::Result<()> {
-        if self.h.app.editor.debug.is_focused() {
+        if self.h.app.editor.debug_panel_focused() {
             self.h.keys("<tab>").await?;
         }
-        assert!(!self.h.app.editor.debug.is_focused());
+        assert!(!self.h.app.editor.debug_panel_focused());
         Ok(())
     }
 
@@ -250,7 +250,7 @@ async fn space_plays_and_pauses_in_debug_mode_and_opens_the_menu_outside_it() ->
     assert_eq!(spectator(&e.h.app).mode, Mode::Paused);
     // and through the focused panel, which gives it to debug mode
     e.h.keys("<tab>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     e.h.keys("<space>").await?;
     assert_eq!(spectator(&e.h.app).mode, Mode::Playing);
     e.h.keys("<space>").await?;
@@ -832,7 +832,7 @@ async fn the_capture_settings_change_the_caps_and_a_smaller_history_trims() -> a
     );
     e.h.keys("<esc>").await?;
     assert_eq!(spectator(&e.h.app).settings, None);
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     e.h.finish().await
 }
 
