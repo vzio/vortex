@@ -80,6 +80,7 @@ git blame FILE
 - [The mode bar](#the-mode-bar)
 - [Menus and key help](#menus-and-key-help)
 - [The command palette](#the-command-palette)
+- [Screens](#screens)
 - [Side by side git diff](#side-by-side-git-diff)
 - [Git commit log](#git-commit-log)
 - [Line history](#line-history)
@@ -122,7 +123,8 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | The mode bar | `vortex-term/src/modes.rs` (which mode is on, leaving it, `restore_editing`, the mode's screen), `vortex-term/tests/test/modes.rs`, `vortex-term/src/ui/modebar.rs` (segments, the layout and its truncation, badges, the mouse), `Layer`, `Keymaps::layer_get` and `layer_reverse_map` in `vortex-term/src/keymap.rs`, `layers()` in `vortex-term/src/keymap/default.rs`, `RawKeys` in `vortex-term/src/config.rs` (`[keys.watch]`, `[keys.debug]`), debug mode's bar in `vortex-term/src/debug/bar.rs` |
 | Menus and key help | the `["group"]` form of `keymap!` in `vortex-term/src/keymap/macros.rs`, `KeyTrieNode::groups` and `grouped_infobox` in `vortex-term/src/keymap.rs`, `Info::grouped` in `vortex-view/src/info.rs`, `vortex-term/src/ui/keyhelp.rs` (the `?` overlay), `with_help`, `key_help`, `without_header` and `with_info` in `vortex-term/src/ui/picker.rs`, `vortex-term/tests/test/menus.rs` |
 | The command palette's recent commands | `Editor::recent_commands` and `remember_command` in `vortex-view/src/editor.rs`, `with_tie_rank` and `with_after_close` in `vortex-term/src/ui/picker.rs`, `palette_key` and `command_palette` in `vortex-term/src/commands.rs`, `vortex-term/tests/test/palette.rs` |
-| Diff view | `vortex-term/src/ui/diff_view.rs`, `vortex-term/src/commands/diff_view.rs` |
+| Screens | `vortex-view/src/screen.rs` (`Screen`, `ScreenKind`, the `Screens` store, `Placement`, opening, showing, hiding and closing a screen's window), `vortex-view/src/tree.rs` (`Content::Screen`, `ScreenView`, covers: `cover`, parking and unparking, `text_focus`, `windows`), `vortex-term/src/screens.rs` (what each kind draws and takes, the `allows` gate of commands, `close`, `leave` and `reopen`), `vortex-term/src/history.rs` (`step`: `ga` on and to a screen), `[editor.debugger.panel]` in `vortex-view/src/debug/config.rs` |
+| Diff view | `vortex-term/src/ui/diff_view.rs` (the screen, the side by side and stacked layouts, `t`), `vortex-term/src/commands/diff_view.rs`, `[editor.diff]` in `vortex-view/src/editor.rs` |
 | Hunk actions, `n`/`N` across files | `vortex-term/src/commands/hunks.rs` (stage, unstage, revert), `vortex-vcs/src/staging.rs` (the texts of the index and of the working tree after an action), `vortex-vcs/src/git/stage.rs` (reading and writing one entry of the index), the `Actions` and `FileNav` of the diff view, `base` of `:practice` exercises, `vortex-term/tests/test/hunks.rs` |
 | Commit log | `vortex-term/src/commands/git_log.rs` (also the background reading of a commit's changes), `vortex-vcs/src/commit.rs`, `vortex-vcs/src/git/log.rs`, `range_changes` and `for_each_range_file` in `vortex-vcs/src/git.rs` (the files of a commit or range, read with one repository open) |
 | Line history | `vortex-vcs/src/line_history.rs` (mapping lines through a diff, the merge rule), `vortex-vcs/src/git/line_history.rs` (the walk through the repository), `vortex-term/src/commands/line_history.rs` (from the buffer to HEAD, the search on its thread and its status line, the rows and their preview, `Enter`), `vortex-vcs/src/git/line_history_test.rs`, `vortex-term/tests/test/line_history.rs`, `vortex-term/tests/test/repo_gen.rs` (big repositories for performance tests) |
@@ -139,11 +141,11 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Soft wrap for Markdown | the markdown entry of `languages.toml`, `vortex-term/tests/test/soft_wrap.rs` |
 | Selective soft wrap | `vortex-core/src/selective_wrap.rs` (the unwrapped lines, found in the syntax tree; `LineOffsets`), `TextFormat::{wraps, col_offset, is_selective}` and the formatter's `wraps` in `vortex-core/src/doc_formatter.rs` (tests in `doc_formatter/test.rs`), `char_idx_at_screen_offset` in `vortex-core/src/position.rs`, `vortex-term/src/ui/text_decorations/rulers.rs` (rulers per line), `vortex-term/src/ui/document/drawing_cost.rs` (the measurement), `vortex-term/tests/test/selective_wrap.rs` |
 | Markdown render mode | `vortex-term/src/markdown_view.rs` (the view: when it is up, the reading line, the keys and the commands it takes over, links, search, the outline, code blocks scrolled sideways, going back to the source, the drawing), `vortex-term/src/markdown_view/` (`parse.rs` Markdown to styled blocks, `page.rs` the layout of the page and its headings, links and code blocks, `wrap.rs` wrapping styled text, `table.rs` the tables' columns and cells, `tests.rs` and `snapshots/` the rendering tests), `vortex-term/tests/test/markdown_view.rs` |
-| Terminals | `vortex-terminal/` (the shell, pty and emulator, OSC 133 and 7, the command line report, bash/zsh integration, the snapshot of the lines), `vortex-view/src/terminal.rs` (the terminals' state, `[editor.terminal]`), `vortex-view/src/screen.rs` (screen documents, the window for documents, showing and hiding screens), the tree's shares and places in `vortex-view/src/tree.rs`, `vortex-term/src/screens.rs` (what each screen kind draws and takes), `vortex-term/src/terminal/` (`window.rs` starting, showing and closing terminals, `:sh`, the `vx` requests; `modes.rs` the keys of the three modes, view mode, prompts; `edit.rs` the command line in a buffer; `render.rs` drawing; `mouse.rs` the mouse; `input.rs` the encoding of keys, mouse and paste; `shim.rs` the `vx` shim; `phosphor.rs` the filter), `vortex-term/tests/test/terminal.rs` |
+| Terminals | `vortex-terminal/` (the shell, pty and emulator, OSC 133 and 7, the command line report, bash/zsh integration, the snapshot of the lines), `vortex-view/src/terminal.rs` (the terminals' state, `[editor.terminal]`), `vortex-view/src/screen.rs` (the screens, the window for documents, showing and hiding them: see Screens), the tree's shares, places and covers in `vortex-view/src/tree.rs`, `vortex-term/src/screens.rs` (what each screen kind draws and takes), `vortex-term/src/terminal/` (`window.rs` starting, showing and closing terminals, `:sh`, the `vx` requests; `modes.rs` the keys of the three modes, view mode, prompts; `edit.rs` the command line in a buffer; `render.rs` drawing; `mouse.rs` the mouse; `input.rs` the encoding of keys, mouse and paste; `shim.rs` the `vx` shim; `phosphor.rs` the filter), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
 | API browser (in progress) | `vortex-term/src/api/` (`mod.rs` the browser: the tree, its tasks and their cancellation; `load.rs` the providers; `node.rs` the nodes; `temp.rs` temporary documents; `tags.rs` the tree-sitter skeleton; `picker.rs` `:api-browse`), `Client::cancellable_call` and `Client::set_config_overlay` in `vortex-lsp/src/client.rs`, `HiddenDocuments` in `vortex-lsp/src/lib.rs`, `vortex-term/tests/fake_lsp/main.rs` (a scripted fake language server), `vortex-term/tests/test/fake_lsp.rs`, `vortex-term/tests/test/api_browser.rs`, `vortex-term/tests/test/api_report.rs` (the measurements against real servers) |
 | Hex view | `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`), `vortex-term/tests/test/hex_view.rs` |
-| Dashboard | `vortex-term/src/dashboard.rs` (when it is up, its keys), `vortex-term/src/dashboard/` (`stats.rs` the background reading, `languages.rs` the line counts, `render.rs` the layout and the panels, `timeline.rs` when things move, `title.rs` the title, `vortex.rs` the vortex, `charset.rs` blocks or ASCII, `wrap.rs` long values on two rows, `snapshots/` the drawings the tests compare with), `vortex-vcs/src/git/summary.rs` (the git summary), `vortex-term/tests/test/dashboard.rs` |
+| Dashboard | `vortex-term/src/dashboard.rs` (the overlay: when it is up, its keys), `vortex-term/src/dashboard/` (`stats.rs` the background reading, `languages.rs` the line counts, `render.rs` the layout and the panels, `timeline.rs` when things move, `title.rs` the title, `vortex.rs` the vortex, `charset.rs` blocks or ASCII, `wrap.rs` long values on two rows, `snapshots/` the drawings the tests compare with), `vortex-vcs/src/git/summary.rs` (the git summary), `vortex-term/tests/test/dashboard.rs` |
 | Worktrees | `vortex-term/src/commands/worktrees.rs` (the `:worktrees` picker: its rows, columns, background jobs and `Enter`), `vortex-vcs/src/git/summary.rs` (the worktrees, missing ones flagged; `Repo::status`, the last modified time; `Repo::dated_worktrees`; `Worktree::details`), `vortex-stdx/src/time.rs` (`format_ago`), the dashboard's worktree rows and `t` in `vortex-term/src/dashboard/`, `vortex-term/tests/test/worktrees.rs` |
 | Watch mode | `vortex-view/src/watch.rs` (the session: the baseline, the files and hunks numbered in the order they changed, following, `n`/`N`, the new count), `vortex-term/src/watch.rs` (`:watch` and the other commands, the keys of the mode, reading the changed files on the watcher's thread, following, the flash, which commands are held, the mode bar's rows, the statusline element and its blinking, catching up, review (`watch_accept`, `watch_reject`, `watch_yank`), the `:watch-changes` picker), `RepoWatch::start_tapped` in `vortex-term/src/live.rs`, the session's gutter markers and review marks (`reviews`) in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/watch.rs` |
 | History and bookmarks | `vortex-view/src/history.rs` (what records a jump, `Editor::record_jump`, the places of a view, walking), `vortex-view/src/bookmarks.rs` (the bookmarks of a buffer, mapped through its changes; the closed files' bookmarks; the ring), `vortex-term/src/history.rs` (`ga`, the forward step, the history picker, showing a screen again, the bookmark commands and picker), the `bookmarks` gutter in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/history.rs` |
@@ -172,12 +174,31 @@ The move mode label (`MOV`) is a generic `mode="..."` option of sticky nodes in 
 `Application::handle_terminal_events`, draws its panel from one call in `EditorView::render`, has
 one entry in `typed.rs`, and opens its buffers with `Editor::new_file_from_document`, made public.
 
+Screens change core files directly: `Editor::documents` holds text documents only and
+`Editor::screens` the screens, `Content::Screen` and `ScreenView` are leaves of the tree beside
+the text windows, `Node::under` parks the window a screen covers, and `Tree::get`, `views` and
+`try_get` give text windows only while `text_focus` is the window text commands act on
+(`vortex-view/src/tree.rs`, `screen.rs`, `editor.rs`: `switch`, `focus`, `close`, `close_window`,
+`close_document`, `_refresh`, `[editor.diff]`); `current!`, `doc!` and `view!` go through
+`text_focus` (`vortex-view/src/macros.rs`); a screen's lines for view mode and the refused
+transactions in `vortex-view/src/document.rs`; places that hold a closed screen in
+`vortex-view/src/history.rs`; the panel as a screen in `vortex-view/src/debug/mod.rs` and
+`terminal.rs`, `[editor.debugger.panel]` in `vortex-view/src/debug/config.rs`;
+`in_source_view` in `vortex-view/src/handlers/dap.rs`. In `vortex-term`: the windows' drawing,
+keys, paste and mouse going through `screens.rs`, and the dashboard drawn as an overlay, in
+`ui/editor.rs`; the `allows` gate in `MappableCommand::execute` and `C-w V`, `C-w =` in `commands.rs`
+and `keymap/default.rs`; the screens in the buffer picker, `goto_buffer` (buffers only), `:q`, `:q!`,
+`:qa` and `:bc` in `commands.rs` and `commands/typed.rs`; `ga` on and to a screen in `history.rs`;
+the dashboard's opening in `application.rs`; `take_overlays`, `put_back` and `find_layer` in
+`compositor.rs`; the lists of changes set aside under a diff in `commands/changes.rs` and
+`commands/uncommitted.rs`; the disk check on leaving a screen in `handlers/disk.rs`.
+
 The terminals change core files directly (the fork no longer syncs with upstream): in
-`vortex-view/src/editor.rs`, `Editor::terminals`, `last_document_view`, `switch`, `close`,
+`vortex-view/src/editor.rs`, `Editor::terminals`, `switch`, `close`,
 `close_view`, `close_document` (an awaited buffer closing answers `vx` and focuses the terminal),
 `focus` and `_refresh` (which tells each shell its window's size), where `[editor.terminal]` also
-absorbed the debugger's `command`/`args`; `Document::screen` and its methods, the refused
-transactions and no soft wrap in `vortex-view/src/document.rs`; `View::gutter_offset`;
+absorbed the debugger's `command`/`args`; the terminals' lines document, with its refused
+transactions and no soft wrap, in `vortex-view/src/document.rs`; `View::gutter_offset`;
 `Node::share`, `split_root`, `place` and `insert_at` in `vortex-view/src/tree.rs`; `in_source_view`
 in `vortex-view/src/handlers/dap.rs`. In `vortex-term`: `EditorView`'s render, keys, paste, mouse,
 cursor, `layer_key` and mode background in `ui/editor.rs`; `toggle_terminal`, `hsplit`/`vsplit`,
@@ -185,7 +206,7 @@ cursor, `layer_key` and mode background in `ui/editor.rs`; `toggle_terminal`, `h
 `:vterminal`, `:sh`, `:w` and `:q` of the command line buffer in `typed.rs`; `Layer::Terminal` and
 `Layer::TerminalView` in `keymap.rs`, `config.rs` and `keymap/default.rs`; the disk check on leaving
 a terminal in `handlers/disk.rs`; completion skipping screens in `handlers/completion.rs`; the
-`shell` element and the mode in `ui/statusline.rs`; the debug panel's size in `debug/mod.rs`;
+`shell` element and the mode in `ui/statusline.rs`;
 watch's `go_to` and its command lists, and debug's `camera`; the client mode at the top of
 `main.rs`.
 
@@ -217,7 +238,7 @@ The debugger changes core files directly: the `Editor::debug` field and the per-
 `Breakpoint` (`disabled`, `sessions`) in `vortex-view/src/editor.rs`, where the old event handler
 of `vortex-view/src/handlers/dap.rs` moved to `vortex-term/src/debug/session.rs` (the module keeps
 its small helpers); the gutter's breakpoint and `▶` markers in `vortex-view/src/gutter.rs`; the
-layout (the panel stays below the splits, `[editor.terminal] size` percent high), its keys first in `handle_event`, `Esc`, the
+layout (the panel is a screen window, `[editor.debugger.panel]`), its keys first in `handle_event`, `Esc`, the
 cursor, the frame line limited to its file, and a gutter click in `ui/editor.rs`; the mouse in
 `Application::handle_terminal_events` and the adapters' messages in `Application`; the `debug`
 statusline element; `:debug-eval` (raw input) in `typed.rs`; `space G` (`debug_mode`) and `C-g` in
@@ -288,9 +309,8 @@ other elements in `ui/statusline.rs`; `:hex`, and `:goto`/`:0x…` going to an o
 `typed.rs`; the write message in `application.rs`; the hex preview of binary files in
 `ui/picker.rs`; the blame request skipping it in `handlers/blame.rs`; `ui.hex.*` in `theme.toml`.
 
-The dashboard changes core files: the `dashboard` field of `EditorView`, its keys first in
-`handle_event`, its drawing in `render` (over the views, under the infobox and the command line)
-and no cursor in `cursor`, in `ui/editor.rs`; the startup decision in `Application::new` (and
+The dashboard changes core files: it is a layer of the compositor, over everything and taking
+every key (`dashboard.rs`), not a field of `EditorView`; `EditorView::live_dashboard` in `ui/editor.rs`; the startup decision in `Application::new` (and
 no file picker for `vx <folder>` when it shows); `:dashboard` and `:vortex` in `typed.rs`; `dashboard` and
 `dashboard-background` (`DashboardBackground`) in `vortex-view/src/editor.rs`; `Args::initial_working_dir` in `args.rs`, used by `main.rs`.
 
@@ -551,6 +571,137 @@ first, then the rest as before. A command counts when you run it from the palett
 line (`:`), not from its key. With a query, matches are ranked as before and a recent command wins
 a tie (same score). The list lives in memory only: nothing is saved, it is gone when `vx` quits.
 
+## Screens
+
+A window shows one of two things: a **text document**, or a **screen**. A screen is a full-window
+view that isn't text of a file, and a type of its own, not a document: the
+[terminals](#terminals), the [side by side diff](#side-by-side-git-diff), the
+[Markdown page](#markdown-render-mode) and the [debug panel](#the-panel). Screens are windows of the
+tree like any other, so they follow the window motions, splits, resizing, `:q`, focus, the mouse
+and the window menu. Pickers, popups, the command line and the [dashboard](#dashboard) are not
+screens: they stay overlays.
+
+The [hex view](#hex-view) and the debugger's [memory view](#memory) are not screens yet: they are
+still a mode of a text document (see Limitations).
+
+### Where a screen opens
+
+| Screen | Opens | Closes |
+| --- | --- | --- |
+| Markdown page (`V`, `:markdown-view`) | In the current window, covering it | `V`, `Esc` |
+| The same, `C-w V` | In a vertical split of the current window | `V`, `Esc`, `C-w q` |
+| Diff of a file (`space =`, a list of changes, the commit log) | In the window for documents, covering it | `q`, `Esc`, `C-c` |
+| The same, `C-w =` | In a vertical split of the current window | as above, or `C-w q` |
+| Terminal | In a split or along an edge, per `[editor.terminal]` | `:q`, `C-w q`, `exit`; `C-t` hides the scratch one |
+| Debug panel (`space G`, a session starting, `P`) | Along an edge, per `[editor.debugger.panel]` | `Esc`, `q` or `P` hide it |
+
+A screen **covers** a window when it opens in it: the window stays in the tree, parked, and comes
+back, with its buffer, cursor and view as they were, when the screen closes. A screen opened from a
+text window covers that window; opened from another screen it covers the window for documents (a
+file picked from a terminal or the debug panel opens there, too), or goes to a split when there is
+none. A screen is shown in one window at a time: opening it again focuses its window.
+
+`C-w V` and `C-w =` are in the window menu with the other window commands (`C-w`, or `space w`).
+
+### The keys on a screen
+
+On a focused screen only the screen's own keys and the **window and editor commands** run:
+`C-w` and `space w`, the window motions (`C-w h j k l`, `C-w w`), splits, `C-w q`, `C-w o`, the
+pickers (`space f`, `space b`, `space g`...), `space e`, `:` and the command palette, `ga`/`gA`,
+`gn`/`gp`, the debugger's and watch mode's commands, `V` and `C-w V`, `space =` and `C-w =`. The
+text commands (`d`, `x`, `w`, `i`...) have no text to act on there, so they don't run. A page is the
+exception: it is a view of its source, so the edit keys put the cursor at its reading line and
+run there, and the page goes (see [Markdown render mode](#markdown-render-mode)).
+
+The commands of the command line that act on text act on the window the screen covers, else the
+last focused text window: `:w` on a page writes its source. `:q` closes the focused window and
+everything it covers; `:bc` on a focused screen closes the screen; `:bo` and `:ba` close text
+buffers only.
+
+### `Esc` and `ga`
+
+- **`Esc`** is the screen's own first: its modal layers (a search, a prompt, a filter, the keys
+  help) take it before the screen closes. Then it closes the screen, and the window shows what it
+  covered. A terminal keeps its own rules (`Esc` in its normal mode goes to the program); the
+  scratch terminal and the debug panel are only hidden, and come back where they were.
+- **`ga`** from a screen that covers a window does what `Esc` does and goes on from there: the
+  window shows what it held, and history keeps the screen, so `ga` again (or the forward step)
+  shows it again, a diff or a page as it was. On a page reached by following a link from another
+  page, `ga` goes back to the page you left. A screen in a window of its own (a terminal, the
+  debug panel) has no history: `A screen's window has no history`.
+- Closing a diff, a page or a hex view that covered a window records it in that window's history
+  (see [History and bookmarks](#history-and-bookmarks)); a terminal or the debug panel never.
+
+### Modes on screens
+
+[Watch mode](#watch-mode) and [debug mode](#debug-mode) act on windows: they follow edits and
+stops in the last focused text window (opening one beside the screen when there is none), and a
+focused screen keeps the focus and its keys. `Esc` on a focused screen gives the screen's `Esc`
+first (hiding the debug panel, closing a page); a second `Esc` leaves the mode. Before, the first
+one left the mode and kept the screen.
+
+### The buffer picker
+
+The buffer picker (`space b`) lists the screens after the buffers. The id column says the kind:
+`terminal`, `hex`, `diff`, `page`, `debug`. Picking one shows it: it goes to its window, or opens
+it again where it opens.
+
+### Configuration
+
+All the settings of screens, with their defaults:
+
+```toml
+[editor.terminal]           # the scratch terminal and new terminals
+position = "bottom"         # "bottom", "top", "left" or "right"
+size = 33                   # percent of the editor in that direction (10 to 90)
+
+[editor.debugger.panel]     # the debug panel's window
+position = "bottom"         # "bottom", "top", "left" or "right"
+size = 33                   # percent of the editor in that direction (10 to 90)
+
+[editor.diff]
+stack-below = 120           # stack the diff in windows narrower than this; 0: never
+```
+
+`markdown-view` and `markdown-width` under `[editor]` are the page's, see
+[When it opens rendered](#when-it-opens-rendered). `[editor.terminal] size` used to be the debug
+panel's height too: it isn't any more.
+
+### Cost
+
+A screen that isn't open costs nothing: nothing of it exists until it opens. A closed screen
+releases its state. History keeps a lightened copy of a closed diff or page, enough for `ga` to show
+it again (the diff drops its watch of the working tree and reads its sides again when it comes
+back). Nothing is saved to disk and nothing uses the network.
+
+### Behaviour
+
+- **Text code never meets a screen.** Screens aren't in the list of documents, so language
+  servers, saving, `:wa`, the disk checks, git, the gutter, watch mode's file tracking,
+  completion, search and macros never see one; the window accessors give text windows only, and the
+  window the text commands act on is the focused one when it is text, else the last focused text
+  window.
+- Opening a file from a screen (a picker, `:e`, `gf`) shows it in the visible window for documents,
+  else in the text the focused screen covers (the screen closes), else in a split.
+
+### Practice
+
+Screens don't change text, so they have no `:practice` exercise; they are in the tutor: section 9
+(splits) has `C-w V` and `C-w =` and says what a screen is, and sections 5, 6, 12, 16 and 18 say
+how the page, history, the diff, the debug panel and the terminals behave as screens.
+
+### Limitations
+
+- The hex view and the debugger's memory view still are a mode of a text document, shown in a text
+  window: they aren't in the list of screens, nor in the buffer picker's screen rows.
+- A screen shows in one window at a time.
+- The debug panel is one screen, with its sections (variables, watch, call stack, breakpoints,
+  console) sharing one stop and one cursor model; from 120 columns it puts the console beside the
+  data, by its own layout, not by splitting windows.
+- A terminal or the debug panel in a window of its own can't be covered by another screen.
+- The dashboard and the pickers are overlays, so they are never a window of the tree or a place of
+  history.
+
 ## Side by side git diff
 
 Shows a file's HEAD version (left) next to its current contents (right), read-only. Changed lines
@@ -558,12 +709,17 @@ are aligned, with `╱` filler where one side has no line. Both sides get syntax
 within a changed line, only the words that changed are highlighted. When the file is open with
 unsaved changes, the right side shows the buffer and its title says `[modified]`.
 
+The diff is a [screen](#screens): a window of its own kind that covers the window for documents
+(the file's window, or the one a list was opened from) and gives it back on `q` or `Esc`. In a
+window narrower than 120 columns it stacks the two sides into one unified column.
+
 ### Usage
 
 | Keys | Action |
 | --- | --- |
-| `space =` | Open the diff of the current file. |
-| `C-g` in the changed files picker (`space g`) | Open the diff of the selected file on top of the picker: closing the diff goes back to the picker. `Enter` still opens the file. |
+| `space =` | Open the diff of the current file, in the current window (covering it). |
+| `C-w =` | The same, in a vertical split beside the file. |
+| `C-g` in the changed files picker (`space g`) | Open the diff of the selected file in the window for documents: the picker waits, set aside, and comes back when the diff closes. `Enter` still opens the file. |
 
 Inside the diff:
 
@@ -577,11 +733,14 @@ Inside the diff:
 | `h` / `l`, `0` | Scroll horizontally, back to the start of the line |
 | `gh` / `gl` | Scroll horizontally all the way to the start / to the end of the longest line |
 | `w` | Wrap long lines, or scroll them horizontally again |
-| `Enter` | Close the diff (and the picker it was opened from) and open the file at the current hunk |
-| `q`, `Esc` | Close |
+| `t` | Switch between the side by side and the stacked layout, and keep it for this diff, whatever the width |
+| `Enter` | Close the diff and open the file at the current hunk in its window; the lists set aside under the diff (pickers) are dropped |
+| `q`, `Esc` | Close: the window shows what it held, and the lists it was opened from come back |
+| `ga` | Close, like `Esc`, and keep the diff in the window's history: `ga` again shows it again |
 
 The footer shows the current hunk (e.g. `hunk 2/5`), whether it is staged, the number of the file
-in a diff opened from a list of files (`file 1/3`); `?` lists the keys. The line numbers of the current
+in a diff opened from a list of files (`file 1/3`), and ` DIFF · stacked` in the stacked layout;
+`?` lists the keys (`t` among them). The line numbers of the current
 hunk are bold. The last line of the screen stays the editor's, for its messages. New files
 (untracked or staged) only have a right side, and deleted files only have a left side. Renamed files
 are compared with their old path in HEAD.
@@ -590,6 +749,27 @@ Long lines wrap when soft wrap is on for the file, as in the editor: the setting
 is open, otherwise `soft-wrap.enable` of its language or of `[editor.soft-wrap]`. Continuation lines
 have no line number, and scrolling goes one screen line at a time, so a line taller than the screen
 can be read whole. `w` switches between wrapping and horizontal scrolling.
+
+### The stacked layout
+
+Two columns need room. When the diff's window is narrower than `stack-below` columns, the sides
+stack: one column, unified, with the old lines of a hunk above the new ones, each row with its own
+line number (the old side's for a removed line), the changed words highlighted as before, and the
+two titles joined in the header (`old → new`). The layout follows the window as it
+changes: resizing the terminal or the split switches it live. `t` forces the other layout for that
+diff, and the diff keeps it from then on, resize or not. Hunk navigation (`n`/`N`, `]c`/`[c`), the
+`file:lines` yank (`y`) and staging, unstaging and reverting hunks work the same in both layouts.
+
+```toml
+[editor.diff]
+stack-below = 120    # columns; 0: never stack by itself (`t` still does)
+```
+
+### History
+
+Closing a diff that covered a window with `ga` or `Esc` keeps it in that window's history, as it
+was (its scroll, its hunk). History drops its watch of the working tree, so a kept diff costs
+nothing while closed; shown again, it reads its sides again, in case the file changed.
 
 ### Limitations
 
@@ -671,13 +851,13 @@ theme scope `ui.picker.divider` if the theme has it, else `ui.text.inactive`, el
 | `A-s` | Select all the commits of the section the cursor is in ("diff the entire branch"). |
 | `Esc` | In normal mode: if several commits are selected or extend mode is on, select the commit under the cursor alone and leave extend mode; else clear the query if there is one; else close the picker. In filter mode: back to normal mode. |
 | `q`, `C-c` | Close the picker. |
-| `Enter`, `C-g` in the list of changes | Open the diff of the file at the hunk, on top of the list. |
+| `Enter`, `C-g` in the list of changes | Open the diff of the file at the hunk, a [screen](#screens) in the window for documents; the lists wait, set aside, until it closes. |
 | `C-s` / `C-v` in the list of changes | Open the file as it is now in a split, closing both pickers. |
-| `q`, `Esc` in the diff | Back to the list of changes. |
+| `q`, `Esc` in the diff | Close it, back to the list of changes. |
 | `Esc` in the list of changes | Back to the commit picker. |
-| `Enter` in the diff | Open the file as it is now, at the current hunk, closing both pickers. |
+| `Enter` in the diff | Open the file as it is now, at the current hunk, dropping both pickers. |
 
-The diff keys are the same as in the [side by side diff](#side-by-side-git-diff). Renames are
+The diff keys are the same as in the [side by side diff](#side-by-side-git-diff), which stacks its sides in a narrow window (`t` switches). Renames are
 detected, so a renamed file is compared with its old path. The picker opens in normal mode, where
 the letters are keys (the other letters do nothing, and pasting is ignored), the way the
 [file tree](#file-tree-overlay) works; the prompt shows its cursor in filter mode only. `w`, `e`,
@@ -815,10 +995,10 @@ the commit log: the same columns, branch sections and dividers, modal keys and s
 | Keys | Action |
 | --- | --- |
 | `space L`, `:line-history` | Open the line history of the cursor's line in normal mode, or of the lines every selection covers (several selections make several ranges). `%` then `space L` is the history of the whole file. |
-| `Enter` | The side by side diff of the file in that commit, at the hunk that changed the lines (the first one, when several did). `n`/`N` go through that commit's hunks of this file. `q`/`Esc` come back to the line history. On the uncommitted changes: the diff of the file against HEAD (the buffer, with its unsaved edits), at the lines. |
+| `Enter` | The side by side diff of the file in that commit, at the hunk that changed the lines (the first one, when several did). `n`/`N` go through that commit's hunks of this file. `q`/`Esc` close the diff and come back to the line history. On the uncommitted changes: the diff of the file against HEAD (the buffer, with its unsaved edits), at the lines. |
 | `o` | The whole commit: its list of changes, as `Enter` in the commit log. On a range, the list of the range; on the uncommitted changes, their list. |
 | `Enter` on a range (`v`, `w`/`b`, `A-s`...) | The combined change of the file over the range (the [range rules](#ranges) of the commit log), at the first hunk that touches the lines as they are in the newest commit of the range. |
-| `Enter` in the diff | Open the file as it is now, at the hunk, closing the line history. |
+| `Enter` in the diff | Open the file as it is now, at the hunk, dropping the line history. |
 | `s`, `j`/`k`..., `v`, `A-v`, `w`/`e`/`b`, `S-Down`/`S-Up`, `A-s`, `Esc`, `q` | As in the [commit log](#usage-1). |
 
 - **Rows**: the commits, newest first in the sections of the commit log (`B (unpushed)` or
@@ -1612,8 +1792,12 @@ Markdown is fine for editing and poor for reading: long prose, tables that break
 markers everywhere. The render mode shows a Markdown buffer as a rendered, read-only page, like a
 README on GitHub, one key away from its source. Browsing shows the page; editing is one key away.
 
+The page is a [screen](#screens): a window of its own kind, in the window you opened it from
+(covering it) or in a split of its own.
+
 ```
  V              the page, or back to the source (also :markdown-view)
+ C-w V          the page in a vertical split, beside the source
 ```
 
 ### What it renders
@@ -1675,6 +1859,7 @@ source.
  H  L           by half its width; gh  gl to its start, its end
  ?              the keys
  V  Esc         back to the source
+ ga             back to what the window held; ga again, the page again
 ```
 
 - **Links**: a local file opens (a Markdown file rendered, at its `#heading` if the link has one;
@@ -1684,16 +1869,23 @@ source.
   `yanked https://...` in the status line.
 - **Back to the source** (`V`, `Esc`): the cursor on the source line of the reading line, and the
   source's view starting at the source line of the page's top line. `V` from the source opens the
-  page at the cursor's line, the page's top at the view's top.
+  page at the cursor's line, the page's top at the view's top. `Esc` comes after the page's own
+  modal layers (a search, the outline, `?`), which take it first.
+- **One window at a time**: `V` toggles the page in the focused window only; another window
+  showing the same buffer stays as it is, source or page. `C-w V` opens the page in a vertical
+  split of the current window, leaving the source where it was: edit on the left, read on the
+  right. In a buffer that isn't Markdown it says `Not a Markdown buffer`.
 - **Edit keys switch to editing at once**, like GitHub's pencil but instant: any other key goes to
   the source with its cursor put on the reading line's source line (on its first character that isn't
   a space), and does what it does there. `i` inserts there, `o` opens a line below it, `c` changes
   its first character, `x` then `d` delete it; the page vanishes as soon as the buffer is edited or
-  normal mode is left. `:`, `space` and the other menus work as usual.
+  normal mode is left. `:`, `space` and the window commands work as usual, with the page
+  staying; `:w` writes the source.
 - **Each code block remembers how far it is scrolled** while the page is up; going to the source and
   back starts at 0 again. Nothing is saved.
-- **History** (`ga`) treats the page like the other screens: opening it with `V` is a jump, `ga`
-  from it goes back, and a link followed to another file comes back to the page with `ga`.
+- **History** (`ga`): from the page, `ga` closes it, as `Esc` does, and the window shows what it
+  held; history keeps the page, so `ga` again (or the forward step) shows it again. A page reached
+  by following a link from another page: `ga` goes back to the page you left.
 - The mouse: the wheel scrolls the page (sideways over a code block that scrolls), a click puts the
   reading line there and selects the link under it.
 
@@ -1718,8 +1910,8 @@ markdown-width = 100       # the prose's widest; 0: the window's width
 
 ### Limitations
 
-- One page at a time: it is drawn over the whole editor area (all the splits), for the focused
-  view's buffer.
+- A page is a screen in one window: other windows on the same buffer keep their own state, and a
+  page shows in one window at a time.
 - No images, no HTML layout, no math typesetting: what a terminal can't show stays as text.
 - Search matches whole lines of the page's text: a match across a line break isn't found. Lines of
   a table are searched as drawn (with their borders).
@@ -1928,8 +2120,8 @@ right = ["diagnostics", "shell", "selections", "register", "position", "file-enc
 
 `height` is the old name of `size` and still works for a while; when both are set, `size` wins.
 The default size was 30 percent of the height and is 33 now. The `[editor.terminal]` table is also
-the debugger's: `command` and `args` are its external terminal, and `size` is the debug panel's
-height in percent.
+the debugger's: `command` and `args` are its external terminal. The debug panel has its own
+`[editor.debugger.panel]` table (see [Screens](#configuration)).
 
 The defaults of the two layers: `i` (`insert_mode`), `a` (`append_mode`), `v` (`terminal_view`) and
 `e` (`terminal_edit_command`) in `[keys.terminal]`; `Enter` (`terminal_select`), `]`
@@ -1946,9 +2138,10 @@ like an old monochrome monitor, with `terminal-phosphor` in its [effects](#the-p
   closed, the editor resized), right away, not at the next frame.
 - A file opened from a terminal (a picker, `:e`, `vx file`) opens in the last focused window for
   documents and focuses it; with none, in a vertical split.
-- The buffer picker lists terminals, named `<shell> <cwd>` (`bash ~/src/x`); the scratch one also
-  while hidden. Picking one goes to its window, or shows the hidden scratch terminal. `gn` and `gp`
-  skip terminals.
+- The buffer picker lists terminals after the buffers, with `terminal` in the id column and named
+  `<shell> <cwd>` (`bash ~/src/x`); the scratch one also while hidden. Picking one goes to its
+  window, or shows the hidden scratch terminal. `gn` and `gp` skip terminals. `:bc` on a focused
+  terminal closes it.
 - `exit` or `Ctrl-d` closes the terminal's window. Quitting Vortex kills the shells (and what runs
   in them).
 - Typed input waits for the shell to be ready: `:sh cmd` on a new shell holds `cmd` until the
@@ -1959,25 +2152,20 @@ like an old monochrome monitor, with `terminal-phosphor` in its [effects](#the-p
 ### Windows that aren't documents
 
 A terminal shows live output that isn't text of a file, yet it is a window of the tree and shares
-its commands. That is done with **screen documents**: a `Document` with a name and no path, no
-gutter, no soft wrap, which refuses every transaction. The window shows a screen document and the
-screen's kind says what draws it and takes its keys.
+its commands. It is a [screen](#screens): a type of its own, not a document, drawn and driven by
+the terminal UI by its kind. The window motions, splits, resizing, `:q`, focus, the mouse and
+the window menu all work on it, and on a focused terminal only the window and editor commands and
+the terminal's own keys run (see [the keys on a screen](#the-keys-on-a-screen)).
 
-- `vortex-view/src/screen.rs` is the mechanism: `Document::screen_document`, `screen()`,
-  `is_screen()`, `screen_kind()` and `set_screen_text` (view mode puts the terminal's lines in it);
-  `Editor::document_view` (the window for documents), `in_document_window` (run something there
-  while focus stays on the screen), `open_screen_window` with a `Placement`, `show_screen`,
-  `hide_screen` (which returns the `Place` to come back to) and `focus_moved`.
-- `vortex-term/src/screens.rs` dispatches by kind: drawing, the cursor, keys, paste, the mouse, the
-  mode label, the keymap layer, `before_command` and `after_key`.
-- The tree gives windows a **share** (a percent of their container, `Node::share`), a root split
-  (`split_root`) and places (`place`, `insert_at`), so a screen can be hidden and brought back
-  where it was.
-
-The [hex view](#hex-view), the diffs, the [Markdown page](#markdown-render-mode) and the debug
-panel are views of their own for now. Each can become a screen kind later: a kind of its own in
-`screens.rs`, its content set with `set_screen_text` or drawn by the kind, and a window in the tree
-instead of a compositor layer.
+- A terminal opens in a split or along an edge per `[editor.terminal]` (the scratch one at
+  `position` and `size`), not over a window: it never covers one, and a terminal's window can't
+  be covered by another screen (a file or a diff opened from a terminal goes to the window for
+  documents).
+- `Esc` keeps the rules above: in normal mode it goes to the program. The scratch terminal is
+  hidden by `Ctrl-t`; the others close with `:q`, `Ctrl-w q` or `exit`.
+- A screen's window has no history: `ga` in a terminal says so.
+- View mode shows the terminal's lines in a read-only text window that covers the terminal's
+  window until it ends.
 
 ### Practice
 
@@ -1998,7 +2186,6 @@ with the POSIX tools the exercises may use no short text makes them beat typing 
   the keys say "no prompts: the shell sends no OSC 133 markers".
 - In a terminal's normal mode, watch mode's `a` and the debugger's `i`, `v`, `e` are the terminal's.
 - `Esc` stays the terminal's, so modes are left from an editor window or by their commands.
-- The debug panel is still a panel below the splits, not a window.
 - The debugger's `runInTerminal` still uses the external terminal, not a terminal window.
 - `vx` in a shell started in a terminal over `ssh` or in a container doesn't reach this editor.
 - A command typed with `:sh` while a full screen program runs goes to that program.
@@ -2206,7 +2393,7 @@ forward or back, jump to the next breakpoint, click on the timeline to seek.
 | --- | --- |
 | `space G`, `:debug-mode` | Enter debug mode (`:debug-mode` again leaves it) |
 | `vx --debug [program] [-- args]` | Start in debug mode and launch the program (see [`vx --debug`](#vx---debug)) |
-| `Esc` | Leave debug mode. The session keeps running, paused or playing, and the panel stays as it is |
+| `Esc` | Leave debug mode. The session keeps running, paused or playing, and the panel stays as it is. With the panel focused, its own `Esc` comes first (it hides), then this one |
 
 One mode at a time: entering debug mode leaves [watch mode](#watch-mode) as its `Esc` does (its
 session goes on recording, `:watch` comes back to it), and `:watch` or `vx --watch` leaves debug
@@ -2438,10 +2625,25 @@ expressions), **Call stack** (the threads; the current one open on its frames), 
 evaluated). From 120 columns the console shows beside the data section; narrower, it is the fifth
 tab. The tab bar shows the session's status and name, and the search of the section.
 
-The panel opens when a session starts (the editor keeps the keys) and hides when it ends; `P` in
-debug mode shows it again with the last console. `Esc` in normal mode hides it. It stays a panel below the splits, `[editor.terminal] size`
-percent high, and no longer shares its place with a terminal. `Tab` or `Ctrl-g` in debug
-mode, or `Ctrl-g` outside it, focuses it.
+The panel is a [screen](#screens): a window of its own kind, one screen with its five sections
+(they share one stop and one cursor model). It opens when a session starts (the editor keeps the
+keys) and hides when it ends; `P` in debug mode shows it again with the last console. By default it
+opens along the bottom of the editor, `size` percent high; `position` puts it at the `top`, `left`
+or `right` as the terminal's, and it shares no place with a terminal. `Tab` or `Ctrl-g` in debug
+mode, or `Ctrl-g` outside it, focuses it. As any window it follows the window motions, resizing and
+`:q`; in a wide window its own layout puts the console beside the data, not by splitting windows.
+
+```toml
+[editor.debugger.panel]
+position = "bottom"   # "bottom", "top", "left" or "right"
+size = 33             # percent of the editor in that direction; kept between 10 and 90
+```
+
+`Esc` or `q` on the focused panel hides its window (after a section's search, which takes the first
+`Esc` to clear itself); `P` shows it again. `Ctrl-g` still goes back to the documents, leaving the
+panel where it is. `Esc` in a text window no longer hides the panel while it is unfocused. In
+debug mode (or watch mode) with the panel focused, the first `Esc` hides the panel and a second
+one leaves the mode.
 
 Its keys, when focused, are modal like the fork's pickers. The keys it doesn't take go to debug
 mode while debug mode is on, so `Space`, `H`, `L`, `.` and the rest of the mode still work
@@ -2467,7 +2669,8 @@ with the panel focused:
 | `{` `}` | Rewind ten stops back or forward |
 | `M` | The [memory](#memory) of the value under the cursor (`▦` after it), in the hex view |
 | `:`, `Ctrl-t` | The command line; the scratch terminal |
-| `q`, `Esc`, `Ctrl-g` | Back to the editor |
+| `q`, `Esc` | Hide the panel's window |
+| `Ctrl-g` | Back to the editor (the panel stays) |
 
 The panel has no row of hints: the keys are in debug mode's `?` box and on the bar. The loading
 animation (a spinner, `installing breakpoints · 12/48 files`) shows in the panel's top row outside
@@ -3260,7 +3463,8 @@ bytes; the elements about text (line ending, indentation, encoding, total lines)
 
 ### How it lives in the editor
 
-The hex view is a mode of the document, not a separate view or component: a `Document` in the hex
+The hex view is not a [screen](#screens) (yet): it is shown in a text window, and `Esc`, `ga` and
+`:q` work on it as on any buffer. It is a mode of the document, not a separate view or component: a `Document` in the hex
 view has a `HexBuffer` (`vortex-view/src/hex.rs`) and draws its rows instead of its text. So it is a
 buffer like any other: splits (each view with its own cursor and hex or bin mode, a new split
 starting where the view it splits is), the buffer picker, `:q`, `:w`, `:bc`, history (`ga`,
@@ -3320,6 +3524,10 @@ menu with the title, the state of the project in a git repository, its languages
 each way to start, over a vortex that spins behind it. `vx <file>` opens the file as before, never
 the dashboard.
 
+The dashboard is an overlay, not a window: it is drawn over everything (every window and the
+statuslines) and takes every key. Nothing underneath changes while it is up. It is not a
+[screen](#screens), and not a place of history.
+
 ```text
 ░░······░░░░·░░░░▒▒▒▓▓▓▓▓▓▓▓▓████▓▒▒▒▒▓▓▓████████▓▒▒░░░·········░░▒▓███▓▒░░░·░░░░▒█▓▓█▓▒░········░▒█
 ·······░░░░░░▒▒▒▓▓▓███▓▓▓▓▓▒▒▒▒░░░░░░░░░▒▒▒▓▒▓▒▓████▓▓▓▓▓░░········░▒▓████▓░░░░░░░▒▓▓████▒········░▒
@@ -3338,21 +3546,22 @@ the dashboard.
 
 | Key or command | What it does |
 | --- | --- |
-| `i` | The empty buffer under the dashboard, in insert mode |
-| `Esc` | The empty buffer, in normal mode |
+| `Esc` | Close it. On a bare start the empty buffer shows, in normal mode; after `:dashboard` everything is exactly as it was |
+| `i` | Close it and start insert mode in the buffer under it |
 | `f` | The file picker (`space f`) |
 | `e` | The file tree (`space e`) |
 | `l` | The commit log (`space l`), in a git repository |
 | `t` | The [worktrees](#worktrees) (`:wt`), when the repository has other worktrees |
 | `w` | [Watch mode](#watch-mode) (`:watch`), in a git repository: the dashboard closes and the mode bar opens |
 | `q` | Quit (`:q`) |
-| `:dashboard` | Show the dashboard again, over a new empty buffer (or over the current one when it is an empty scratch buffer), its animations from the start |
+| `:` | The command line, over the dashboard; what the command opens or does closes it |
+| `:dashboard` | Show the dashboard again, over what the editor shows (no new buffer), its animations from the start; `Esc` leaves everything exactly as it was |
 | `:vortex` | Only the vortex and the logo on its panel, centered (no credit line, no stats, no actions; no logo with `dashboard-title = false`), moving as `dashboard-background` says (`off` shows it still); it goes like the dashboard. Handy for a screenshot |
 
-Every other key goes to the keymap as in any buffer: `:`, the `space` menu and its infobox,
-`Ctrl-w`... A key that edits the buffer or leaves normal mode (`o`, `v`, a paste) drops into the
-buffer like `i`. Opening a file from anywhere (a picker, the file tree, `:open`) replaces the
-dashboard; closing a picker or the tree with `Esc` comes back to it. The keys on the right are
+Every other key does nothing: typing doesn't close the dashboard, and neither does the mouse
+(clicks, the wheel and pastes are ignored). Only `Esc` and its own actions close it: `i`, `w` and
+`q` (quit) close it, a picker opened with `f`, `e`, `l` or `t` is over it (`Esc` in the picker comes
+back to it), and what the picker opens, a file say, closes it. The keys on the right are
 the shortest ones the keymap has for the same commands, so a remapped key shows as remapped.
 Nothing waits for the animations: every key works from the first frame.
 
@@ -3713,7 +3922,7 @@ While watch mode is on, these keys come first (`[keys.watch]`, below):
 | `x` | Reject the current change: put its lines back to what they were when the watch started |
 | `y` | Yank the current change's `file:lines` to the clipboard |
 | `c` | The picker of the session's changes (`:watch-changes`) |
-| `Esc` | Leave watch mode, to edit where you are. The session goes on recording; `:watch` comes back to it |
+| `Esc` | Leave watch mode, to edit where you are. The session goes on recording; `:watch` comes back to it. On a focused [screen](#screens) the screen's own `Esc` comes first (it closes or hides), then this one |
 
 **Following.** When a file changes on disk (changes are merged until 200ms pass without one, at
 most a second, like the [live views](#uncommitted-changes-live)), its buffer is opened, or shown:
@@ -3982,7 +4191,7 @@ you were, go forward again. `gA` opens the history picker.
 
 **The history picker** lists the focused view's places, newest first, in three columns: a mark,
 `file:line` (the path relative to the working directory) and the text of the line. A screen is
-listed by name: `the dashboard`, `the vortex`, `a diff`, `the debug panel`. When you are not
+listed by name (a diff's, a page's: `README.md, rendered`). When you are not
 walking, the first row is the present, where you are, marked `●`; when you are, the row where the
 walk is, is marked `●` (the walk's start is the newest row). The preview shows the place's file
 at its line. It is modal like the fork's other lists: it opens in normal mode on the marked row,
@@ -4016,11 +4225,10 @@ rule in `vortex_view::history::records`):
   palette, whose commands record their own;
 - another buffer, by any means: `gn`/`gp`, `gm`, `:open`, `:buffer`, `:new`, a picker, `vx file`
   from a terminal, `:tutor`, `:practice`...
-- another screen. The screens, the full-screen views the editor has:
-  - the dashboard (`:dashboard`, `:vortex`, and the one at startup), drawn over an empty buffer;
+- another screen that covers the window, once it closes (see [Screens](#screens)):
   - the side by side diff, every kind of it: `Space =` on a file, `Enter` or `Ctrl-g` in the
     changed files picker, a file of the uncommitted changes or of a commit from the commit log;
-  - the debug panel, once focused (`Ctrl-g`, `Tab` or `V` in debug mode, a click in it);
+  - the Markdown page (`V`, a link followed from another page);
   - the hex view and a debugged program's memory: they are buffers, so they are places like any
     buffer;
 - going to a bookmark (`Ctrl-i`, `Ctrl-o`, `Space j`).
@@ -4035,16 +4243,17 @@ through files would fill the history; spectator mode steps many times a second),
 and switching windows. A jump that lands on the line it left records nothing, and a place on the same buffer
 and line as the last one recorded replaces it rather than adding a second one.
 
-**Screens are places.** `ga` from a file opened from a diff (`Enter`) comes back to the diff, as
-it was (its scroll, its hunk), read again in case the file changed; `ga` in the diff leaves it for
-the place before, and so does `Enter` on a place of the picker opened there with `gA`. `ga` from a
-file opened from the dashboard brings the dashboard back (over a new empty buffer; the one left
-behind is closed). `ga` back to the debug panel focuses it, while a session runs. Pickers are not
-places: the result picked is the jump, and a picker, its query and its scroll are never brought
-back: leaving a diff by history also closes the pickers it was opened from.
+**Screens that cover a window are places.** A diff or a page opened over a window covers it, and
+closing it (`Esc`, `q`, or `ga`) puts it in that window's history, as it was (its scroll, its hunk;
+a diff is read again in case the file changed). `ga` from the screen closes it and shows what the
+window held; `ga` again shows the screen again. `ga` from a file opened from a diff (`Enter`) comes
+back to the diff the same way. On a page reached by following a link from another page, `ga` goes
+back to the page you left. A screen in a window of its own, a terminal or the debug panel, has no
+history: `A screen's window has no history`. The dashboard is an overlay and no place. Pickers are
+not places either: the result picked is the jump, and a picker, its query and its scroll are never
+brought back: leaving a diff by history drops the pickers it was opened from.
 
-The hex view takes `ga` and `gA` from its own `g` keys, and they do what the editor's do. In the
-debug panel, which takes its keys first, they do nothing: history goes on from wherever `Esc` (or `Ctrl-g`) drops you.
+The hex view takes `ga` and `gA` from its own `g` keys, and they do what the editor's do.
 
 ### Bookmarks
 
@@ -4105,7 +4314,7 @@ screen" is this: screens are places.
   list shows where you are against the places you left; `Enter` on it does nothing, as there is
   nowhere to go. While walking, the mark is on the walk's row instead and there is no present
   row: the walk's start is the newest place.
-- **Screens are listed by name** (`the dashboard`, `a diff`...), with no line text and no
+- **Screens are listed by name** (a diff's or a page's title), with no line text and no
   preview, as they have no line to show.
 - **`history_forward` has no key**: going forward is rare next to `ga` and the picker (which
   reaches any place). It is a command of the palette, which now runs the callbacks a command
@@ -4119,9 +4328,10 @@ screen" is this: screens are places.
   is taken before the move and recorded after, with the same-line check.
 - **The diagnostics and changes (`]d`, `]g`) record**, like `n`: they go anywhere in the file. The
   syntax tree's objects (`]f`...) don't: they move to what is around the cursor.
-- **The debugger's stops don't record**; the debug panel, once focused, is a place.
-- **Terminals are not screens** of the history: windows toggled with one key; recording them would
-  fill the history with them.
+- **The debugger's stops don't record**; the debug panel is a screen in a window of its own, so it
+  isn't a place.
+- **Screens of their own aren't places**: terminals and the debug panel are windows toggled with
+  one key; recording them would fill the history with them. The dashboard is an overlay.
 - **Bookmarks of a closed file are kept** by path and line (the prompt only said a buffer
   without a file loses them).
 - **A bookmark is a line**, stored as the start of the line: text typed at the very start of the
@@ -4141,8 +4351,8 @@ screen" is this: screens are places.
   and `move_lines_up` commands) deletes and inserts it: its bookmark goes.
 - The hex view's history places are buffers, not offsets: `ga` comes back to the hex view where
   its cursor is now, not to the offset before a `G` or a search.
-- A diff left by history is kept as it was and read again when it comes back; leaving it with
-  `q` drops it, and history skips it from then on.
+- A diff left by history is kept lightened, without its watch of the working tree, and read again
+  when it comes back.
 - A walk's places of a closed buffer are dropped; if it was where the walk started, `ga` says so.
 
 ## The vortex theme
@@ -4282,7 +4492,7 @@ use `:practice` for editing, then covers only what doesn't fit an exercise check
 a buffer: opening, saving and quitting, buffers, pickers, the file tree, history and bookmarks, going
 places (`gw`, `[`/`]`), the view, splits, the system clipboard, language servers, git (with this
 fork's diff view, commit log and blame), the shell commands other than `|`, `:earlier`, settings,
-the debugger, this fork's terminals and hex view, and a last section with the editing keys that have no exercise. Upstream's lessons
+the debugger, this fork's terminals and hex view (and the screens they share windows with), and a last section with the editing keys that have no exercise. Upstream's lessons
 on editing are exercises now (the case keys, `<A-C>`, `n` in select mode, rotating and removing
 selections were added for them).
 

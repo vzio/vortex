@@ -46,15 +46,18 @@
  vx alone, or vx FOLDER (which also makes FOLDER the working
  directory), opens on the dashboard (this fork): the project's
  branch, remote, uncommitted changes and languages in a git
- repository, and a key for each way to start. Opening a file
- from anywhere replaces it; every other key works as usual.
+ repository, and a key for each way to start. It is drawn over
+ everything and takes every key: typing does nothing, and the
+ mouse neither. Only Esc closes it, and its own keys.
 
-  :dashboard     show the dashboard again
+  :dashboard     show the dashboard again, over what you have
                  On the dashboard:
-  i              start typing in the empty buffer under it
-  Esc            the empty buffer, in normal mode
+  Esc            close it: everything is as you left it (on a
+                 bare start, the empty buffer)
+  i              close it and start typing
   f  e  l  q     file picker, file tree, git history, quit
   t              the worktrees, when the repository has others
+  :              the command line, over the dashboard
 
  Try it: :dashboard, then Esc. To start without it, set
  dashboard = false under [editor] in your config. The vortex
@@ -146,9 +149,14 @@
  A Markdown file opened from the file tree or the command line
  (vx README.md) opens rendered, as a read-only page: headings,
  lists, tables, code blocks, links. Elsewhere it opens as text.
+ The page is a screen: a window of its own kind, in the window
+ you opened it from (see section 9).
 
-  V              the rendered page, or back to the source
+  V              the rendered page, or back to the source (in
+                 this window only: another window on the same
+                 buffer stays as it is)
   :markdown-view the same
+  C-w V          the page in a vertical split, beside the source
 
  On the page:
 
@@ -163,7 +171,10 @@
 
  Edit keys switch to the source at the reading line: i, a, o,
  c... do there what they do in normal mode. V or Esc go back to
- the source at the same place.
+ the source at the same place, and ga does too: it shows the
+ window's last place, and ga again brings the page back. After
+ following a link to another page, ga goes back to the page
+ you left. :w on a page writes its source.
 
  Set markdown-view = "always" or "never" under [editor] to
  change when Markdown opens rendered.
@@ -183,8 +194,8 @@
  History is automatic: each teleport remembers where it left.
  Teleports are gd and the other goto keys, a search (/ ? n N),
  gg, ge, :12, a result picked in a picker, another buffer, and
- another screen (the dashboard, a diff, the debug panel). Moving
- through the text around the cursor (hjkl w b f } % gt...) never
+ another screen (a diff, a page, the hex view) closing over its
+ window. Moving through the text around the cursor (hjkl w b f } % gt...) never
  counts, so history stays short enough to trust.
 
   ga             back to where the last jump left; again, one
@@ -194,6 +205,11 @@
                  newest first, the present marked with a dot
                  (j and k move, s filters, ? lists the keys);
                  Enter goes there, Esc closes it
+
+ A screen that covers a window (a diff, a rendered page): ga
+ closes it and shows what the window held, and ga again shows
+ the screen again. A terminal or the debug panel has a window
+ of its own, and no history.
 
  Going forward again after ga is the history_forward command: it
  has no key, find it in the command palette (space ?). The last
@@ -298,9 +314,24 @@
                  a horizontal one)
   C-w f  C-w F   open the file under the cursor in a split, a
                  vertical split
+  C-w V          the Markdown page of this file in a vertical
+                 split (this fork, section 5)
+  C-w =          the diff of this file in a vertical split
+                 (this fork, section 12)
 
   :vs PATH       open a file in a vertical split (:hs for
                  horizontal)
+
+ A window shows either text or a screen (this fork): a terminal,
+ a diff, a rendered page or the debug panel. A screen opens in
+ the window you are in and covers it, or in a split or at the
+ edge (terminals and the debug panel, set in [editor.terminal]
+ and [editor.debugger.panel]), and moves, splits, resizes and
+ closes like any window. Esc closes a screen that covers a
+ window: the window shows what it held. On a screen only the
+ window and editor commands run (C-w, space, :), plus its own
+ keys; text commands have no text there. The buffer picker
+ lists screens after the buffers, :bc closes the one in focus.
 
  Try it: C-w v, scroll the new split, C-w h, then C-w o.
 
@@ -380,8 +411,12 @@
   space g        pick a changed file, staged or not; C-g there
                  shows its diff
   space =        this file next to its last commit, side by side
-                 (fork): n N go from change to change, q closes;
-                 s u r stage, unstage and revert the change, and
+                 (fork): n N go from change to change, q or Esc
+                 close it, back to the file; in a window narrower
+                 than 120 columns the sides are stacked, one above
+                 the other, and t switches by hand (C-w = opens it
+                 in a split); s u r stage, unstage and revert the
+                 change, and
                  S U R the whole file. A revert is an edit of the
                  file: u in its buffer brings it back
   space l        the commit log (fork): Enter lists the changes
@@ -506,9 +541,11 @@
  player. The first row says what the program does (DEBUG paused,
  playing...) and has the transport: |< << > >> >|. The second is
  the timeline of the run, which you can click to go back to a
- moment. The third lists the keys. A panel opens below your
- splits while the program runs: its variables, your watches, the
- call stack, the breakpoints and a console.
+ moment. The third lists the keys. A panel, a screen like a
+ terminal, opens in a window at the bottom (or top, left, right,
+ as [editor.debugger.panel] says) while the program runs: its
+ variables, your watches, the call stack, the breakpoints and a
+ console, which sits beside them in a wide window.
  The screen changes color while debug mode is on.
 
   space G        debug mode: the debugger as a video player
@@ -542,8 +579,10 @@
  change section, Enter opens a value (or jumps to a frame or
  breakpoint), c changes it, a watches it, s searches. The keys
  the panel doesn't use, like Space and L, are debug mode's.
- Ctrl-g gives the keys to the panel from anywhere, and Esc goes
- back to the editor; Esc again in normal mode hides the panel.
+ Ctrl-g gives the keys to the panel from anywhere; in it, Esc or
+ q hide its window (P shows it again) and Ctrl-g goes back to
+ the editor. In debug mode with the panel focused, Esc hides it
+ first; Esc again leaves the mode.
 
  Where the adapter reads memory, a value that lives in memory
  has a ▦ after it, and M shows its bytes in the hex view, in a
@@ -611,9 +650,9 @@
 =                       18 THE TERMINALS                        =
 =================================================================
 
- A terminal is a window like any other: it has its place among
- your splits, and the window commands of section 9 move to it
- and from it. The first one, the scratch terminal, keeps running
+ A terminal is a screen (section 9), a window like any other: it
+ has its place among your splits, and the window commands of
+ section 9 move to it and from it. The first one, the scratch terminal, keeps running
  while it is hidden, and SH in the statusline says what its
  shell does: yellow while a command runs, then green or red for
  how it ended, until you look at the terminal again.
