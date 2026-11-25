@@ -22,7 +22,8 @@ macro_rules! current {
 #[macro_export]
 macro_rules! current_ref {
     ($editor:expr) => {{
-        let view = $editor.tree.get($editor.tree.focus);
+        // the text window commands act on (this fork: never a screen's)
+        let view = $editor.tree.get($editor.tree.text_focus());
         let doc = &$editor.documents[&view.doc];
         (view, doc)
     }};
@@ -48,7 +49,9 @@ macro_rules! view_mut {
         $editor.tree.get_mut($id)
     }};
     ($editor:expr) => {{
-        $editor.tree.get_mut($editor.tree.focus)
+        // the text window commands act on (this fork: never a screen's)
+        let focus = $editor.tree.text_focus();
+        $editor.tree.get_mut(focus)
     }};
 }
 
@@ -60,7 +63,8 @@ macro_rules! view {
         $editor.tree.get($id)
     }};
     ($editor:expr) => {{
-        $editor.tree.get($editor.tree.focus)
+        // the text window commands act on (this fork: never a screen's)
+        $editor.tree.get($editor.tree.text_focus())
     }};
 }
 

@@ -243,13 +243,9 @@ impl Application {
         }
 
         if dashboard {
-            if let Some(view) = compositor.find::<ui::EditorView>() {
-                view.open_dashboard(&mut editor);
-            }
+            crate::dashboard::open(&mut compositor, &mut editor, false);
         } else if files_named && crate::markdown_view::opens_rendered(&editor, doc!(editor), true) {
-            if let Some(view) = compositor.find::<ui::EditorView>() {
-                view.open_markdown(&mut editor, crate::markdown_view::Start::Source, false);
-            }
+            crate::markdown_view::open(&mut editor, crate::markdown_view::Start::Source);
         }
 
         // git merge conflicts in the repository of the working directory, for `space D` and the
@@ -317,14 +313,11 @@ impl Application {
         // TODO: need to recalculate view tree if necessary
 
         // the focused buffer's language's theme (this fork), but the screens keep the main one
-        let screen = self
-            .compositor
-            .find_id::<crate::ui::diff_view::DiffView>(crate::ui::diff_view::ID)
-            .is_some()
-            || self
-                .compositor
-                .find::<crate::ui::EditorView>()
-                .is_some_and(|view| view.has_dashboard(cx.editor));
+        let screen = cx
+            .editor
+            .focused_screen()
+            .is_some_and(|screen| screen.kind == vortex_view::screen::ScreenKind::Diff)
+            || crate::dashboard::is_up(&mut self.compositor);
         cx.editor.sync_language_theme(screen);
 
         let surface = self.terminal.current_buffer_mut();
@@ -1339,12 +1332,14 @@ impl Application {
         self.terminal.backend().buffer()
     }
 
-    /// The Markdown render mode when it is up, and the editor, for integration tests.
+    /// Runs `f` on the focused Markdown page, with the editor, for integration tests.
     #[cfg(feature = "integration")]
-    pub fn markdown(&mut self) -> Option<(&mut crate::markdown_view::MarkdownView, &mut Editor)> {
-        let view = self.compositor.find::<ui::EditorView>()?;
-        let markdown = view.live_markdown(&self.editor)?;
-        Some((markdown, &mut self.editor))
+    pub fn with_markdown<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::markdown_view::MarkdownView, &mut Editor) -> R,
+    ) -> Option<R> {
+        let screen = self.editor.tree.focused_screen()?;
+        crate::screens::with_state(&mut self.editor, screen, f)
     }
 
     /// The kind of the cursor of the terminal, which is hidden when no component shows one.

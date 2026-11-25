@@ -37,7 +37,8 @@ use vortex_core::Selection;
 use vortex_view::document::Mode;
 use vortex_view::editor::{Action, MarkdownViewStartup};
 use vortex_view::graphics::{Rect, Style};
-use vortex_view::history::{Jump, ScreenKind};
+use vortex_view::history::Jump;
+use vortex_view::screen::{Placement, Screen, ScreenKind};
 use vortex_view::input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use vortex_view::keyboard::{KeyCode, KeyModifiers};
 use vortex_view::view::ViewPosition;
@@ -166,7 +167,9 @@ impl MarkdownView {
     /// The render mode of the focused view's buffer, or why not.
     pub fn open(editor: &mut Editor, start: Start) -> Result<Self, &'static str> {
         let view = editor.tree.focus;
-        let doc_id = editor.tree.get(view).doc;
+        let Some(doc_id) = editor.tree.try_get(view).map(|view| view.doc) else {
+            return Err("Not a Markdown buffer");
+        };
         let doc = &editor.documents[&doc_id];
         if !is_markdown(doc) {
             return Err("Not a Markdown buffer");
@@ -192,16 +195,18 @@ impl MarkdownView {
         })
     }
 
-    /// Whether it is still up: the focused view shows the buffer, in normal mode, unedited (a
-    /// reload from disk keeps it, and the page follows).
+    /// Whether the text window it covers still shows its buffer (the page syncs that window's
+    /// cursor to the reading line).
     pub fn covers(&self, editor: &Editor) -> bool {
-        editor.mode() == Mode::Normal
-            && editor.tree.focus == self.view
-            && editor.tree.contains(self.view)
-            && editor.tree.get(self.view).doc == self.doc
-            && editor
-                .document(self.doc)
-                .is_some_and(|doc| doc.version() == self.version || !doc.is_modified())
+        editor
+            .tree
+            .try_get(self.view)
+            .is_some_and(|view| view.doc == self.doc)
+    }
+
+    /// Shown again over the text window `view` (history).
+    pub fn reopened(&mut self, view: ViewId) {
+        self.view = view;
     }
 
     /// The top and reading lines, for showing it again later.
@@ -286,13 +291,7 @@ impl MarkdownView {
             self.offsets.clear();
         }
         if version != self.version {
-            // reloaded from disk: still the screen history knows
             self.version = version;
-            if let Some(cover) = &mut editor.screen_cover {
-                if cover.kind == ScreenKind::Markdown(self.doc) {
-                    cover.version = version;
-                }
-            }
         }
         self.laid = Some(Laid {
             page,
@@ -324,7 +323,9 @@ impl MarkdownView {
         let page = &self.laid.as_ref().unwrap().page;
         match start {
             Start::Source => {
-                let view = editor.tree.get(self.view);
+                let Some(view) = editor.tree.try_get(self.view) else {
+                    return;
+                };
                 let doc = &editor.documents[&self.doc];
                 let text = doc.text().slice(..);
                 let cursor = doc.selection(view.id).primary().cursor(text);
@@ -667,8 +668,8 @@ impl MarkdownView {
                 let line = heading.line;
                 cx.jobs.callback(async move {
                     let call: crate::job::Callback = crate::job::Callback::EditorCompositor(
-                        Box::new(move |editor: &mut Editor, compositor: &mut Compositor| {
-                            if let Some(markdown) = markdown_of(compositor, editor) {
+                        Box::new(move |editor: &mut Editor, _: &mut Compositor| {
+                            if let Some(markdown) = markdown_of(editor) {
                                 markdown.go_to_line(line);
                             }
                         }),
@@ -934,8 +935,8 @@ impl MarkdownView {
         self.synced = Some(self.reading);
     }
 
-    /// Draws the page over `area`, its last row the status row.
-    pub fn render(&mut self, editor: &mut Editor, area: Rect, surface: &mut Surface) {
+    /// Draws the page over `area` (its window), its last row the status row.
+    pub fn render(&mut self, editor: &mut Editor, area: Rect, surface: &mut Surface, focused: bool) {
         self.area = area;
         self.lay_out(editor);
         self.apply_search();
@@ -1026,18 +1027,26 @@ impl MarkdownView {
                 }
             }
         }
-        self.render_status(editor, area, surface);
+        self.render_status(editor, area, surface, focused);
     }
 
-    fn render_status(&self, editor: &Editor, area: Rect, surface: &mut Surface) {
+    fn render_status(&self, editor: &Editor, area: Rect, surface: &mut Surface, focused: bool) {
         if area.height < 2 {
             return;
         }
         let theme = &editor.theme;
         let y = area.bottom() - 1;
-        let base = theme.get("ui.statusline");
+        let base = if focused {
+            theme.get("ui.statusline")
+        } else {
+            theme.get("ui.statusline.inactive")
+        };
         surface.set_style(Rect::new(area.x, y, area.width, 1), base);
-        let badge = theme.get_or("ui.statusline.normal", "ui.statusline");
+        let badge = if focused {
+            theme.get_or("ui.statusline.normal", "ui.statusline")
+        } else {
+            base
+        };
         let (x, _) = surface.set_stringn(area.x, y, " RENDER ", area.width as usize, badge);
         let doc = editor.document(self.doc);
         let name = doc
@@ -1211,7 +1220,7 @@ fn fragment_line(fragment: &str) -> Option<usize> {
 /// Opens a local link's file: a Markdown file rendered (at its `#heading`), any other file in
 /// the editor (at its `#L12` line). The page it leaves is a place history comes back to.
 fn open_link(
-    compositor: &mut Compositor,
+    _compositor: &mut Compositor,
     editor: &mut Editor,
     path: PathBuf,
     fragment: Option<String>,
@@ -1227,9 +1236,7 @@ fn open_link(
             Some(anchor) if !anchor.is_empty() => Start::Anchor(anchor),
             _ => Start::Source,
         };
-        if let Some(view) = compositor.find::<ui::EditorView>() {
-            view.open_markdown(editor, start, false);
-        }
+        open(editor, start);
     } else if let Some(line) = fragment.as_deref().and_then(fragment_line) {
         let (view, doc) = vortex_view::current!(editor);
         let text = doc.text().slice(..);
@@ -1240,13 +1247,103 @@ fn open_link(
 }
 
 /// The render mode up in the editor, if any.
-pub fn markdown_of<'a>(
-    compositor: &'a mut Compositor,
-    editor: &Editor,
-) -> Option<&'a mut MarkdownView> {
-    compositor
-        .find::<ui::EditorView>()
-        .and_then(|view| view.live_markdown(editor))
+pub fn markdown_of(editor: &mut Editor) -> Option<&mut MarkdownView> {
+    let screen = editor.tree.focused_screen()?;
+    editor.screens.state_mut::<MarkdownView>(screen)
+}
+
+/// The render mode of the focused text window's buffer (this fork): its page, a screen over the
+/// window (`Esc` and `V` show the source again), at `start`. Says why not when it can't.
+pub fn open(editor: &mut Editor, start: Start) -> bool {
+    match MarkdownView::open(editor, start) {
+        Ok(markdown) => {
+            let name = editor
+                .document(markdown.doc)
+                .map(|doc| format!("{}, rendered", doc.display_name()))
+                .unwrap_or_default();
+            let source = markdown.doc;
+            let screen = editor.add_screen(
+                Screen::new(ScreenKind::Markdown, name)
+                    .with_source(Some(source))
+                    .with_state(markdown),
+            );
+            editor.open_screen(screen, Placement::Cover);
+            true
+        }
+        Err(err) => {
+            editor.set_error(err);
+            false
+        }
+    }
+}
+
+/// Back to the source from the focused page: `sync` puts its cursor at the reading line and its
+/// top at the page's top (the toggle, `Esc`), not when history shows another place. History
+/// keeps the page, `ga` shows it again.
+pub fn close(editor: &mut Editor, sync: bool) {
+    let view = editor.tree.focus;
+    let Some(screen) = editor.tree.focused_screen() else {
+        return;
+    };
+    if editor.screens.kind(screen) != Some(ScreenKind::Markdown) {
+        return;
+    }
+    if sync {
+        if let Some(mut state) = editor.screens.take_state(screen) {
+            if let Some(markdown) = state.downcast_mut::<MarkdownView>() {
+                if markdown.covers(editor) {
+                    markdown.sync_source(editor, true);
+                }
+            }
+            editor.screens.put_state(screen, state);
+        }
+    }
+    crate::screens::close(editor, view);
+}
+
+/// A command of the keymap on the focused page (this fork): the page runs its own version (or
+/// goes, for `V`), or the command runs: a command about windows or the editor with the page
+/// staying, any other on the source at the reading line, the page gone. Returns whether the
+/// command is to run.
+pub fn through(command: &MappableCommand, cx: &mut commands::Context) -> bool {
+    let Some(screen) = cx.editor.tree.focused_screen() else {
+        return true;
+    };
+    if cx.editor.screens.kind(screen) != Some(ScreenKind::Markdown) {
+        return true;
+    }
+    let Some(mut state) = cx.editor.screens.take_state(screen) else {
+        return true;
+    };
+    let result = state
+        .downcast_mut::<MarkdownView>()
+        .map(|markdown| markdown.command(command, cx));
+    cx.editor.screens.put_state(screen, state);
+    match result {
+        Some(CommandResult::Taken) => false,
+        Some(CommandResult::Close) => {
+            close(cx.editor, true);
+            false
+        }
+        Some(CommandResult::Run) => {
+            if !crate::screens::allows(cx.editor, command.name()) {
+                // a text command: on the source, synced to the reading line
+                close(cx.editor, false);
+            }
+            true
+        }
+        None => true,
+    }
+}
+
+/// `V`, `:markdown-view` (this fork): the render mode of the focused Markdown buffer, or back to
+/// its source.
+pub fn toggle(editor: &mut Editor) {
+    if markdown_of(editor).is_some() {
+        close(editor, true);
+    } else {
+        open(editor, Start::Source);
+    }
 }
 
 /// The keys of the render mode, for `?`.

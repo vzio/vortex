@@ -7,25 +7,19 @@ use vortex_view::{
     align_view,
     document::Mode,
     editor::Action,
-    screen::{Placement, ScreenKind},
+    screen::{Placement, Screen, ScreenId, ScreenKind},
     terminal::{Shell, ShellEvent, ShellOptions, Size, Terminal, Waiter},
     tree::Layout,
-    Align, Document, DocumentId, Editor,
+    Align, Editor,
 };
 
 use super::shim;
 use crate::job;
 
-/// Starts a shell in a new terminal, without showing it: its screen document.
-fn spawn(editor: &mut Editor) -> anyhow::Result<DocumentId> {
+/// Starts a shell in a new terminal, without showing it: its screen.
+fn spawn(editor: &mut Editor) -> anyhow::Result<ScreenId> {
     let config = editor.config().terminal.clone();
-    let doc = Document::screen_document(
-        ScreenKind::Terminal,
-        "terminal".into(),
-        editor.config.clone(),
-        editor.syn_loader.clone(),
-    );
-    let doc = editor.add_screen_document(doc);
+    let doc = editor.add_screen(Screen::new(ScreenKind::Terminal, "terminal"));
 
     // `vx` in the shell talks to this editor; started first, so its directory goes on PATH
     let server = match shim::Server::start(move |request, reply| {
@@ -61,7 +55,7 @@ fn spawn(editor: &mut Editor) -> anyhow::Result<DocumentId> {
     let shell = match Shell::spawn(options, sender) {
         Ok(shell) => shell,
         Err(err) => {
-            let _ = editor.close_document(doc, true);
+            editor.screens.remove(doc);
             return Err(err);
         }
     };
@@ -92,30 +86,33 @@ fn spawn(editor: &mut Editor) -> anyhow::Result<DocumentId> {
     let terminal = Terminal::new(shell);
     let name = terminal.name();
     editor.terminals.list.insert(doc, terminal);
-    if let Some(document) = editor.documents.get_mut(&doc) {
-        document.set_screen_name(name);
+    if let Some(screen) = editor.screens.get_mut(doc) {
+        screen.name = name;
     }
     Ok(doc)
 }
 
 /// The shell reported its working directory: the terminal's name follows it.
-fn rename(editor: &mut Editor, doc: DocumentId) {
-    let Some(name) = editor.terminals.get(doc).map(Terminal::name) else {
+fn rename(editor: &mut Editor, screen: ScreenId) {
+    let Some(name) = editor.terminals.get(screen).map(Terminal::name) else {
         return;
     };
-    if let Some(document) = editor.documents.get_mut(&doc) {
-        document.set_screen_name(name);
+    if let Some(screen) = editor.screens.get_mut(screen) {
+        screen.name = name;
     }
 }
 
-/// The shell exited (`exit`, `Ctrl-d`): its window closes. The scratch terminal's next `C-t`
-/// starts a fresh shell.
-fn exited(editor: &mut Editor, doc: DocumentId) {
-    if !editor.terminals.is_terminal(doc) {
+/// The shell exited (`exit`, `Ctrl-d`): its window closes (view mode's lines with it). The
+/// scratch terminal's next `C-t` starts a fresh shell. The last window shows a text window again.
+fn exited(editor: &mut Editor, screen: ScreenId) {
+    if !editor.terminals.is_terminal(screen) {
         return;
     }
-    let was_focused = editor.tree.try_get(editor.tree.focus).map(|view| view.doc) == Some(doc);
-    let _ = editor.close_document(doc, true);
+    let was_focused = super::modes::focused(editor).is_some_and(|(focused, _)| focused == screen);
+    if let Some(doc) = editor.terminals.get_mut(screen).and_then(|t| t.lines.take()) {
+        editor.uncover_document(doc);
+    }
+    editor.close_screen(screen);
     if was_focused {
         // the shell may have changed files
         crate::handlers::disk::check_all(editor);
@@ -124,7 +121,7 @@ fn exited(editor: &mut Editor, doc: DocumentId) {
 
 /// Starts the scratch terminal when it doesn't run. An error (the shell can't start) is shown in
 /// the statusline.
-fn ensure_scratch(editor: &mut Editor) -> Option<DocumentId> {
+fn ensure_scratch(editor: &mut Editor) -> Option<ScreenId> {
     if let Some(doc) = editor.terminals.scratch {
         return Some(doc);
     }
@@ -146,8 +143,9 @@ pub fn toggle_scratch(editor: &mut Editor) {
     let shown = editor.terminals.scratch.and_then(|doc| editor.view_of(doc));
     match shown {
         Some(view) => {
+            let view = editor.tree.top_of(view);
             // the last window: something to show instead
-            if editor.tree.views().count() == 1 {
+            if editor.tree.windows().count() == 1 {
                 editor.new_file(Action::HorizontalSplit);
             }
             editor.close(view);
@@ -181,7 +179,7 @@ pub fn run(editor: &mut Editor, command: &str) {
 pub fn open_new(editor: &mut Editor, layout: Layout) {
     match spawn(editor) {
         Ok(doc) => {
-            editor.open_screen_window(doc, Placement::Split(layout));
+            editor.open_screen(doc, Placement::Split(layout));
         }
         Err(err) => editor.set_error(format!("Couldn't start the shell: {err}")),
     }
@@ -190,7 +188,7 @@ pub fn open_new(editor: &mut Editor, layout: Layout) {
 /// `vx` in a terminal: opens files in the window for documents, or just gives it the focus.
 fn handle_shim_request(
     editor: &mut Editor,
-    terminal: DocumentId,
+    terminal: ScreenId,
     request: shim::Request,
     reply: shim::Reply,
 ) {

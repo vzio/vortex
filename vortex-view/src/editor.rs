@@ -572,6 +572,22 @@ where
     Ok(chars)
 }
 
+/// `[editor.diff]` (this fork): the diff's layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
+pub struct DiffConfig {
+    /// The diff's window narrower than this many columns shows the two sides stacked (unified,
+    /// the old lines above the new ones) instead of side by side. Defaults to 120; 0 never
+    /// stacks them.
+    pub stack_below: u16,
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        Self { stack_below: 120 }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct Config {
@@ -689,6 +705,8 @@ pub struct Config {
     /// The terminal panel, opened with `C-t` and `:sh` (fork feature), and the external
     /// terminal the debugger runs programs in.
     pub terminal: crate::terminal::TerminalConfig,
+    /// `[editor.diff]`: the side by side diff's layout (this fork).
+    pub diff: DiffConfig,
     /// Spectator mode's defaults: playback speed, what it follows, what each stop records
     /// (fork feature).
     pub debugger: crate::debug::config::DebuggerConfig,
@@ -1556,6 +1574,7 @@ impl Default for Config {
             search: SearchConfig::default(),
             lsp: LspConfig::default(),
             terminal: crate::terminal::TerminalConfig::default(),
+            diff: DiffConfig::default(),
             debugger: crate::debug::config::DebuggerConfig::default(),
             rulers: Vec::new(),
             whitespace: WhitespaceConfig::default(),
@@ -1709,15 +1728,13 @@ pub struct Conflicts {
 pub struct Editor {
     /// Current editing mode.
     pub mode: Mode,
-    /// The terminals, each in a window of its own (fork feature, see `crate::screen`).
+    /// The screens open (this fork, see `crate::screen`): what windows show when they don't
+    /// show a text document. Empty, and costing nothing, until one opens.
+    pub screens: crate::screen::Screens,
+    /// The terminals, each a screen (fork feature, see `crate::terminal`).
     pub terminals: crate::terminal::Terminals,
-    /// The window that last showed a text document while a screen's window had the focus (this
-    /// fork): where files open from a terminal.
-    pub last_document_view: Option<ViewId>,
     /// The debug panel and what it shows (fork feature).
     pub debug: crate::debug::DebugState,
-    /// The screen drawn over a buffer, the dashboard, for history (this fork).
-    pub screen_cover: Option<crate::history::ScreenCover>,
     /// No jump records while set: history's own steps, the debugger's stops (this fork).
     pub history_paused: bool,
     /// The bookmarks of closed files and the one the ring is at (this fork).
@@ -1888,8 +1905,8 @@ impl Editor {
 
         Self {
             mode: Mode::Normal,
+            screens: Default::default(),
             terminals: Default::default(),
-            last_document_view: None,
             debug: {
                 let mut debug = crate::debug::DebugState::default();
                 debug.apply_config(&conf.debugger);
@@ -1920,7 +1937,6 @@ impl Editor {
             last_theme: None,
             language_themes: Default::default(),
             last_selection: None,
-            screen_cover: None,
             history_paused: false,
             bookmark_state: Default::default(),
             registers: Registers::new(Box::new(arc_swap::access::Map::new(
@@ -2413,6 +2429,17 @@ impl Editor {
             }
         }
 
+        // the last text window, kept parked while only screens were shown (this fork), goes
+        // once a text window is shown again
+        if self.tree.views().next().is_some() {
+            for orphan in self.tree.orphans() {
+                for doc in self.documents.values_mut() {
+                    doc.remove_view(orphan);
+                }
+                self.tree.remove(orphan);
+            }
+        }
+
         for (view, _) in self.tree.views_mut() {
             let doc = doc_mut!(self, &view.doc);
             view.sync_changes(doc);
@@ -2424,11 +2451,12 @@ impl Editor {
 
     /// Tells each terminal shown (this fork) the size of its window.
     pub fn resize_terminals(&self) {
-        for (view, _) in self.tree.views() {
-            if let (Some(terminal), Some(doc)) =
-                (self.terminals.get(view.doc), self.documents.get(&view.doc))
-            {
-                let area = view.inner_area(doc);
+        for (window, _) in self.tree.windows() {
+            let crate::tree::Window::Screen(view) = window else {
+                continue;
+            };
+            if let Some(terminal) = self.terminals.get(view.screen) {
+                let area = view.inner_area();
                 terminal.shell.resize(crate::terminal::Size {
                     rows: area.height,
                     cols: area.width,
@@ -2459,18 +2487,33 @@ impl Editor {
             return;
         }
 
-        // a screen (this fork) shows in its own window only: switching to it goes there
-        if self.documents[&id].is_screen() {
-            if !matches!(action, Action::Load) {
-                self.show_screen(id);
-            }
-            return;
-        }
-        // from a screen's window, a document opens in the window for documents
+        // from a screen's window (this fork), a document opens in the window for documents;
+        // else in the window of the screen, when the screen covers a text window (it closes);
+        // else in a new split
         if matches!(action, Action::Replace | Action::Load) && self.is_screen_view(self.tree.focus)
         {
+            let focus = self.tree.focus;
             match self.document_view() {
                 Some(view) => self.focus(view),
+                None if self
+                    .tree
+                    .chain(focus)
+                    .iter()
+                    .any(|&id| self.tree.try_get(id).is_some()) =>
+                {
+                    // the covers go, down to the text window
+                    while self.tree.try_get(self.tree.focus).is_none() {
+                        let top = self.tree.focus;
+                        let Some(screen) = self.tree.screen_view(top).map(|view| view.screen)
+                        else {
+                            break;
+                        };
+                        self.close_screen(screen);
+                        if self.tree.focus == top {
+                            break;
+                        }
+                    }
+                }
                 None => action = Action::VerticalSplit,
             }
         }
@@ -2495,8 +2538,8 @@ impl Editor {
                     // Ensure the buffer is not displayed in any other splits.
                     && !self
                         .tree
-                        .traverse()
-                        .any(|(_, v)| v.doc == doc.id && v.id != view.id);
+                        .all_views()
+                        .any(|v| v.doc == doc.id && v.id != view.id);
 
                 let (view, doc) = current!(self);
                 let view_id = view.id;
@@ -2511,7 +2554,7 @@ impl Editor {
                     self.documents.remove(&id);
 
                     // Remove the scratch buffer from any history
-                    for (view, _) in self.tree.views_mut() {
+                    for view in self.tree.all_views_mut() {
                         view.remove_document(&id);
                     }
                 } else {
@@ -2545,11 +2588,7 @@ impl Editor {
             }
             Action::HorizontalSplit | Action::VerticalSplit => {
                 let focus_lost = self.tree.try_get(self.tree.focus).map(|view| view.doc);
-                let split_from = self
-                    .tree
-                    .try_get(self.tree.focus)
-                    .filter(|v| id == v.doc)
-                    .map(|v| v.id);
+                let left = self.window_content(self.tree.focus);
                 // copy the current view, unless there is no view yet
                 let view = self
                     .tree
@@ -2568,15 +2607,9 @@ impl Editor {
                 // initialize selection for view
                 let doc = doc_mut!(self, &id);
                 doc.ensure_view_init(view_id);
-                // the hex view (this fork): the new view starts where the other one is
-                if let (Some(from), Some(hex)) = (split_from, doc.hex_mut()) {
-                    let mut cursor = hex.cursor(from);
-                    cursor.overwrite = false;
-                    *hex.cursor_mut(view_id) = cursor;
-                }
                 doc.mark_as_focused();
                 // leaving a terminal (this fork) gives normal mode back
-                self.focus_moved(focus_lost);
+                self.focus_moved(left);
                 focus_lost
             }
         };
@@ -2703,34 +2736,99 @@ impl Editor {
         Ok(id)
     }
 
+    /// `:q`, `C-w q`: closes the window `id` with what it covers (this fork: a screen opened
+    /// over a buffer goes with it). A window that shows the scratch terminal or the debug panel,
+    /// unless it is the last window, is only hidden, to come back where it was.
     pub fn close(&mut self, id: ViewId) {
-        // a screen's window (this fork), unless it is the last one: the scratch terminal hides,
-        // the others close their screen (a terminal's shell is killed)
-        if let Some(doc) = self.tree.try_get(id).map(|view| view.doc) {
-            if self.document(doc).is_some_and(|doc| doc.is_screen())
-                && self.tree.views().count() > 1
-            {
-                if self.terminals.scratch == Some(doc) {
-                    let place = self.hide_screen(id);
-                    self.terminals.scratch_place = Some(place);
+        let chain = self.tree.chain(id);
+        let kept = chain.iter().find_map(|&window| {
+            let screen = self.tree.screen_view(window)?.screen;
+            (self.terminals.scratch == Some(screen) || self.debug.panel == Some(screen))
+                .then_some((window, screen))
+        });
+        if let Some((window, screen)) = kept {
+            if self.tree.windows().count() > 1 {
+                // the covers over it (a terminal's lines in view mode) close
+                while self.tree.top_of(window) != window {
+                    let top = self.tree.top_of(window);
+                    let Some(shown) = self.tree.uncover(top) else {
+                        break;
+                    };
+                    self.close_lines_of(top, shown);
+                }
+                let place = self.hide_screen(window);
+                if self.debug.panel == Some(screen) {
+                    self.debug.panel_place = Some(place);
                 } else {
-                    let _ = self.close_document(doc, true);
+                    self.terminals.scratch_place = Some(place);
                 }
                 return;
             }
         }
-        self.close_view(id);
+        self.close_window(id);
     }
 
-    /// Closes the window `id`, whatever it shows.
-    fn close_view(&mut self, id: ViewId) {
-        // Remove selections for the closed view on all documents.
-        for doc in self.documents_mut() {
-            doc.remove_view(id);
+    /// A text window of a screen's lines (`top`) just left the tree, uncovered: its document goes
+    /// too. `shown` is the window under it, now shown.
+    fn close_lines_of(&mut self, top: ViewId, _shown: ViewId) {
+        let docs: Vec<DocumentId> = self
+            .documents
+            .values()
+            .filter(|doc| doc.lines_of().is_some() && doc.selections().contains_key(&top))
+            .map(|doc| doc.id())
+            .collect();
+        for doc in docs {
+            let _ = self.close_document(doc, true);
         }
+    }
+
+    /// Closes the window `id`, whatever it shows, with what it covers (this fork): the screens
+    /// among them close (a terminal's shell is killed), the documents forget the text windows.
+    /// The last text window, closed while screens' windows stay, is kept, parked out of the
+    /// layout, so that text commands always have one to act on.
+    pub fn close_window(&mut self, id: ViewId) {
+        let chain = self.tree.chain(id);
+        let screens: Vec<crate::screen::ScreenId> = chain
+            .iter()
+            .filter_map(|&window| self.tree.screen_view(window).map(|view| view.screen))
+            .collect();
+        // a terminal's lines shown as text (view mode) go with the window
+        let lines: Vec<DocumentId> = chain
+            .iter()
+            .filter_map(|&window| self.tree.try_get(window))
+            .map(|view| view.doc)
+            .filter(|&doc| !self.is_buffer(doc))
+            .collect();
         let focused = self.tree.focus == id;
-        let from = self.tree.try_get(id).map(|view| view.doc);
-        self.tree.remove(id);
+        let from = self.window_content(id);
+        let last_text = self.tree.try_get(id).is_some()
+            && chain.len() == 1
+            && self.tree.windows().count() > 1
+            && !self
+                .tree
+                .all_views()
+                .any(|view| view.id != id && self.is_buffer(view.doc));
+        if last_text {
+            self.tree.park(id);
+        } else {
+            for &window in &chain {
+                for doc in self.documents.values_mut() {
+                    doc.remove_view(window);
+                }
+            }
+            self.tree.remove(id);
+        }
+        for screen in screens {
+            if self.terminals.scratch == Some(screen) || self.debug.panel == Some(screen) {
+                // the last window: the editor quits, or another screen stays
+                continue;
+            }
+            self.screens.remove(screen);
+            self.terminals.screen_closed(screen);
+        }
+        for doc in lines {
+            let _ = self.close_document(doc, true);
+        }
         // the focus may land on a terminal, or leave one (this fork)
         if focused {
             self.focus_moved(from);
@@ -2756,10 +2854,11 @@ impl Editor {
             ReplaceDoc(ViewId, DocumentId),
         }
 
+        // the windows parked under a cover too (this fork)
         let actions: Vec<Action> = self
             .tree
-            .views_mut()
-            .filter_map(|(view, _focus)| {
+            .all_views_mut()
+            .filter_map(|view| {
                 view.remove_document(&doc_id);
 
                 if view.doc == doc_id {
@@ -2779,7 +2878,7 @@ impl Editor {
         for action in actions {
             match action {
                 Action::Close(view_id) => {
-                    self.close_view(view_id);
+                    self.close_window(view_id);
                 }
                 Action::ReplaceDoc(view_id, doc_id) => {
                     self.replace_document_in_view(view_id, doc_id);
@@ -2789,13 +2888,24 @@ impl Editor {
 
         let doc = self.documents.remove(&doc_id).unwrap();
 
+        // the last text window, kept parked while screens are shown (this fork), shows another
+        // buffer, or a new one
+        let stale: Vec<ViewId> = self
+            .tree
+            .all_views()
+            .filter(|view| view.doc == doc_id)
+            .map(|view| view.id)
+            .collect();
+
         // If the document we removed was visible in all views, we will have no more views. We don't
         // want to close the editor just for a simple buffer close, so we need to create a new view
         // containing either an existing document, or a brand new document.
-        if self.tree.views().next().is_none() {
+        let no_windows = self.tree.windows().next().is_none();
+        if no_windows || !stale.is_empty() {
             let doc_id = self
                 .documents
                 .iter()
+                .filter(|(_, doc)| doc.lines_of().is_none())
                 .map(|(&doc_id, _)| doc_id)
                 .next()
                 .unwrap_or_else(|| {
@@ -2804,15 +2914,18 @@ impl Editor {
                         self.syn_loader.clone(),
                     ))
                 });
-            let view = View::new(doc_id, self.config().gutters.clone());
-            let view_id = self.tree.insert(view);
-            let doc = doc_mut!(self, &doc_id);
-            doc.ensure_view_init(view_id);
-            doc.mark_as_focused();
+            for view in stale {
+                self.replace_document_in_view(view, doc_id);
+            }
+            if no_windows {
+                let view = View::new(doc_id, self.config().gutters.clone());
+                let view_id = self.tree.insert(view);
+                let doc = doc_mut!(self, &doc_id);
+                doc.ensure_view_init(view_id);
+                doc.mark_as_focused();
+            }
         }
 
-        // a terminal's screen (this fork) closed: its shell goes with it
-        self.terminals.remove(doc_id);
         // the buffer a terminal's command line was edited in: back to that terminal
         if let Some(terminal) = self.terminals.edits.remove(&doc_id) {
             if self.terminals.is_terminal(terminal) {
@@ -2883,7 +2996,10 @@ impl Editor {
         self.enter_normal_mode();
         let (view, doc) = current!(self);
         doc.append_changes_to_history(view);
-        self.ensure_cursor_in_view(view_id);
+        // a screen's window (this fork) has no cursor of the editor's
+        if self.tree.try_get(view_id).is_some() {
+            self.ensure_cursor_in_view(view_id);
+        }
         // Update history places with new document changes.
         for (view, _focused) in self.tree.views_mut() {
             let doc = doc_mut!(self, &view.doc);
@@ -2891,15 +3007,18 @@ impl Editor {
         }
 
         let prev_id = std::mem::replace(&mut self.tree.focus, view_id);
-        doc_mut!(self).mark_as_focused();
+        if self.tree.try_get(view_id).is_some() {
+            doc_mut!(self).mark_as_focused();
+        }
         // a screen (this fork): a terminal entered types, one left is told
         self.screen_focused(prev_id);
 
-        let focus_lost = self.tree.get(prev_id).doc;
-        dispatch(DocumentFocusLost {
-            editor: self,
-            doc: focus_lost,
-        });
+        if let Some(focus_lost) = self.tree.try_get(prev_id).map(|view| view.doc) {
+            dispatch(DocumentFocusLost {
+                editor: self,
+                doc: focus_lost,
+            });
+        }
     }
 
     pub fn focus_next(&mut self) {

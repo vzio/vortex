@@ -2,11 +2,12 @@
 //! open on, and `:dashboard` brings back. A logo, the project's git state and languages, and
 //! the actions to start with, each a key.
 //!
-//! It isn't a buffer: it is drawn by the [`EditorView`](crate::ui::EditorView) over an empty
-//! scratch buffer, the one `i` or `Esc` drop into, and it stays only while that buffer is the
-//! focused one, unchanged, in normal mode. So opening a file from anywhere (a picker, the file
-//! tree, `:open`), a split, or a key that edits or leaves normal mode makes it vanish, with no
-//! hook of its own. Its own keys come first; every other key goes to the keymap as usual.
+//! It isn't a buffer nor a window: it is an overlay of the compositor, over everything (every
+//! window and the statuslines), that takes every key while it is up. Typing does nothing: only
+//! `Esc` closes it, and its own actions, which open what they open (a picker over it, `Esc` in
+//! which comes back to it; what the picker opens closes it). Nothing underneath changes while it
+//! is up, so closing it leaves the windows, screens and cursors as they were: on a bare `vx`, the
+//! empty buffer.
 //!
 //! The stats are read in the background ([`stats`]) and the drawing ([`render`]) animates them in
 //! as they arrive, on the clock of [`timeline`]: the title opens from `VX` to `VORTEX` once
@@ -29,15 +30,15 @@ use std::time::Instant;
 
 use vortex_loader::workspace_trust::TrustQuery;
 use vortex_view::document::Mode;
-use vortex_view::editor::Action;
-use vortex_view::graphics::Rect;
+use vortex_view::graphics::{CursorKind, Rect};
 use vortex_view::input::KeyEvent;
 use vortex_view::keyboard::KeyCode;
-use vortex_view::{DocumentId, Editor, ViewId};
+use vortex_view::{screen::Content, Editor, ViewId};
 
 use tui::buffer::Buffer as Surface;
 
 use crate::commands::{self, MappableCommand};
+use crate::compositor::{self, Component, Compositor, Event, EventResult};
 use crate::keymap::Keymaps;
 use vortex_view::editor::DashboardBackground;
 
@@ -50,10 +51,12 @@ pub struct Dashboard {
     timeline: Timeline,
     dir: PathBuf,
     hints: Hints,
-    /// The scratch buffer it is drawn over, in which view, at which version.
-    view: ViewId,
-    doc: DocumentId,
-    version: i32,
+    /// What the editor showed when it opened: an action that opened something else (a file
+    /// picked in its picker) closes it.
+    under: Under,
+    /// It went (an action opened something): drawn no more, and off the compositor at the next
+    /// event.
+    gone: bool,
     /// Only the vortex (`:vortex`).
     vortex_only: bool,
     /// The glitches of the title and the background, from frame to frame.
@@ -66,10 +69,13 @@ impl Drop for Dashboard {
     }
 }
 
+/// The compositor id of the dashboard's layer.
+pub const ID: &str = "dashboard";
+
 /// What a key does on the dashboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyResult {
-    /// Not one of its keys: the keymap takes it.
+    /// Not one of its keys: nothing happens (it takes every key).
     Ignored,
     /// Done, the dashboard stays (a picker opened over it).
     Consumed,
@@ -77,21 +83,50 @@ pub enum KeyResult {
     Close,
 }
 
-/// Whether the document is an empty scratch buffer the dashboard can be drawn over.
-fn is_empty_scratch(doc: &vortex_view::Document) -> bool {
-    doc.path().is_none() && !doc.is_modified() && !doc.is_hex() && doc.text().len_chars() <= 1
+/// What the editor shows, for the dashboard to see that one of its actions opened something.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Under {
+    focus: ViewId,
+    content: Option<Content>,
+    windows: usize,
+    documents: usize,
+}
+
+impl Under {
+    fn of(editor: &Editor) -> Self {
+        Self {
+            focus: editor.tree.focus,
+            content: editor.window_content(editor.tree.focus),
+            windows: editor.tree.windows().count(),
+            documents: editor.documents.len(),
+        }
+    }
+}
+
+/// Opens the dashboard over everything (`:dashboard`, startup), or `:vortex` alone.
+pub fn open(compositor: &mut Compositor, editor: &mut Editor, vortex_only: bool) {
+    let Some(view) = compositor.find::<crate::ui::EditorView>() else {
+        return;
+    };
+    let dashboard = if vortex_only {
+        Dashboard::open_vortex(editor, &view.keymaps)
+    } else {
+        Dashboard::open(editor, &view.keymaps)
+    };
+    compositor.remove(ID);
+    compositor.push(Box::new(dashboard));
+}
+
+/// Whether the dashboard is up (a screen of its own, which keeps the main theme).
+pub fn is_up(compositor: &mut Compositor) -> bool {
+    compositor
+        .find_id::<Dashboard>(ID)
+        .is_some_and(|dashboard| !dashboard.gone)
 }
 
 impl Dashboard {
-    /// Opens the dashboard over the focused view: over its buffer when it is an empty scratch
-    /// buffer, else over a new one.
+    /// Opens the dashboard over the editor, which it leaves as it is.
     pub fn open(editor: &mut Editor, keymaps: &Keymaps) -> Self {
-        if !is_empty_scratch(doc!(editor)) {
-            editor.new_file(Action::Replace);
-        }
-        let (view, doc) = current_ref!(editor);
-        let (view, doc_id, version) = (view.id, doc.id(), doc.version());
-
         let dir = vortex_stdx::env::current_working_dir();
         let (stats, timeline) = load(editor, dir.clone());
         Self {
@@ -99,9 +134,8 @@ impl Dashboard {
             timeline,
             dir,
             hints: hints(keymaps),
-            view,
-            doc: doc_id,
-            version,
+            under: Under::of(editor),
+            gone: false,
             vortex_only: false,
             glitches: Default::default(),
         }
@@ -119,17 +153,15 @@ impl Dashboard {
         dashboard
     }
 
-    /// A dashboard over the focused view with the given stats, for tests: nothing is read.
+    /// A dashboard with the given stats, for tests: nothing is read.
     pub fn with_stats(editor: &Editor, stats: Arc<Stats>, born: Instant, hints: Hints) -> Self {
-        let (view, doc) = current_ref!(editor);
         Self {
             stats,
             timeline: Timeline::new(born, editor.config().dashboard_background),
             dir: vortex_stdx::env::current_working_dir(),
             hints,
-            view: view.id,
-            doc: doc.id(),
-            version: doc.version(),
+            under: Under::of(editor),
+            gone: false,
             vortex_only: false,
             glitches: Default::default(),
         }
@@ -159,21 +191,17 @@ impl Dashboard {
         self.timeline
     }
 
-    /// Whether the dashboard is still up: its buffer focused, unchanged, in normal mode.
-    pub fn covers(&self, editor: &Editor) -> bool {
-        editor.mode() == Mode::Normal
-            && editor.tree.focus == self.view
-            && editor.tree.contains(self.view)
-            && editor.tree.get(self.view).doc == self.doc
-            && editor
-                .document(self.doc)
-                .is_some_and(|doc| doc.version() == self.version && !doc.is_modified())
+    /// Whether an action of the dashboard opened something (a file picked in its picker, the
+    /// file tree's): then it goes.
+    fn opened_something(&self, editor: &Editor) -> bool {
+        Under::of(editor) != self.under
     }
 
     /// Handles `key`, one of its own (`i`, `Esc`, `f`, `e`, `l` and `w` in a git repository, `t`
-    /// with other worktrees, `q`).
+    /// with other worktrees, `:`, `q`); any other does nothing.
     pub fn handle_key(&self, key: KeyEvent, cx: &mut commands::Context) -> KeyResult {
-        if !key.modifiers.is_empty() {
+        if !key.modifiers.is_empty() && key.modifiers != vortex_view::keyboard::KeyModifiers::SHIFT
+        {
             return KeyResult::Ignored;
         }
         let command = match key.code {
@@ -182,6 +210,8 @@ impl Dashboard {
                 MappableCommand::insert_mode.execute(cx);
                 return KeyResult::Close;
             }
+            // the command line, over it: what it opens closes it
+            KeyCode::Char(':') => MappableCommand::command_mode,
             KeyCode::Char('f') => MappableCommand::file_picker,
             KeyCode::Char('e') => MappableCommand::toggle_explorer_root,
             KeyCode::Char('l') if self.stats.shows_git() => MappableCommand::commit_picker,
@@ -208,7 +238,7 @@ impl Dashboard {
         KeyResult::Consumed
     }
 
-    pub fn render(&self, editor: &Editor, area: Rect, surface: &mut Surface) {
+    pub fn render_now(&self, editor: &Editor, area: Rect, surface: &mut Surface) {
         self.render_at(editor, area, surface, Instant::now());
     }
 
@@ -224,6 +254,74 @@ impl Dashboard {
             glitches: Some(&self.glitches),
         };
         render::render(&model, &editor.theme, area, surface, now);
+    }
+}
+
+impl Component for Dashboard {
+    fn handle_event(&mut self, event: &Event, cx: &mut compositor::Context) -> EventResult {
+        // gone: off the compositor, and the event goes on to what is under it
+        if self.gone || self.opened_something(cx.editor) {
+            return EventResult::Ignored(Some(Box::new(|compositor: &mut Compositor, _| {
+                compositor.remove(ID);
+            })));
+        }
+        let Event::Key(key) = event else {
+            // the mouse and pastes do nothing either while it is up
+            return match event {
+                Event::Mouse(_) | Event::Paste(_) => EventResult::Consumed(None),
+                _ => EventResult::Ignored(None),
+            };
+        };
+        let mut ccx = commands::Context {
+            editor: cx.editor,
+            count: None,
+            register: None,
+            callback: Vec::new(),
+            on_next_key_callback: None,
+            jobs: cx.jobs,
+        };
+        let result = self.handle_key(*key, &mut ccx);
+        let mut callbacks = std::mem::take(&mut ccx.callback);
+        if result == KeyResult::Close {
+            self.gone = true;
+            callbacks.insert(
+                0,
+                Box::new(|compositor: &mut Compositor, _: &mut compositor::Context| {
+                    compositor.remove(ID);
+                }),
+            );
+        }
+        if callbacks.is_empty() {
+            return EventResult::Consumed(None);
+        }
+        EventResult::Consumed(Some(Box::new(
+            move |compositor: &mut Compositor, cx: &mut compositor::Context| {
+                for callback in callbacks {
+                    callback(compositor, cx)
+                }
+            },
+        )))
+    }
+
+    fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut compositor::Context) {
+        if self.gone || self.opened_something(cx.editor) {
+            self.gone = true;
+            return;
+        }
+        self.follow_cwd(cx.editor);
+        self.render_now(cx.editor, area, surface);
+    }
+
+    fn cursor(
+        &self,
+        _area: Rect,
+        _editor: &Editor,
+    ) -> (Option<vortex_core::Position>, CursorKind) {
+        (None, CursorKind::Hidden)
+    }
+
+    fn id(&self) -> Option<&'static str> {
+        Some(ID)
     }
 }
 

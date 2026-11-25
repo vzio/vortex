@@ -134,6 +134,18 @@ impl Compositor {
         self.layers.truncate(1);
     }
 
+    /// Takes every layer above the editor off the compositor (this fork: the lists a diff is
+    /// opened from wait under it, off the compositor, until it closes; see
+    /// [`Self::put_back`]).
+    pub fn take_overlays(&mut self) -> Vec<Box<dyn Component>> {
+        self.layers.split_off(self.layers.len().min(1))
+    }
+
+    /// Puts back layers taken with [`Self::take_overlays`], above what is there.
+    pub fn put_back(&mut self, layers: Vec<Box<dyn Component>>) {
+        self.layers.extend(layers);
+    }
+
     pub fn remove(&mut self, id: &'static str) -> Option<Box<dyn Component>> {
         let idx = self
             .layers
@@ -302,4 +314,14 @@ impl dyn AnyComponent {
     pub fn is<T: Any>(&mut self) -> bool {
         self.as_any().is::<T>()
     }
+}
+
+/// The first of `layers` that is a `T` (this fork: a list set aside under a diff, see
+/// [`Compositor::take_overlays`]).
+pub fn find_layer<T: 'static>(layers: &mut [Box<dyn Component>]) -> Option<&mut T> {
+    let type_name = std::any::type_name::<T>();
+    layers
+        .iter_mut()
+        .find(|component| component.type_name() == type_name)
+        .and_then(|component| component.as_any_mut().downcast_mut())
 }

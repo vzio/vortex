@@ -6,7 +6,7 @@
 //! as it was. Only at a prompt, which the OSC 133 markers tell.
 
 use vortex_core::{Rope, Selection};
-use vortex_view::{document::Mode, editor::Action, Document, DocumentId, Editor};
+use vortex_view::{document::Mode, editor::Action, screen::ScreenId, Document, Editor};
 
 /// The share of the terminal's window the buffer takes.
 const SHARE: u16 = 30;
@@ -38,7 +38,7 @@ pub fn request(editor: &mut Editor) {
 }
 
 /// The shell sent its command line: it opens in a buffer below the terminal, if it was asked for.
-pub fn command_line(editor: &mut Editor, terminal: DocumentId, line: String) {
+pub fn command_line(editor: &mut Editor, terminal: ScreenId, line: String) {
     let Some(term) = editor.terminals.get_mut(terminal) else {
         return;
     };
@@ -62,7 +62,7 @@ pub fn command_line(editor: &mut Editor, terminal: DocumentId, line: String) {
     // from the terminal's window: the buffer opens in a split of it
     if editor
         .view_of(terminal)
-        .is_some_and(|view| view != editor.tree.focus)
+        .is_some_and(|view| editor.tree.top_of(view) != editor.tree.focus)
     {
         editor.show_screen(terminal);
     }

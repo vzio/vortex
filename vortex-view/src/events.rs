@@ -24,6 +24,8 @@ events! {
     DiagnosticsDidChange<'a> { editor: &'a mut Editor, doc: DocumentId }
     // called **after** a document loses focus (but not when its closed)
     DocumentFocusLost<'a> { editor: &'a mut Editor, doc: DocumentId }
+    // called **after** a screen's window loses the focus (this fork; not when it closes)
+    ScreenFocusLost<'a> { editor: &'a mut Editor, screen: crate::screen::ScreenId }
 
     LanguageServerInitialized<'a> {
         editor: &'a mut Editor,

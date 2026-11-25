@@ -17,18 +17,19 @@ pub fn handle_mouse(editor: &mut Editor, mouse: &MouseEvent) -> bool {
             && mouse.row >= area.y
             && mouse.row < area.bottom()
     };
-    let Some((view, doc, area)) = editor.tree.views().find_map(|(view, _)| {
-        let document = editor.document(view.doc)?;
-        editor.terminals.get(view.doc)?;
-        let area = view.inner_area(document);
-        over(area).then_some((view.id, view.doc, area))
+    // a terminal in view mode is covered by the text window of its lines, which takes the mouse
+    // as a document does
+    let Some((view, screen, area)) = editor.tree.windows().find_map(|(window, _)| {
+        let vortex_view::tree::Window::Screen(view) = window else {
+            return None;
+        };
+        editor.terminals.get(view.screen)?;
+        let area = view.inner_area();
+        over(area).then_some((view.id, view.screen, area))
     }) else {
         return false;
     };
     let focused = editor.tree.focus == view;
-    if focused && editor.terminals.get(doc).is_some_and(|t| t.viewing()) {
-        return false;
-    }
     if !focused {
         if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             // the wheel scrolls a terminal without focusing it
@@ -43,7 +44,7 @@ pub fn handle_mouse(editor: &mut Editor, mouse: &MouseEvent) -> bool {
         }
     }
     let scroll_lines = editor.config().scroll_lines.unsigned_abs().max(1) as u16;
-    let Some(terminal) = editor.terminals.get(doc) else {
+    let Some(terminal) = editor.terminals.get(screen) else {
         return true;
     };
     let shell = &terminal.shell;

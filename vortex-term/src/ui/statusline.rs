@@ -426,8 +426,10 @@ where
     use vortex_view::{graphics::Color, terminal::ShellStatus, theme::Modifier};
 
     let terminals = &context.editor.terminals;
-    let Some(terminal) = terminals
-        .get(context.doc.id())
+    let Some(terminal) = context
+        .doc
+        .lines_of()
+        .and_then(|screen| terminals.get(screen))
         .or_else(|| terminals.scratch())
     else {
         return;

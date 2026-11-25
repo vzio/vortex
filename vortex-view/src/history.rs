@@ -10,14 +10,16 @@
 //! (`a`) or toggling (`ga`) can return to it; jumping somewhere new while walking drops the
 //! places ahead, as an edit drops the redo history.
 //!
-//! A place is a position in a buffer or a screen (the dashboard, a diff, the debug panel), which
-//! the terminal UI shows again: the editor only knows that it is one.
+//! A place is a position in a buffer, or a screen that covered the window (a diff, a Markdown
+//! page, the hex view) and was closed: history keeps the screen itself, which the terminal UI
+//! shows again over the window. History is a text window's: a screen's window has none, and going
+//! back from a screen that covers a window closes it, back to what the window showed.
 
-use std::{any::Any, cell::RefCell, collections::VecDeque, fmt, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, fmt, rc::Rc};
 
 use vortex_core::{Selection, Transaction};
 
-use crate::{Document, DocumentId, Editor, ViewId};
+use crate::{screen::ScreenKind, Document, DocumentId, Editor};
 
 /// The most places a view remembers; the oldest go first.
 pub const CAPACITY: usize = 30;
@@ -61,63 +63,43 @@ pub fn records(jump: Jump) -> bool {
     !matches!(jump, Jump::Object | Jump::Label | Jump::Column)
 }
 
-/// A full-screen view that history can return to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScreenKind {
-    Dashboard,
-    /// `:vortex`, the dashboard's vortex alone.
-    Vortex,
-    /// The side by side diff (any of them: a file, a commit, an uncommitted change).
-    Diff,
-    /// The debug panel, focused.
-    DebugPanel,
-    /// The Markdown render mode of a buffer.
-    Markdown(DocumentId),
-}
+/// A screen kept for history to show again: taken when it is shown, so a screen is shown from one
+/// place only.
+pub type Stash = Rc<RefCell<Option<crate::screen::Screen>>>;
 
-/// What the terminal UI needs to show a screen again (the diff view itself). It is taken when
-/// the screen is shown, so a screen is shown from one place only.
-pub type Stash = Rc<RefCell<Option<Box<dyn Any>>>>;
-
+/// A screen that covered the window, closed, as a place of its history.
 #[derive(Clone)]
 pub struct Screen {
     pub kind: ScreenKind,
-    pub stash: Option<Stash>,
+    /// Its name, for the history picker.
+    pub name: String,
+    pub stash: Stash,
 }
 
 impl Screen {
-    pub fn new(kind: ScreenKind) -> Self {
-        Self { kind, stash: None }
-    }
-
-    /// A screen that `state` shows again.
-    pub fn stashed(kind: ScreenKind, state: Box<dyn Any>) -> Self {
+    /// The place of the closed screen `screen`.
+    pub fn stashed(screen: crate::screen::Screen) -> Self {
         Self {
-            kind,
-            stash: Some(Rc::new(RefCell::new(Some(state)))),
+            kind: screen.kind,
+            name: screen.name.clone(),
+            stash: Rc::new(RefCell::new(Some(screen))),
         }
     }
 
-    /// Takes what shows the screen again.
-    pub fn take(&self) -> Option<Box<dyn Any>> {
-        self.stash
-            .as_ref()
-            .and_then(|stash| stash.borrow_mut().take())
+    /// Takes the screen, to show it again (it remembers this place, to come back to it when it
+    /// closes).
+    pub fn take(&self) -> Option<crate::screen::Screen> {
+        let mut screen = self.stash.borrow_mut().take()?;
+        screen.place = Some(self.stash.clone());
+        Some(screen)
     }
 
     fn is_empty(&self) -> bool {
-        self.stash
-            .as_ref()
-            .is_some_and(|stash| stash.borrow().is_none())
+        self.stash.borrow().is_none()
     }
 
     fn same(&self, other: &Screen) -> bool {
-        self.kind == other.kind
-            && match (&self.stash, &other.stash) {
-                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
+        Rc::ptr_eq(&self.stash, &other.stash)
     }
 }
 
@@ -125,7 +107,8 @@ impl fmt::Debug for Screen {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Screen")
             .field("kind", &self.kind)
-            .field("stashed", &self.stash.is_some())
+            .field("name", &self.name)
+            .field("stashed", &!self.is_empty())
             .finish()
     }
 }
@@ -140,11 +123,6 @@ pub enum Place {
     Screen(Screen),
 }
 
-impl Place {
-    pub fn screen(kind: ScreenKind) -> Self {
-        Place::Screen(Screen::new(kind))
-    }
-}
 
 /// The places a view jumped away from, oldest first, and where a walk through them is.
 #[derive(Debug, Clone, Default)]
@@ -237,26 +215,11 @@ pub enum Step {
 }
 
 impl Editor {
-    /// Where the focused view is: a screen over it (the focused debug panel, the dashboard), or
-    /// its cursor. The diff view isn't the editor's: it records itself.
+    /// Where the text window commands act on is (this fork: the focused one, or the one a
+    /// focused screen covers or was opened from, see [`crate::tree::Tree::text_focus`]): its
+    /// cursor.
     pub fn place(&self) -> Place {
-        if self.debug.is_focused() {
-            return Place::screen(ScreenKind::DebugPanel);
-        }
-        let view = self.tree.get(self.tree.focus);
-        if let Some(cover) = &self.screen_cover {
-            // the render mode covers a buffer that may be modified, in normal mode only
-            let markdown = matches!(cover.kind, ScreenKind::Markdown(_));
-            if cover.view == view.id
-                && cover.doc == view.doc
-                && (!markdown || self.mode() == crate::document::Mode::Normal)
-                && self.document(cover.doc).is_some_and(|doc| {
-                    doc.version() == cover.version && (markdown || !doc.is_modified())
-                })
-            {
-                return Place::screen(cover.kind);
-            }
-        }
+        let view = self.tree.get(self.tree.text_focus());
         let doc = &self.documents[&view.doc];
         Place::Text {
             doc: view.doc,
@@ -315,7 +278,7 @@ impl Editor {
                 return;
             }
         }
-        let view_id = self.tree.focus;
+        let view_id = self.tree.text_focus();
         let same_as_last = self
             .tree
             .get(view_id)
@@ -361,12 +324,7 @@ impl Editor {
         }
         match place {
             Place::Text { doc, .. } => self.documents.contains_key(doc),
-            Place::Screen(screen) => match screen.kind {
-                ScreenKind::Diff => !screen.is_empty(),
-                ScreenKind::DebugPanel => self.debug_adapters.get_active_client().is_some(),
-                ScreenKind::Dashboard | ScreenKind::Vortex => true,
-                ScreenKind::Markdown(doc) => self.documents.contains_key(&doc),
-            },
+            Place::Screen(screen) => !screen.is_empty(),
         }
     }
 
@@ -379,7 +337,7 @@ impl Editor {
         count: usize,
         here: Place,
     ) -> Result<Place, &'static str> {
-        let view_id = self.tree.focus;
+        let view_id = self.tree.text_focus();
         let count = count.max(1);
         match step {
             Step::Back => {
@@ -432,7 +390,7 @@ impl Editor {
     /// from `here`, moving the walk's position there without recording a jump, and returns the
     /// place to show. The last place of a walk is where it started: going there ends the walk.
     pub fn history_go_to(&mut self, index: usize, here: Place) -> Result<Place, &'static str> {
-        let view_id = self.tree.focus;
+        let view_id = self.tree.text_focus();
         let history = &self.tree.get(view_id).history;
         let Some(place) = history.places.get(index) else {
             return Err("That place is gone");
@@ -452,7 +410,7 @@ impl Editor {
 
     /// Records the present, `here`, as where a walk starts, so the walk can come back to it.
     fn start_walk(&mut self, here: &Place) -> Result<(), &'static str> {
-        let view_id = self.tree.focus;
+        let view_id = self.tree.text_focus();
         let history = &self.tree.get(view_id).history;
         let last = history.places.back().cloned();
         let usable = history
@@ -476,7 +434,7 @@ impl Editor {
     /// Moves the walk of the focused view to `index` and returns its place; the last place, where
     /// the walk started, ends the walk (the present again).
     fn walk_to(&mut self, index: usize) -> Place {
-        let view_id = self.tree.focus;
+        let view_id = self.tree.text_focus();
         let history = &mut self.tree.get_mut(view_id).history;
         if index + 1 == history.places.len() {
             let start = history
@@ -492,20 +450,31 @@ impl Editor {
 
     /// Shows a place in a buffer in the focused view, centered, without recording a jump.
     pub fn show_place(&mut self, doc: DocumentId, selection: Selection) {
-        self.debug.unfocus();
-        let view_id = self.tree.focus;
+        let view_id = self.tree.text_focus();
         self.without_history(|editor| editor.jump_to(view_id, doc, selection));
     }
-}
 
-/// The screen drawn over a buffer (the dashboard): while the buffer is unchanged in its view, the
-/// focused place is the screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScreenCover {
-    pub kind: ScreenKind,
-    pub view: ViewId,
-    pub doc: DocumentId,
-    pub version: i32,
+    /// Records in the history of the text window `view` the screen `screen` that covered it and
+    /// just closed, so that `ga` shows it again over the window.
+    pub fn record_closed_screen(&mut self, view: crate::ViewId, mut screen: crate::screen::Screen) {
+        let Some(window) = self.tree.try_get_mut(view) else {
+            return;
+        };
+        // shown again from a place still in the history: back there, nothing new
+        if let Some(stash) = screen.place.take() {
+            let there = window.history.places().any(|place| {
+                matches!(place, Place::Screen(kept) if Rc::ptr_eq(&kept.stash, &stash))
+            });
+            if there {
+                *stash.borrow_mut() = Some(screen);
+                return;
+            }
+        }
+        if self.history_paused {
+            return;
+        }
+        window.history.push(Place::Screen(Screen::stashed(screen)), false);
+    }
 }
 
 #[cfg(test)]
@@ -535,19 +504,19 @@ mod tests {
     }
 
     fn screen(kind: ScreenKind) -> Place {
-        Place::screen(kind)
+        Place::Screen(Screen::stashed(crate::screen::Screen::new(kind, "a screen")))
     }
 
     #[test]
     fn push_drops_the_places_ahead_and_replaces_the_same_one() {
         let mut history = History::default();
-        history.push(screen(ScreenKind::Dashboard), false);
+        history.push(screen(ScreenKind::Hex), false);
         history.push(screen(ScreenKind::Diff), false);
-        history.push(screen(ScreenKind::DebugPanel), false);
+        history.push(screen(ScreenKind::Markdown), false);
         assert_eq!(history.current(), 3);
         history.current = 1;
         assert!(history.is_walking());
-        history.push(screen(ScreenKind::Vortex), false);
+        history.push(screen(ScreenKind::Markdown), false);
         let kinds: Vec<_> = history
             .places()
             .map(|place| match place {
@@ -555,7 +524,7 @@ mod tests {
                 Place::Text { .. } => unreachable!(),
             })
             .collect();
-        assert_eq!(kinds, [ScreenKind::Dashboard, ScreenKind::Vortex]);
+        assert_eq!(kinds, [ScreenKind::Hex, ScreenKind::Markdown]);
         assert!(!history.is_walking());
         history.push(screen(ScreenKind::Diff), true);
         assert_eq!(history.len(), 2);
@@ -616,7 +585,7 @@ mod tests {
     fn history_is_bounded() {
         let mut history = History::default();
         for _ in 0..CAPACITY + 10 {
-            history.push(screen(ScreenKind::Dashboard), false);
+            history.push(screen(ScreenKind::Diff), false);
         }
         assert_eq!(history.len(), CAPACITY);
         assert_eq!(history.current(), CAPACITY);
@@ -624,10 +593,11 @@ mod tests {
 
     #[test]
     fn a_stashed_screen_is_shown_from_one_place() {
-        let screen = Screen::stashed(ScreenKind::Diff, Box::new(1u8));
+        let diff = || crate::screen::Screen::new(ScreenKind::Diff, "a diff");
+        let screen = Screen::stashed(diff());
         let copy = screen.clone();
         assert!(screen.same(&copy));
-        assert!(!Screen::stashed(ScreenKind::Diff, Box::new(1u8)).same(&screen));
+        assert!(!Screen::stashed(diff()).same(&screen));
         assert!(screen.take().is_some());
         assert!(copy.is_empty());
         assert!(copy.take().is_none());

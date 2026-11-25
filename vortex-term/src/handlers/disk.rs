@@ -11,7 +11,10 @@ use std::path::PathBuf;
 
 use vortex_event::register_hook;
 use vortex_view::{
-    document::DiskChange, events::DocumentFocusLost, handlers::Handlers, DocumentId, Editor,
+    document::DiskChange,
+    events::{DocumentFocusLost, ScreenFocusLost},
+    handlers::Handlers,
+    DocumentId, Editor,
 };
 
 use crate::job;
@@ -101,9 +104,17 @@ fn reload(editor: &mut Editor, doc_id: DocumentId) {
 }
 
 pub(super) fn register_hooks(_handlers: &Handlers) {
+    // leaving a terminal (this fork): its shell may have changed any file
+    register_hook!(move |event: &mut ScreenFocusLost<'_>| {
+        if event.editor.terminals.is_terminal(event.screen) {
+            job::dispatch_blocking(|editor, _| check_all(editor));
+        }
+        Ok(())
+    });
     register_hook!(move |event: &mut DocumentFocusLost<'_>| {
-        // leaving a terminal (this fork): its shell may have changed any file
-        let left_terminal = event.editor.terminals.is_terminal(event.doc);
+        // leaving a terminal's lines in view mode (this fork): its shell may have changed any
+        // file
+        let left_terminal = event.editor.terminals.of_lines(event.doc).is_some();
         // The caller may still change the new document's selection, so look later.
         job::dispatch_blocking(move |editor, _| {
             if left_terminal {

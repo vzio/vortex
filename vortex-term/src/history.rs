@@ -8,7 +8,7 @@ use vortex_core::Selection;
 use vortex_view::{
     align_view,
     bookmarks::{At, Bookmark, Direction},
-    history::{Jump, Place, Screen, ScreenCover, ScreenKind, Step},
+    history::{Jump, Place, Step},
     keyboard::{KeyCode, KeyModifiers},
     Align, DocumentId, Editor,
 };
@@ -17,7 +17,7 @@ use crate::{
     commands::Context,
     compositor::Compositor,
     ctrl, job,
-    ui::{self, diff_view::DiffView, overlay::overlaid, Picker, PickerColumn},
+    ui::{self, overlay::overlaid, Picker, PickerColumn},
 };
 
 /// `ga`: one place back in the focused view's history (a count goes further back).
@@ -37,28 +37,20 @@ pub fn forward(cx: &mut Context) {
     }));
 }
 
-/// A step from the screen on top, `here`, already off the compositor (the diff view's `ga`).
-pub fn step_from_screen(
-    compositor: &mut Compositor,
-    editor: &mut Editor,
-    step_of: Step,
-    here: Option<Place>,
-) {
-    step(compositor, editor, step_of, 1, here);
-}
-
-/// Takes a step through the focused view's history and shows where it lands; `here` is the
-/// screen on top that it leaves, already off the compositor, `None` for the editor's place.
+/// Takes a step through the focused window's history and shows where it lands. From a screen
+/// that covers the window (a diff, a page, the hex view), going back shows what the window held,
+/// the screen kept in its history (`ga` again shows it again); while walking, the walk goes on
+/// from there. A screen's window of its own (a terminal, the debug panel) has no history.
 /// Returns whether it moved; it says why not.
 pub fn step(
     compositor: &mut Compositor,
     editor: &mut Editor,
     step: Step,
     count: usize,
-    here: Option<Place>,
+    _here: Option<Place>,
 ) -> bool {
     // a step may open another buffer or screen: it waits for watch mode to end, also from the keys that
-    // don't go through the keymap (the hex view, a diff on top)
+    // don't go through the keymap (the hex view, a diff)
     let name = match step {
         Step::Back => "history_back",
         Step::Forward => "history_forward",
@@ -67,129 +59,47 @@ pub fn step(
         // watch mode holds it: the bar says so
         return false;
     }
-    let left = here.clone();
-    let here = here.unwrap_or_else(|| editor.place());
-    match editor.history_step(step, count, here.clone()) {
+    let _ = compositor;
+    let focus = editor.tree.focus;
+    if editor.is_screen_view(focus) {
+        if editor.tree.under(focus).is_none() {
+            editor.set_status("A screen's window has no history");
+            return false;
+        }
+        let walking = editor
+            .tree
+            .get(editor.tree.text_focus())
+            .history
+            .is_walking();
+        crate::screens::close(editor, focus);
+        if !walking {
+            // back to what the window showed: that was the step
+            return step == Step::Back;
+        }
+    }
+    let here = editor.place();
+    match editor.history_step(step, count, here) {
         Ok(place) => {
-            show(compositor, editor, place, &here);
+            show(editor, place);
             true
         }
         Err(message) => {
-            // the screen it would have left stays
-            if let Some(Place::Screen(screen)) = left {
-                restore(compositor, editor, &screen);
-            }
             editor.set_status(message);
             false
         }
     }
 }
 
-/// Shows `place`, leaving `here`, without recording a jump.
-fn show(compositor: &mut Compositor, editor: &mut Editor, place: Place, here: &Place) {
+/// Shows `place` in the focused window, without recording a jump.
+fn show(editor: &mut Editor, place: Place) {
     match place {
-        Place::Text { doc, selection } => {
-            // leaving the render mode for its own text: the place's cursor, not the page's
-            if let Place::Screen(Screen {
-                kind: ScreenKind::Markdown(_),
-                ..
-            }) = here
-            {
-                if let Some(view) = compositor.find::<ui::EditorView>() {
-                    view.close_markdown(editor, false);
-                }
-            }
-            editor.show_place(doc, selection);
-            close_dashboard_buffer(editor, here);
-        }
+        Place::Text { doc, selection } => editor.show_place(doc, selection),
         Place::Screen(screen) => {
-            if !matches!(here, Place::Screen(Screen { kind, .. }) if *kind == ScreenKind::DebugPanel)
-            {
-                editor.debug.unfocus();
-            }
-            editor.without_history(|editor| restore(compositor, editor, &screen));
-        }
-    }
-}
-
-/// Shows a screen again.
-fn restore(compositor: &mut Compositor, editor: &mut Editor, screen: &Screen) {
-    match screen.kind {
-        ScreenKind::Dashboard | ScreenKind::Vortex => {
-            if let Some(view) = compositor.find::<ui::EditorView>() {
-                if screen.kind == ScreenKind::Vortex {
-                    view.open_vortex(editor);
-                } else {
-                    view.open_dashboard(editor);
-                }
-            }
-        }
-        ScreenKind::Diff => {
-            let Some(state) = screen.take() else {
-                return;
-            };
-            if let Ok(mut diff) = state.downcast::<DiffView>() {
-                diff.returned(editor, screen.stash.clone());
-                compositor.push(diff);
-            }
-        }
-        ScreenKind::DebugPanel => editor.debug.focus(),
-        ScreenKind::Markdown(doc) => {
-            if editor.document(doc).is_none() {
-                return;
-            }
-            let view_id = editor.tree.focus;
-            if editor.tree.get(view_id).doc != doc {
-                editor.switch(doc, vortex_view::editor::Action::Replace);
-            }
-            if let Some(view) = compositor.find::<ui::EditorView>() {
-                view.show_markdown_again(editor, doc);
+            if let Some(screen) = screen.take() {
+                editor.without_history(|editor| crate::screens::reopen(editor, screen));
             }
         }
     }
-}
-
-/// Closes the empty buffer the dashboard was drawn over once history leaves it for another
-/// buffer, so that walking to and from the dashboard leaves no empty buffers behind.
-fn close_dashboard_buffer(editor: &mut Editor, here: &Place) {
-    if !matches!(
-        here,
-        Place::Screen(Screen {
-            kind: ScreenKind::Dashboard | ScreenKind::Vortex,
-            ..
-        })
-    ) {
-        return;
-    }
-    let Some(ScreenCover { doc, .. }) = editor.screen_cover.take() else {
-        return;
-    };
-    let shown = editor.tree.views().any(|(view, _)| view.doc == doc);
-    let empty = editor
-        .document(doc)
-        .is_some_and(|doc| doc.path().is_none() && !doc.is_modified());
-    if !shown && empty {
-        let _ = editor.close_document(doc, false);
-    }
-}
-
-/// Records the opening of a screen over the focused place, a jump.
-pub fn opened_screen(editor: &mut Editor) {
-    let from = editor.place();
-    editor.record_jump(Jump::Screen, from);
-}
-
-/// Marks the dashboard just opened over the focused view, so that history knows the place is the
-/// dashboard while it is up.
-pub fn cover(editor: &mut Editor, kind: ScreenKind) {
-    let view = editor.tree.get(editor.tree.focus);
-    let doc = &editor.documents[&view.doc];
-    editor.screen_cover = Some(ScreenCover {
-        kind,
-        view: view.id,
-        doc: view.doc,
-        version: doc.version(),
-    });
 }
 
 // The history picker
@@ -233,29 +143,14 @@ fn describe(editor: &Editor, place: &Place) -> (String, String, Option<(Document
                 Some((*doc, line)),
             )
         }
-        Place::Screen(screen) => {
-            let name = match screen.kind {
-                ScreenKind::Dashboard => "the dashboard".to_string(),
-                ScreenKind::Vortex => "the vortex".to_string(),
-                ScreenKind::Diff => "a diff".to_string(),
-                ScreenKind::DebugPanel => "the debug panel".to_string(),
-                ScreenKind::Markdown(doc) => {
-                    let name = editor
-                        .document(doc)
-                        .map(|doc| doc.display_name().into_owned())
-                        .unwrap_or_default();
-                    format!("{name}, rendered")
-                }
-            };
-            (name, String::new(), None)
-        }
+        Place::Screen(screen) => (screen.name.clone(), String::new(), None),
     }
 }
 
 /// The rows of the history picker for the focused view, newest first: the present first when
 /// not walking, then the places it jumped from; the row where the walk is, is `current`.
 pub fn history_rows(editor: &Editor, here: &Place) -> Vec<HistoryRow> {
-    let history = &editor.tree.get(editor.tree.focus).history;
+    let history = &editor.tree.get(editor.tree.text_focus()).history;
     let mut rows = Vec::with_capacity(history.len() + 1);
     if !history.is_walking() {
         let (name, text, preview) = describe(editor, here);
@@ -317,9 +212,7 @@ pub fn open_history_picker(compositor: &mut Compositor, editor: &mut Editor, her
         cx.jobs.callback(async move {
             let call: job::Callback = job::Callback::EditorCompositor(Box::new(
                 move |editor: &mut Editor, compositor: &mut Compositor| {
-                    // opened over a diff: going somewhere leaves it, as `ga` does
-                    let here = ui::diff_view::leave_for_history(compositor);
-                    go_to_place(compositor, editor, index, here);
+                    go_to_place(compositor, editor, index);
                 },
             ));
             Ok(call)
@@ -357,25 +250,18 @@ pub fn open_history_picker(compositor: &mut Compositor, editor: &mut Editor, her
     compositor.push(Box::new(overlaid(picker)));
 }
 
-/// Goes to the place at `index` of the focused view's history from `here` (a screen already off
-/// the compositor, `None` for the editor's place), moving the walk's position there, without
-/// recording a jump.
-fn go_to_place(
-    compositor: &mut Compositor,
-    editor: &mut Editor,
-    index: usize,
-    here: Option<Place>,
-) {
-    let left = here.clone();
-    let here = here.unwrap_or_else(|| editor.place());
-    match editor.history_go_to(index, here.clone()) {
-        Ok(place) => show(compositor, editor, place, &here),
-        Err(message) => {
-            if let Some(Place::Screen(screen)) = left {
-                restore(compositor, editor, &screen);
-            }
-            editor.set_status(message);
-        }
+/// Goes to the place at `index` of the focused window's history, moving the walk's position
+/// there, without recording a jump. From a screen that covers the window, the screen closes
+/// first (kept in the history, as `ga` keeps it).
+fn go_to_place(_compositor: &mut Compositor, editor: &mut Editor, index: usize) {
+    let focus = editor.tree.focus;
+    if editor.is_screen_view(focus) && editor.tree.under(focus).is_some() {
+        crate::screens::close(editor, focus);
+    }
+    let here = editor.place();
+    match editor.history_go_to(index, here) {
+        Ok(place) => show(editor, place),
+        Err(message) => editor.set_status(message),
     }
 }
 

@@ -39,6 +39,35 @@ pub struct DebuggerConfig {
     /// 1,000,000 (about 8 MB).
     #[serde(with = "limit")]
     pub line_record: Option<usize>,
+    /// `[editor.debugger.panel]`: where the debug panel's window opens and its size, as
+    /// `[editor.terminal]` says for the scratch terminal.
+    pub panel: PanelConfig,
+}
+
+/// `[editor.debugger.panel]`: the debug panel's window (this fork).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
+pub struct PanelConfig {
+    /// The edge of the editor it opens along. Defaults to the bottom.
+    pub position: crate::terminal::TerminalPosition,
+    /// Its size in percent of the editor in the direction of `position`. Defaults to 33.
+    pub size: u16,
+}
+
+impl Default for PanelConfig {
+    fn default() -> Self {
+        Self {
+            position: crate::terminal::TerminalPosition::Bottom,
+            size: 33,
+        }
+    }
+}
+
+impl PanelConfig {
+    /// The size, kept between 10 and 90 percent.
+    pub fn share(&self) -> u16 {
+        self.size.clamp(10, 90)
+    }
 }
 
 impl Default for DebuggerConfig {
@@ -55,6 +84,7 @@ impl Default for DebuggerConfig {
             time_threshold: 1.0,
             engine: EngineConfig::Breakpoints,
             line_record: Some(DEFAULT_CAP),
+            panel: PanelConfig::default(),
         }
     }
 }

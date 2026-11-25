@@ -1,11 +1,16 @@
 //! A side by side diff between the HEAD version of a file (left) and its current contents
-//! (right). Changed lines are aligned, with filler rows where one side has no line.
+//! (right). Changed lines are aligned, with filler rows where one side has no line. In a window
+//! narrower than `[editor.diff] stack-below` the sides are stacked instead (unified: the old lines
+//! of a hunk above the new ones), and `t` switches the layout by hand.
+//!
+//! It is a screen (this fork, see `vortex_view::screen`): it covers the window it is opened in,
+//! and the lists it is opened from wait, off the compositor, until it closes (`q`, `Esc`), when
+//! they come back; `Enter` opens the file in the window instead.
 //!
 //! The text is read-only, but a diff of the working tree can stage, unstage and revert its hunks
 //! (see `commands/hunks.rs`), and the diffs opened from a list of files (the uncommitted changes,
 //! a commit, a range) go on to the next file with `n`/`N`.
 
-use std::any::Any;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -19,8 +24,9 @@ use vortex_vcs::staging::{self, HunkState, LineHunk};
 use vortex_vcs::FileChange;
 use vortex_view::editor::Action;
 use vortex_view::graphics::{Color, CursorKind, Modifier, Rect, Style};
-use vortex_view::history::{Jump, Place, Screen, ScreenKind, Step};
+use vortex_view::history::Step;
 use vortex_view::input::{Event, KeyEvent, MouseEventKind};
+use vortex_view::screen::{Placement, Screen, ScreenKind};
 use vortex_view::keyboard::{KeyCode, KeyModifiers};
 use vortex_view::{align_view, current, Align, DocumentId, Editor, Theme};
 
@@ -143,6 +149,74 @@ fn line_ranges(text: &str) -> Vec<Range<usize>> {
 
 /// Aligns the lines of `before` and `after`, returning the rows, the first row of each hunk and
 /// the lines of each hunk (the hunks the staging functions of `vortex_vcs` work with).
+/// The rows of the stacked layout from the side by side `rows` and the start of each hunk
+/// among them: unchanged lines once, and each hunk's old lines above its new ones, one side per
+/// row. Returns the rows and the start of each hunk among them (the same hunks, in the same
+/// order).
+fn stack_rows(rows: &[Row], hunks: &[usize]) -> (Vec<Row>, Vec<usize>) {
+    let mut stacked = Vec::with_capacity(rows.len() + rows.len() / 4);
+    let mut starts = Vec::with_capacity(hunks.len());
+    let mut i = 0;
+    while i < rows.len() {
+        if rows[i].kind == RowKind::Equal {
+            stacked.push(Row::new(RowKind::Equal, rows[i].left, rows[i].right));
+            i += 1;
+            continue;
+        }
+        let end = rows[i..]
+            .iter()
+            .position(|row| row.kind == RowKind::Equal)
+            .map_or(rows.len(), |len| i + len);
+        if hunks.binary_search(&i).is_ok() || starts.is_empty() {
+            starts.push(stacked.len());
+        }
+        for row in &rows[i..end] {
+            if let Some(left) = row.left {
+                let mut removed = Row::new(RowKind::Removed, Some(left), None);
+                removed.left_words = row.left_words.clone();
+                stacked.push(removed);
+            }
+        }
+        for row in &rows[i..end] {
+            if let Some(right) = row.right {
+                let mut added = Row::new(RowKind::Added, None, Some(right));
+                added.right_words = row.right_words.clone();
+                stacked.push(added);
+            }
+        }
+        i = end;
+    }
+    starts.truncate(hunks.len());
+    (stacked, starts)
+}
+
+/// How the two sides are laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    /// The old version on the left, the new one on the right, lines aligned.
+    SideBySide,
+    /// One column: the unchanged lines once, each hunk's old lines above its new ones.
+    Stacked,
+}
+
+impl Layout {
+    /// The layout for a window `width` columns wide: stacked below `stack_below` (0: never).
+    pub fn for_width(width: u16, stack_below: u16) -> Layout {
+        if width < stack_below {
+            Layout::Stacked
+        } else {
+            Layout::SideBySide
+        }
+    }
+
+    fn other(self) -> Layout {
+        match self {
+            Layout::SideBySide => Layout::Stacked,
+            Layout::Stacked => Layout::SideBySide,
+        }
+    }
+}
+
 fn build_rows(before: &str, after: &str) -> (Vec<Row>, Vec<usize>, Vec<LineHunk>) {
     let before_lines = line_ranges(before);
     let after_lines = line_ranges(after);
@@ -352,7 +426,6 @@ struct Palette {
     filler: Style,
     separator: Style,
     title: Style,
-    hint: Style,
     /// Line, word and sign styles for removed lines (left) and added lines (right).
     minus: ChangeStyle,
     plus: ChangeStyle,
@@ -405,7 +478,6 @@ impl Palette {
             filler: theme.get("ui.virtual.whitespace"),
             separator: theme.get("ui.window"),
             title: theme.get("ui.statusline").add_modifier(Modifier::BOLD),
-            hint: theme.get("ui.statusline.inactive"),
             minus: ChangeStyle::new(theme, "diff.minus", background.bg, 0.15),
             plus: ChangeStyle::new(theme, "diff.plus", background.bg, 0.15),
             minus_staged: ChangeStyle::new(theme, "diff.minus", background.bg, 0.06),
@@ -420,8 +492,6 @@ impl Palette {
         }
     }
 }
-
-type OnOpen = Box<dyn FnOnce(&mut Compositor)>;
 
 /// Both sides of a diff, built again after a change (see [`DiffView::with_rebuild`]).
 pub struct Snapshot {
@@ -466,8 +536,9 @@ pub struct Staging {
 pub type ListFiles = Rc<dyn Fn() -> Vec<(FileChange, bool)>>;
 /// Builds the diff of another file of the entry, see [`FileNav::open`].
 pub type OpenFile = Rc<dyn Fn(&mut Editor, &FileChange) -> anyhow::Result<DiffView>>;
-/// Puts the cursor of the list on a file, see [`FileNav::select`].
-pub type SelectFile = Rc<dyn Fn(&mut Compositor, &FileChange)>;
+/// Puts the cursor of the list on a file, see [`FileNav::select`]: the list is among the layers
+/// set aside under the diff (see [`crate::compositor::find_layer`]).
+pub type SelectFile = Rc<dyn Fn(&mut [Box<dyn Component>], &FileChange)>;
 /// Tells the list the diff was closed, see [`FileNav::closed`].
 pub type Closed = Rc<dyn Fn(&mut Compositor, &mut Context)>;
 
@@ -505,8 +576,6 @@ pub struct DiffView {
     states: Vec<HunkState>,
     /// File to open with Enter, if it still exists.
     path: Option<PathBuf>,
-    /// Run when Enter opens the file, to close what the view was opened from.
-    on_open: Option<OnOpen>,
     tab_width: usize,
     /// Long lines wrap instead of scrolling sideways, like `editor.soft-wrap`.
     wrap: bool,
@@ -532,9 +601,15 @@ pub struct DiffView {
     /// Builds the sides again, after a hunk action or when `live` sees the working tree change.
     rebuild: Option<Rebuild>,
     live: Option<Live>,
-    /// The history place it was shown again from (this fork), refilled when it is left again so
-    /// that walking through history finds it there.
-    history: Option<vortex_view::history::Stash>,
+    /// The layout shown: `rows` and `hunks` are its; `other` holds the other layout's.
+    layout: Layout,
+    other: (Vec<Row>, Vec<usize>),
+    /// The layout `t` chose; `None`: the window's width chooses.
+    forced: Option<Layout>,
+    /// The lists it was opened from (pickers), set aside off the compositor until it closes.
+    lists: Vec<Box<dyn Component>>,
+    /// Whether its window has the focus, for the status row.
+    focused: bool,
     /// Stage, unstage and revert.
     actions: Option<Actions>,
     /// The other files of the entry, for `n`/`N`.
@@ -545,6 +620,7 @@ pub struct DiffView {
 impl DiffView {
     pub fn new(left: Side, right: Side, path: Option<PathBuf>, tab_width: usize) -> DiffView {
         let (rows, hunks, line_hunks) = build_rows(&left.text, &right.text);
+        let other = stack_rows(&rows, &hunks);
         let scroll = hunks
             .first()
             .map_or(0, |hunk| hunk.saturating_sub(HUNK_CONTEXT));
@@ -558,7 +634,6 @@ impl DiffView {
             line_hunks,
             states: Vec::new(),
             path,
-            on_open: None,
             tab_width,
             wrap: false,
             text_widths: (0, 0),
@@ -572,7 +647,11 @@ impl DiffView {
             current: 0,
             rebuild: None,
             live: None,
-            history: None,
+            layout: Layout::SideBySide,
+            other,
+            forced: None,
+            lists: Vec::new(),
+            focused: true,
             actions: None,
             nav: None,
             confirm: None,
@@ -652,6 +731,12 @@ impl DiffView {
         } = snapshot;
         let top = self.rows.get(self.scroll).map(|row| (row.left, row.right));
         let (rows, hunks, line_hunks) = build_rows(&left.text, &right.text);
+        let stacked = stack_rows(&rows, &hunks);
+        let (rows, hunks, other) = match self.layout {
+            Layout::SideBySide => (rows, hunks, stacked),
+            Layout::Stacked => (stacked.0, stacked.1, (rows, hunks)),
+        };
+        self.other = other;
         self.widest = widest(&left, &right, self.tab_width);
         (
             self.left,
@@ -678,10 +763,39 @@ impl DiffView {
         self.follow_hunk();
     }
 
-    /// Runs `on_open` on the compositor when Enter opens the file.
-    pub fn with_on_open(mut self, on_open: impl FnOnce(&mut Compositor) + 'static) -> DiffView {
-        self.on_open = Some(Box::new(on_open));
-        self
+    /// Shows the sides in `layout`, keeping the line at the top of the screen and the current
+    /// hunk.
+    fn set_layout(&mut self, layout: Layout) {
+        if layout == self.layout {
+            return;
+        }
+        let top = self.rows.get(self.scroll).map(|row| (row.left, row.right));
+        let (rows, hunks) = std::mem::take(&mut self.other);
+        self.other = (
+            std::mem::replace(&mut self.rows, rows),
+            std::mem::replace(&mut self.hunks, hunks),
+        );
+        self.layout = layout;
+        let scroll = top
+            .and_then(|(left, right)| match right {
+                Some(right) => self.rows.iter().position(|row| row.right == Some(right)),
+                None => self.rows.iter().position(|row| row.left == left),
+            })
+            .unwrap_or(0);
+        self.offset = 0;
+        self.hscroll = 0;
+        self.scroll = scroll;
+        self.set_position(scroll, 0);
+    }
+
+    /// The layout shown.
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// Whether its window has the focus (its status row says so).
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
     }
 
     /// Wraps long lines instead of scrolling them sideways.
@@ -894,12 +1008,14 @@ impl DiffView {
             view.nav = Some(nav);
             (view.height, view.visible, view.text_widths) =
                 (self.height, self.visible, self.text_widths);
+            view.lists = std::mem::take(&mut self.lists);
+            (view.forced, view.focused) = (self.forced, self.focused);
+            view.set_layout(self.layout);
             view.go_to_hunk(if forward { 0 } else { usize::MAX });
             *self = view;
-            let change = change.clone();
-            return Some(EventResult::Consumed(Some(Box::new(
-                move |compositor: &mut Compositor, _: &mut Context| select(compositor, &change),
-            ))));
+            // the list it was opened from, under it, follows
+            select(&mut self.lists, change);
+            return Some(EventResult::Consumed(None));
         }
         None
     }
@@ -978,9 +1094,7 @@ impl DiffView {
             Ok(message) => {
                 editor.set_status(message);
                 // not `close`: the list's own message would hide this one
-                EventResult::Consumed(Some(Box::new(|compositor: &mut Compositor, _| {
-                    compositor.remove(ID);
-                })))
+                self.leave(editor, false)
             }
             Err(err) => {
                 editor.set_error(err.to_string());
@@ -1032,30 +1146,43 @@ impl DiffView {
             .or_else(|| self.rows.iter().rev().find_map(|row| row.right))
     }
 
-    /// Closes the view, back to the list it was opened from (see [`FileNav::closed`]).
-    fn close(&self) -> EventResult {
-        let closed = self.nav.as_ref().and_then(|nav| nav.closed.clone());
+    /// Closes the view (`q`, `Esc`): its window shows what it covered, and the lists it was
+    /// opened from come back (see [`FileNav::closed`]).
+    fn close(&mut self, editor: &Editor) -> EventResult {
+        self.leave(editor, true)
+    }
+
+    /// Closes the view, the lists it was opened from back on the compositor; `tell` calls
+    /// [`FileNav::closed`].
+    fn leave(&mut self, editor: &Editor, tell: bool) -> EventResult {
+        let view = editor.tree.focus;
+        let lists = std::mem::take(&mut self.lists);
+        let closed = self
+            .nav
+            .as_ref()
+            .and_then(|nav| nav.closed.clone())
+            .filter(|_| tell);
         EventResult::Consumed(Some(Box::new(move |compositor: &mut Compositor, cx| {
-            compositor.remove(ID);
+            crate::screens::close(cx.editor, view);
+            compositor.put_back(lists);
             if let Some(closed) = closed {
                 closed(compositor, cx);
             }
         })))
     }
 
-    /// Closes the view and opens the file at the line shown at the top.
-    fn open_file(&mut self) -> EventResult {
+    /// Closes the view and opens the file in its window at the line of the current hunk; the
+    /// lists it was opened from go. `ga` comes back to the diff.
+    fn open_file(&mut self, editor: &Editor) -> EventResult {
         let Some(path) = self.path.clone() else {
-            return self.close();
+            return self.close(editor);
         };
+        let view = editor.tree.focus;
         let line = self.current_right_line().unwrap_or(0);
-        let on_open = self.on_open.take();
-        EventResult::Consumed(Some(Box::new(move |compositor: &mut Compositor, cx| {
-            // the diff is where the file was opened from: `ga` comes back to it (this fork)
-            let from = compositor.remove(ID).and_then(stash);
-            if let Some(on_open) = on_open {
-                on_open(compositor);
-            }
+        self.lists.clear();
+        EventResult::Consumed(Some(Box::new(move |_: &mut Compositor, cx| {
+            // the diff is where the file was opened from: it goes in the window's history
+            crate::screens::close(cx.editor, view);
             let opened = cx.editor.without_history(|editor| {
                 editor.open(&path, Action::Replace)?;
                 let (view, doc) = current!(editor);
@@ -1065,15 +1192,22 @@ impl DiffView {
                 align_view(doc, view, Align::Center);
                 anyhow::Ok(())
             });
-            match opened {
-                Ok(()) => {
-                    if let Some(from) = from {
-                        cx.editor.record_jump(Jump::Switch, from);
-                    }
-                }
-                Err(err) => cx.editor.set_error(format!("{err}")),
+            if let Err(err) = opened {
+                cx.editor.set_error(format!("{err}"));
             }
         })))
+    }
+
+    /// What only an open diff needs, dropped when history keeps it (this fork): the lists it was
+    /// opened from, what tied it to them, and its watch of the working tree. Shown again, it
+    /// reads its sides again ([`Self::returned`]).
+    pub fn lighten(&mut self) {
+        self.lists.clear();
+        self.live = None;
+        if let Some(nav) = &mut self.nav {
+            nav.closed = None;
+            nav.select = Rc::new(|_, _| {});
+        }
     }
 
     fn handle_key(&mut self, key: &KeyEvent, editor: &mut Editor) -> EventResult {
@@ -1100,10 +1234,18 @@ impl DiffView {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return self.close(),
+            KeyCode::Char('q') | KeyCode::Esc => return self.close(editor),
             KeyCode::Char('?') => return EventResult::Consumed(Some(key_help().push())),
-            KeyCode::Char('c') if ctrl => return self.close(),
-            KeyCode::Enter => return self.open_file(),
+            KeyCode::Char('c') if ctrl => return self.close(editor),
+            // the window menu and the command line are the editor's
+            KeyCode::Char('w') if ctrl => return EventResult::Ignored(None),
+            KeyCode::Char(':') => return EventResult::Ignored(None),
+            KeyCode::Enter => return self.open_file(editor),
+            KeyCode::Char('t') => {
+                let layout = self.layout.other();
+                self.forced = Some(layout);
+                self.set_layout(layout);
+            }
             KeyCode::Char('d') if ctrl => self.scroll_by(half_page),
             KeyCode::Char('u') if ctrl => self.scroll_by(-half_page),
             KeyCode::Char('f') if ctrl => self.scroll_by(page),
@@ -1301,70 +1443,53 @@ fn layout(
     (row + 1, col)
 }
 
-/// Opens the history picker over the diff view (this fork): `gA`. Going to a place leaves the
+/// Opens the history picker over the diff (this fork): `gA`. Going to a place leaves the
 /// diff, as `ga` does.
 fn history_picker() -> EventResult {
     EventResult::Consumed(Some(Box::new(
         |compositor: &mut Compositor, cx: &mut Context| {
-            // the present is this diff (it stays on the compositor until a place is picked)
-            let here = Place::screen(ScreenKind::Diff);
-            crate::history::open_history_picker(compositor, cx.editor, Some(here));
+            crate::history::open_history_picker(compositor, cx.editor, None);
         },
     )))
 }
 
-/// Takes the diff view off the compositor for a history step, if it is on it (the history
-/// picker's `Enter` over a diff), and returns it as the place history leaves.
-pub(crate) fn leave_for_history(compositor: &mut Compositor) -> Option<Place> {
-    compositor.find_id::<DiffView>(ID)?;
-    leave(compositor)
-}
-
-/// Takes a history step from the diff view on top (this fork): `ga`.
+/// Takes a history step from the diff (this fork): `ga` shows what the window held, the diff
+/// kept in its history.
 fn history_step(step: Step) -> EventResult {
     EventResult::Consumed(Some(Box::new(
         move |compositor: &mut Compositor, cx: &mut Context| {
-            let here = leave(compositor);
-            crate::history::step_from_screen(compositor, cx.editor, step, here);
+            crate::history::step(compositor, cx.editor, step, 1, None);
         },
     )))
 }
 
-/// Takes the diff view off the compositor, with the pickers it was opened from (pickers are not
-/// history's places), and returns it as the place history leaves.
-fn leave(compositor: &mut Compositor) -> Option<Place> {
-    let place = compositor.remove(ID).and_then(stash);
-    compositor.pop_to_editor();
-    place
-}
-
-/// The diff view as a history place, without what ties it to the list it was opened from.
-fn stash(layer: Box<dyn Component>) -> Option<Place> {
-    let mut diff = layer.as_boxed_any().downcast::<DiffView>().ok()?;
-    diff.on_open = None;
-    if let Some(nav) = &mut diff.nav {
-        nav.closed = None;
-        nav.select = Rc::new(|_, _| {});
-    }
-    let screen = match diff.history.take() {
-        Some(stash) => {
-            *stash.borrow_mut() = Some(diff as Box<dyn Any>);
-            Screen {
-                kind: ScreenKind::Diff,
-                stash: Some(stash),
-            }
-        }
-        None => Screen::stashed(ScreenKind::Diff, diff),
-    };
-    Some(Place::Screen(screen))
-}
-
 impl DiffView {
-    /// Shown again from history (this fork): remembers the place, and reads its sides again.
-    pub fn returned(&mut self, editor: &Editor, stash: Option<vortex_view::history::Stash>) {
-        self.history = stash;
+    /// Shown again from history (this fork): reads its sides again.
+    pub fn returned(&mut self, editor: &Editor) {
         self.reload(editor);
     }
+
+    /// Its name as a screen: the buffer picker, history.
+    fn name(&self) -> String {
+        match &self.path {
+            Some(path) => format!("diff {}", relative(path)),
+            None => format!("diff {}", self.right.title),
+        }
+    }
+}
+
+/// Opens `diff` over the window for documents (this fork): the lists on the compositor (the
+/// pickers it is opened from) wait under it until it closes.
+pub fn open(compositor: &mut Compositor, editor: &mut Editor, mut diff: DiffView) {
+    diff.lists = compositor.take_overlays();
+    let screen = editor.add_screen(Screen::new(ScreenKind::Diff, diff.name()).with_state(diff));
+    editor.open_screen(screen, Placement::Cover);
+}
+
+/// The layout a diff's window shows, by its width and the configuration.
+fn layout_for(diff: &DiffView, editor: &Editor, width: u16) -> Layout {
+    diff.forced
+        .unwrap_or_else(|| Layout::for_width(width, editor.config().diff.stack_below))
 }
 
 impl Component for DiffView {
@@ -1386,10 +1511,12 @@ impl Component for DiffView {
         }
     }
 
+    /// Draws the diff in its window's `area`: the titles on the first row, the status on the
+    /// last one (this fork: the diff's status row), side by side or stacked by the width.
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         self.refresh(cx.editor);
-        // the last line stays the editor's, for its messages (what an action did...)
-        let area = area.clip_bottom(1);
+        let layout = layout_for(self, cx.editor, area.width);
+        self.set_layout(layout);
         let palette = Palette::new(&cx.editor.theme);
         surface.clear_with(area, palette.background);
         if area.height < 3 || area.width < 10 {
@@ -1397,20 +1524,12 @@ impl Component for DiffView {
         }
 
         let footer_height = 1;
-        if area.height < 2 + footer_height {
-            return;
-        }
         let body = Rect::new(
             area.x,
             area.y + 1,
             area.width,
             area.height - 1 - footer_height,
         );
-
-        let half = (area.width - 1) / 2;
-        let left_area = Rect::new(area.x, body.y, half, body.height);
-        let separator_x = area.x + half;
-        let right_area = Rect::new(separator_x + 1, body.y, area.width - half - 1, body.height);
         let number_width = self
             .left
             .lines
@@ -1421,6 +1540,22 @@ impl Component for DiffView {
             .len();
         // the gutter: line number, a space, the sign and a space
         let text_width = |area: Rect| (area.width as usize).saturating_sub(number_width + 3);
+
+        // stacked: one column, the staged mark in the first one
+        let (left_area, right_area, separator_x) = match self.layout {
+            Layout::SideBySide => {
+                let half = (area.width - 1) / 2;
+                let left_area = Rect::new(area.x, body.y, half, body.height);
+                let separator_x = area.x + half;
+                let right_area =
+                    Rect::new(separator_x + 1, body.y, area.width - half - 1, body.height);
+                (left_area, right_area, separator_x)
+            }
+            Layout::Stacked => {
+                let column = Rect::new(area.x + 1, body.y, area.width - 1, body.height);
+                (column, column, area.x)
+            }
+        };
         self.text_widths = (text_width(left_area), text_width(right_area));
         self.height = body.height as usize;
         // the widths may have changed, and the row heights with them
@@ -1434,20 +1569,34 @@ impl Component for DiffView {
 
         // header with the title of each side
         surface.set_style(Rect::new(area.x, area.y, area.width, 1), palette.title);
-        surface.set_stringn(
-            area.x + 1,
-            area.y,
-            &self.left.title,
-            half.saturating_sub(1) as usize,
-            palette.title,
-        );
-        surface.set_stringn(
-            right_area.x + 1,
-            area.y,
-            &self.right.title,
-            right_area.width.saturating_sub(1) as usize,
-            palette.title,
-        );
+        match self.layout {
+            Layout::SideBySide => {
+                surface.set_stringn(
+                    area.x + 1,
+                    area.y,
+                    &self.left.title,
+                    left_area.width.saturating_sub(1) as usize,
+                    palette.title,
+                );
+                surface.set_stringn(
+                    right_area.x + 1,
+                    area.y,
+                    &self.right.title,
+                    right_area.width.saturating_sub(1) as usize,
+                    palette.title,
+                );
+            }
+            Layout::Stacked => {
+                let titles = format!("{} → {}", self.left.title, self.right.title);
+                surface.set_stringn(
+                    area.x + 1,
+                    area.y,
+                    &titles,
+                    area.width.saturating_sub(1) as usize,
+                    palette.title,
+                );
+            }
+        }
 
         let current_rows = self.current_rows();
         let mut y = body.y;
@@ -1466,57 +1615,96 @@ impl Component for DiffView {
             let (mark, mark_style) = match state {
                 Some(HunkState::Staged) => ("┃", palette.staged),
                 Some(HunkState::PartlyStaged) => ("╏", palette.partly_staged),
+                _ if self.layout == Layout::Stacked => (" ", palette.separator),
                 _ => ("│", palette.separator),
             };
             for y in y..y + height {
                 surface.set_stringn(separator_x, y, mark, 1, mark_style);
             }
-            self.render_cell(
-                surface,
-                left_area,
-                y,
-                skip,
-                height,
-                &self.left,
-                row.left,
-                row.kind,
-                &row.left_words,
-                true,
-                is_current,
-                staged,
-                number_width,
-                &palette,
-            );
-            self.render_cell(
-                surface,
-                right_area,
-                y,
-                skip,
-                height,
-                &self.right,
-                row.right,
-                row.kind,
-                &row.right_words,
-                false,
-                is_current,
-                staged,
-                number_width,
-                &palette,
-            );
+            match self.layout {
+                Layout::SideBySide => {
+                    self.render_cell(
+                        surface,
+                        left_area,
+                        y,
+                        skip,
+                        height,
+                        &self.left,
+                        row.left,
+                        row.kind,
+                        &row.left_words,
+                        true,
+                        is_current,
+                        staged,
+                        number_width,
+                        &palette,
+                    );
+                    self.render_cell(
+                        surface,
+                        right_area,
+                        y,
+                        skip,
+                        height,
+                        &self.right,
+                        row.right,
+                        row.kind,
+                        &row.right_words,
+                        false,
+                        is_current,
+                        staged,
+                        number_width,
+                        &palette,
+                    );
+                }
+                Layout::Stacked => {
+                    // one side per row: the old line of a removed one, else the new line
+                    let (side, line, words, is_left) = match row.right {
+                        Some(right) => (&self.right, Some(right), &row.right_words, false),
+                        None => (&self.left, row.left, &row.left_words, true),
+                    };
+                    self.render_cell(
+                        surface,
+                        left_area,
+                        y,
+                        skip,
+                        height,
+                        side,
+                        line,
+                        row.kind,
+                        words,
+                        is_left,
+                        is_current,
+                        staged,
+                        number_width,
+                        &palette,
+                    );
+                }
+            }
             y += height;
             visible += 1;
         }
         self.visible = visible.max(1);
-        for y in y..body.bottom() {
-            surface.set_stringn(separator_x, y, "│", 1, palette.separator);
+        if self.layout == Layout::SideBySide {
+            for y in y..body.bottom() {
+                surface.set_stringn(separator_x, y, "│", 1, palette.separator);
+            }
         }
 
-        // footer with the position
+        // the status row: the position, or a question waiting for its answer
         let footer_y = area.bottom() - footer_height;
-        surface.set_style(
-            Rect::new(area.x, footer_y, area.width, footer_height),
-            palette.hint,
-        );
+        let theme = &cx.editor.theme;
+        let base = if self.focused {
+            theme.get("ui.statusline")
+        } else {
+            theme.get("ui.statusline.inactive")
+        };
+        surface.set_style(Rect::new(area.x, footer_y, area.width, footer_height), base);
+        let badge = if self.focused {
+            theme.get_or("ui.statusline.normal", "ui.statusline")
+        } else {
+            base
+        };
+        let (x, _) = surface.set_stringn(area.x, footer_y, " DIFF ", area.width as usize, badge);
         let mut position = match self.hunks.len() {
             0 => "no changes".to_string(),
             hunks => format!("hunk {}/{hunks}", self.current + 1),
@@ -1529,22 +1717,23 @@ impl Component for DiffView {
         if let Some((file, files)) = self.file_position() {
             position.push_str(&format!(" · file {file}/{files}"));
         }
-        let lines = [match &self.confirm {
+        if self.layout == Layout::Stacked {
+            position.push_str(" · stacked");
+        }
+        let (line, style) = match &self.confirm {
             Some(Confirm::Delete(path)) => (
                 format!(" Delete untracked {}? (y/n)", relative(path)),
-                palette.hint.patch(palette.warning),
+                base.patch(palette.warning),
             ),
-            None => (format!(" {position}"), palette.hint),
-        }];
-        for (i, (line, style)) in lines.iter().enumerate() {
-            surface.set_stringn(
-                area.x,
-                footer_y + i as u16,
-                line,
-                area.width as usize,
-                *style,
-            );
-        }
+            None => (format!(" {position}"), base),
+        };
+        surface.set_stringn(
+            x,
+            footer_y,
+            &line,
+            area.right().saturating_sub(x) as usize,
+            style,
+        );
     }
 
     fn cursor(&self, _area: Rect, _editor: &Editor) -> (Option<vortex_core::Position>, CursorKind) {
@@ -1581,7 +1770,15 @@ fn key_help() -> crate::ui::keyhelp::KeyHelp {
                     ("w", "wrap long lines"),
                 ],
             ),
-            ("view", vec![("q Esc", "close"), ("?", "these keys")]),
+            (
+                "view",
+                vec![
+                    ("t", "side by side or stacked"),
+                    ("q Esc", "close, back to the list"),
+                    ("ga", "close, kept in the window's history"),
+                    ("?", "these keys"),
+                ],
+            ),
         ],
     )
 }

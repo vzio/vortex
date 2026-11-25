@@ -410,6 +410,11 @@ pub struct DebugState {
     pub engine: engine::Engine,
     /// Debug mode (this fork): on while `Some`. Its keys come first, and its bar shows.
     pub mode: Option<DebugMode>,
+    /// The panel's screen, while its window is open (this fork: a window of the tree, see
+    /// `crate::screen`).
+    pub panel: Option<crate::screen::ScreenId>,
+    /// Where the panel's window was when it was hidden, to show it there again.
+    pub panel_place: Option<crate::tree::Place>,
 }
 
 /// Debug mode's own state: following the spectated thread, or looking around.

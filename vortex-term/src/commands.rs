@@ -278,6 +278,11 @@ impl MappableCommand {
                 }
             }
             Self::Static { name, fun, .. } => {
+                // on a screen's window (this fork), only the commands about windows and the
+                // editor run, and the screen's own: a text command has no text to act on there
+                if !crate::screens::allows(cx.editor, name) {
+                    return;
+                }
                 // in watch mode and debug mode, moving waits until you look around, and editing
                 // until you leave it; a command that walks a terminal's lines (this fork) is the
                 // terminal's, not theirs; moving the focus between windows is neither's, since
@@ -1007,12 +1012,12 @@ fn goto_previous_buffer(cx: &mut Context) {
 
 fn goto_buffer(editor: &mut Editor, direction: Direction, count: usize) {
     let current = view!(editor).doc;
-    // the buffers to go through: not the screens (this fork: terminals), which have their windows
+    // the buffers to go through: not a screen's lines (this fork: a terminal's in view mode)
     let ids: Vec<DocumentId> = editor
         .documents
-        .iter()
-        .filter(|(id, doc)| !doc.is_screen() || **id == current)
-        .map(|(id, _)| *id)
+        .keys()
+        .filter(|id| editor.is_buffer(**id) || **id == current)
+        .copied()
         .collect();
 
     let id = match direction {
@@ -6191,11 +6196,7 @@ fn match_brackets(cx: &mut Context) {
 /// `V` (this fork): the Markdown render mode of the buffer, or back to its source (the render
 /// mode takes this command over while it is up).
 fn markdown_view(cx: &mut Context) {
-    cx.callback.push(Box::new(|compositor, cx| {
-        if let Some(view) = compositor.find::<ui::EditorView>() {
-            view.toggle_markdown(cx.editor);
-        }
-    }));
+    crate::markdown_view::toggle(cx.editor);
 }
 
 fn history_back(cx: &mut Context) {

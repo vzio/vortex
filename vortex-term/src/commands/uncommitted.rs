@@ -476,8 +476,10 @@ fn changes_picker(
                     line,
                     live,
                     Rc::new(move || files.lock().clone()),
-                    Rc::new(|compositor, change| {
-                        if let Some(overlay) = compositor.find::<Overlay<UncommittedChanges>>() {
+                    Rc::new(|layers, change| {
+                        if let Some(overlay) =
+                            crate::compositor::find_layer::<Overlay<UncommittedChanges>>(layers)
+                        {
                             select_row(&mut overlay.content.picker, change.path(), None);
                         }
                     }),

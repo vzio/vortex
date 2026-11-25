@@ -2282,9 +2282,7 @@ fn dashboard(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> a
     let callback = async move {
         let call: job::Callback = job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, compositor: &mut Compositor| {
-                if let Some(view) = compositor.find::<ui::EditorView>() {
-                    view.open_dashboard(editor);
-                }
+                crate::dashboard::open(compositor, editor, false);
             },
         ));
         Ok(call)
@@ -2305,9 +2303,8 @@ fn markdown_view(
     let callback = async move {
         let call: job::Callback = job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, compositor: &mut Compositor| {
-                if let Some(view) = compositor.find::<ui::EditorView>() {
-                    view.toggle_markdown(editor);
-                }
+                let _ = compositor;
+                crate::markdown_view::toggle(editor);
             },
         ));
         Ok(call)
@@ -2324,9 +2321,7 @@ fn vortex(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyh
     let callback = async move {
         let call: job::Callback = job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, compositor: &mut Compositor| {
-                if let Some(view) = compositor.find::<ui::EditorView>() {
-                    view.open_vortex(editor);
-                }
+                crate::dashboard::open(compositor, editor, true);
             },
         ));
         Ok(call)
