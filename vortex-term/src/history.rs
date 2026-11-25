@@ -153,11 +153,16 @@ fn describe(editor: &Editor, place: &Place) -> (String, String, Option<(Document
                 Some((*doc, line)),
             )
         }
-        // the hex view is named after its file: said, to tell it from the file's places
-        Place::Screen(screen) if screen.kind == vortex_view::screen::ScreenKind::Hex => {
-            (format!("{} (hex)", screen.name), String::new(), None)
-        }
-        Place::Screen(screen) => (screen.name.clone(), String::new(), None),
+        Place::Screen(screen) => (screen_label(screen.kind, &screen.name), String::new(), None),
+    }
+}
+
+/// How the history picker names a screen: the hex view is named after its file, so it says so, to
+/// tell it from the file's places.
+fn screen_label(kind: vortex_view::screen::ScreenKind, name: &str) -> String {
+    match kind {
+        vortex_view::screen::ScreenKind::Hex => format!("{name} (hex)"),
+        _ => name.to_string(),
     }
 }
 
@@ -165,12 +170,26 @@ fn describe(editor: &Editor, place: &Place) -> (String, String, Option<(Document
 /// not walking, then the places it jumped from; the row where the walk is, is `current`.
 pub fn history_rows(editor: &Editor, here: &Place) -> Vec<HistoryRow> {
     let history = &editor.tree.get(editor.tree.text_focus()).history;
-    let mut rows = Vec::with_capacity(history.len() + 1);
+    let mut rows = Vec::with_capacity(history.len() + 2);
     if !history.is_walking() {
+        // a screen covering the window is the present, and what it covers is the step back
+        let covering = editor
+            .focused_screen()
+            .filter(|_| editor.tree.under(editor.tree.focus).is_some());
+        if let Some(screen) = covering {
+            rows.push(HistoryRow {
+                index: None,
+                current: true,
+                name: screen_label(screen.kind, &screen.name),
+                text: String::new(),
+                preview: None,
+            });
+        }
         let (name, text, preview) = describe(editor, here);
         rows.push(HistoryRow {
-            index: None,
-            current: true,
+            // past the history's places: going there closes the screen
+            index: covering.map(|_| history.len()),
+            current: covering.is_none(),
             name,
             text,
             preview,
@@ -270,7 +289,12 @@ pub fn open_history_picker(compositor: &mut Compositor, editor: &mut Editor, her
 fn go_to_place(_compositor: &mut Compositor, editor: &mut Editor, index: usize) {
     let focus = editor.tree.focus;
     if editor.is_screen_view(focus) && editor.tree.under(focus).is_some() {
+        let covered = index >= editor.tree.get(editor.tree.text_focus()).history.len();
         crate::screens::close(editor, focus);
+        if covered {
+            // the place the screen covered: closing it shows it
+            return;
+        }
     }
     let here = editor.place();
     match editor.history_go_to(index, here) {

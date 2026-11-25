@@ -400,6 +400,18 @@ fn handle_key(cx: &mut compositor::Context, key: KeyEvent, idle: bool) -> Option
     }
 }
 
+/// Whether watch mode's and debug mode's keys come before the focused screen's own: on the hex
+/// view and a Markdown page, which only look, as they did before they were windows. A terminal
+/// types, the diff reviews and the debug panel is debug mode's own: they keep their keys.
+pub fn modes_first(editor: &Editor) -> bool {
+    match focused_kind(editor) {
+        // overwriting or selecting, the view takes every key
+        Some(ScreenKind::Hex) => !commands::hex::modal(editor),
+        Some(ScreenKind::Markdown) => true,
+        _ => false,
+    }
+}
+
 /// A paste for the focused screen. Returns whether the screen took it.
 fn handle_paste(editor: &mut Editor, text: &str) -> bool {
     if crate::terminal::focused(editor).is_some() {

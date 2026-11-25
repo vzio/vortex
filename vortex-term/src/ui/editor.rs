@@ -162,6 +162,11 @@ impl EditorView {
                 return Some(());
             }
         }
+        self.mode_layer_key(key, cx)
+    }
+
+    /// The key of watch mode or debug mode (this fork), while one is on.
+    fn mode_layer_key(&mut self, key: KeyEvent, cx: &mut commands::Context) -> Option<()> {
         let layer = if cx.editor.watch.is_active() {
             crate::keymap::Layer::Watch
         } else if cx.editor.debug.mode_on() {
@@ -1812,7 +1817,12 @@ impl Component for EditorView {
                     && self.on_next_key.is_none()
                     && cx.editor.count.is_none()
                     && cx.editor.selected_register.is_none();
-                {
+                // watch mode's and debug mode's keys come before the hex view's and a page's own
+                // (stepping while looking at memory); a terminal, the diff and the debug panel
+                // keep theirs
+                let mode_first = crate::screens::modes_first(cx.editor)
+                    && self.mode_layer_key(key, &mut cx).is_some();
+                if !mode_first {
                     let mut ccx = Context {
                         editor: cx.editor,
                         jobs: cx.jobs,
@@ -1827,7 +1837,7 @@ impl Component for EditorView {
 
                 // the keys of a screen, then of watch mode and debug mode (this fork) come first
                 // while they are on
-                let layer_handled = self.layer_key(key, &mut cx).is_some();
+                let layer_handled = mode_first || self.layer_key(key, &mut cx).is_some();
 
                 let mode = cx.editor.mode();
 

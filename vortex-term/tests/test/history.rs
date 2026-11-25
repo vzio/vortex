@@ -877,7 +877,11 @@ async fn a_screen_is_listed_by_name_and_enter_shows_it_again() -> anyhow::Result
     let rows = h.picker();
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert!(rows[0].0 && rows[0].1.ends_with("forty.txt:4"), "{rows:?}");
-    assert_eq!((rows[1].0, rows[1].1.as_str()), (false, "forty.txt (hex)"));
+    // named by its path, as the file's places are
+    assert!(
+        !rows[1].0 && rows[1].1.ends_with("forty.txt (hex)"),
+        "{rows:?}"
+    );
     open_picker(&mut h).await;
     assert!(
         on_screen(&h.app, "forty.txt (hex)"),
@@ -910,7 +914,7 @@ async fn the_picker_goes_to_a_place_in_another_file() -> anyhow::Result<()> {
     h.finish().await
 }
 
-/// The diff view: `gA` opens the picker over it (the present is "a diff"), and `Enter` leaves
+/// The diff view: `gA` opens the picker over it (the present is the diff), and `Enter` leaves
 /// the diff for the place.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_diff() {
@@ -949,7 +953,7 @@ async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_dif
         session.rows()
     );
 
-    // `gA` over the diff: the picker lists the present, "a diff", and the place before it
+    // `gA` over the diff: the picker lists the present, the diff, and the place it covers
     session.keys("gA").await;
     session
         .wait_for_screen("the history picker", |rows| rows_have(rows, "●"))
@@ -957,7 +961,7 @@ async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_dif
     let rows = session.rows();
     assert!(
         rows.iter()
-            .any(|row| row.contains("●") && row.contains("a diff")),
+            .any(|row| row.contains("●") && row.contains("diff a.txt")),
         "{rows:#?}"
     );
     assert!(rows_have(&rows, "a.txt:5"), "{rows:#?}");
@@ -980,7 +984,7 @@ async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_dif
     );
     // the diff is a place of the history now, listed by name
     let rows = history_rows(editor, &editor.place());
-    assert!(rows.iter().any(|row| row.name == "a diff"), "{rows:?}");
+    assert!(rows.iter().any(|row| row.name == "diff a.txt"), "{rows:?}");
 }
 
 // Switching files

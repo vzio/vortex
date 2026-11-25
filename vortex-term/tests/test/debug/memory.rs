@@ -961,7 +961,10 @@ async fn an_adapter_that_cannot_write_memory_refuses_overwriting() -> anyhow::Re
 
 /// `i` in the memory view, and the status it leaves: the cursor must not be overwriting.
 async fn refused(e: &mut Env, why: &str) -> anyhow::Result<()> {
-    e.h.keys("<esc>").await?;
+    // out of debug mode (Esc with nothing to leave would close the view)
+    if e.h.app.editor.debug.mode_on() {
+        e.h.keys("<esc>").await?;
+    }
     e.h.errors.clear();
     e.h.keys("i").await?;
     e.says(why).await;

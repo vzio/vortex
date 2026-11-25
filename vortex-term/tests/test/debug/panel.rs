@@ -863,8 +863,10 @@ async fn focus_and_keys_of_the_panel() -> anyhow::Result<()> {
         "Esc left debug mode only"
     );
 
-    // Esc in normal mode with nothing pending hides the visible, unfocused panel
+    // the panel is a window: Esc in the editor leaves it, Esc in the focused panel hides it
     e.h.keys("<esc>").await?;
+    assert!(e.h.app.editor.debug_panel_shown());
+    e.h.keys("<C-g><esc>").await?;
     assert!(!e.h.app.editor.debug_panel_shown());
     assert!(e.h.errors.is_empty(), "{:?}", e.h.errors);
     e.h.finish().await

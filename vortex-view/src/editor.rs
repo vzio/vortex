@@ -2481,11 +2481,12 @@ impl Editor {
 
     /// From a screen's window (this fork), a document opens in the window for documents; else
     /// in the window of the screen, when the screen covers a text window (it closes); else in a
-    /// new split (`action` becomes a split). Does nothing for the split actions, or from a text
-    /// window. Leaves the focus on the text window the document opens in.
+    /// new split (`action` becomes a split). Does nothing for the split actions, for
+    /// `Action::Load` (it loads a buffer in the background: reverting a hunk from the diff, LSP
+    /// edits, watch), or from a text window. Leaves the focus on the text window the document
+    /// opens in.
     pub(crate) fn leave_screen_for_text(&mut self, action: &mut Action) {
-        if matches!(*action, Action::Replace | Action::Load) && self.is_screen_view(self.tree.focus)
-        {
+        if matches!(*action, Action::Replace) && self.is_screen_view(self.tree.focus) {
             let focus = self.tree.focus;
             match self.document_view() {
                 Some(view) => self.focus(view),
@@ -2811,15 +2812,34 @@ impl Editor {
             .collect();
         let focused = self.tree.focus == id;
         let from = self.window_content(id);
-        let last_text = self.tree.try_get(id).is_some()
-            && chain.len() == 1
-            && self.tree.windows().count() > 1
-            && !self
-                .tree
-                .all_views()
-                .any(|view| view.id != id && self.is_buffer(view.doc));
-        if last_text {
-            self.tree.park(id);
+        // the last text window of a buffer, alone or under the screens closing with it
+        let last_text = (self.tree.windows().count() > 1)
+            .then(|| {
+                chain.iter().rev().copied().find(|&window| {
+                    self.tree
+                        .try_get(window)
+                        .is_some_and(|view| self.is_buffer(view.doc))
+                })
+            })
+            .flatten()
+            .filter(|&keep| {
+                !self
+                    .tree
+                    .all_views()
+                    .any(|view| view.id != keep && self.is_buffer(view.doc))
+            });
+        if let Some(keep) = last_text {
+            // the windows over it leave, the ones it covers go with it
+            while self.tree.top_of(keep) != keep {
+                let top = self.tree.top_of(keep);
+                for doc in self.documents.values_mut() {
+                    doc.remove_view(top);
+                }
+                if self.tree.uncover(top).is_none() {
+                    break;
+                }
+            }
+            self.tree.park(keep);
         } else {
             for &window in &chain {
                 for doc in self.documents.values_mut() {

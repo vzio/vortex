@@ -486,7 +486,18 @@ impl crate::Editor {
     /// The focus leaves the debug panel for the window for documents, if the panel had it.
     pub fn unfocus_debug_panel(&mut self) {
         if self.debug_panel_focused() {
-            if let Some(view) = self.document_view() {
+            // the window for documents, else the screen over the last text window (a memory
+            // view), else any other window shown
+            let panel = self.tree.focus;
+            let covering = Some(self.tree.top_of(self.tree.text_focus()))
+                .filter(|&id| id != panel && self.tree.is_visible(id));
+            let other = || {
+                self.tree
+                    .traverse()
+                    .map(|(id, _)| id)
+                    .find(|&id| id != panel)
+            };
+            if let Some(view) = self.document_view().or(covering).or_else(other) {
                 self.focus(view);
             }
         }

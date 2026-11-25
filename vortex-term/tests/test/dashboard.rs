@@ -128,7 +128,7 @@ async fn esc_closes_it_and_stays_in_normal_mode() {
 /// It takes every key: typing, a key that would edit or change the mode, doesn't close it.
 #[tokio::test(flavor = "multi_thread")]
 async fn typing_does_not_close_it() {
-    for keys in ["o", "a", "v", "x", "dd", "hello world", "<ret>", "<C-w>v"] {
+    for keys in ["o", "a", "v", "x", "dd", "carry on", "<ret>", "<C-w>v"] {
         let mut session = session().await;
         assert!(up(&session));
         session.keys(keys).await;
@@ -143,7 +143,7 @@ async fn typing_does_not_close_it() {
 #[tokio::test(flavor = "multi_thread")]
 async fn esc_on_a_bare_start_shows_the_empty_buffer() {
     let mut session = session().await;
-    session.keys("hello<esc>").await;
+    session.keys("carry<esc>").await;
     assert!(!up(&session));
     assert!(empty_scratch(&session));
     assert_eq!(session.app.editor.documents().count(), 1);

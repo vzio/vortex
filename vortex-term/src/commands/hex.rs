@@ -32,6 +32,27 @@ const MAX_YANK: u64 = 16 * 1024 * 1024;
 /// What a typed character does in read-only mode.
 pub const READ_ONLY: &str = "read-only";
 
+/// Whether the focused hex screen shows a program's memory.
+pub fn focused_memory(editor: &Editor) -> bool {
+    editor
+        .focused_screen()
+        .and_then(|screen| screen.state::<HexView>())
+        .is_some_and(|hex| hex.buffer.is_memory())
+}
+
+/// Whether the focused hex screen is in one of its own modal states (overwriting, selecting, a
+/// `g` pending): then it takes every key, `Esc` included, before the modes' keys.
+pub fn modal(editor: &Editor) -> bool {
+    let view = editor.tree.focus;
+    editor
+        .focused_screen()
+        .and_then(|screen| screen.state::<HexView>())
+        .is_some_and(|hex| {
+            let cursor = hex.buffer.cursor(view);
+            hex.pending.is_some() || cursor.overwrite || cursor.anchor.is_some()
+        })
+}
+
 /// Whether the focused window shows a hex screen.
 pub fn focused(editor: &Editor) -> bool {
     editor

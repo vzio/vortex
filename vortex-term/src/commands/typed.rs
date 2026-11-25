@@ -448,6 +448,9 @@ fn write_impl(
 ) -> anyhow::Result<()> {
     // the hex view (this fork) writes the bytes it changed, in place
     if super::hex::focused(cx.editor) {
+        if path.is_some() && super::hex::focused_memory(cx.editor) {
+            bail!("memory isn't a file: it can't be written to one (:w writes it to the program)");
+        }
         if path.is_some() {
             bail!("the hex view writes its own file only, in place");
         }
