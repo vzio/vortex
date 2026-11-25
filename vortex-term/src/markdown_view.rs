@@ -1,16 +1,18 @@
 //! The Markdown render mode (this fork, see FORK.md, "Markdown render mode"): a Markdown buffer
 //! shown as a rendered, read-only page, one key away from its source.
 //!
-//! Like the dashboard, it isn't a buffer: the [`EditorView`](crate::ui::EditorView) draws it over
-//! the focused view while that view shows the buffer, in normal mode, unedited. So a key that
-//! edits or leaves normal mode (`i`, `o`, `c`, `v`...), another buffer in the view, or a split
-//! makes it vanish, with no hook of its own.
+//! It isn't a buffer: it is a screen (`ScreenKind::Markdown`, see FORK.md, "Screens") that covers
+//! the text window of its source, and [`crate::screens`] draws it in that window and routes its
+//! keys. `V`, `Esc` or `ga` close it and the window shows the source again; a key that edits
+//! (`i`, `o`, `c`, `d`...) puts the source's cursor at the reading line, closes the page and runs
+//! there.
 //!
-//! Keys: its own first ([`MarkdownView::handle_key`]: `]`, `[`, `t`, `Tab`, `Enter`, `?`, `Esc`);
-//! then the keymap, whose commands it takes over where it has its own version
-//! ([`MarkdownView::command`]: moving, scrolling, searching, the toggle). Every other command runs
-//! on the source, at the line under the reading line ([`MarkdownView::sync_source`]), so that `i`
-//! inserts there and `:`, `space` and the rest work as usual.
+//! Keys: watch and debug mode's first (`screens::modes_first`), then its own
+//! ([`MarkdownView::handle_key`]: `]`, `[`, `t`, `Tab`, `Enter`, `?`, `Esc`); then the keymap,
+//! whose commands it takes over where it has its own version ([`MarkdownView::command`]: moving,
+//! scrolling, searching, the toggle). Every other command runs on the source, at the line under
+//! the reading line ([`MarkdownView::sync_source`]), so that `i` inserts there and `:`, `space` and
+//! the rest work as usual.
 //!
 //! - [`parse`]: Markdown to styled blocks.
 //! - [`page`]: the blocks laid out at a width, the headings and links.
