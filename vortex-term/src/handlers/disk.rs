@@ -101,9 +101,15 @@ fn reload(editor: &mut Editor, doc_id: DocumentId) {
 }
 
 pub(super) fn register_hooks(_handlers: &Handlers) {
-    register_hook!(move |_event: &mut DocumentFocusLost<'_>| {
+    register_hook!(move |event: &mut DocumentFocusLost<'_>| {
+        // leaving a terminal (this fork): its shell may have changed any file
+        let left_terminal = event.editor.terminals.is_terminal(event.doc);
         // The caller may still change the new document's selection, so look later.
-        job::dispatch_blocking(|editor, _| {
+        job::dispatch_blocking(move |editor, _| {
+            if left_terminal {
+                check_all(editor);
+                return;
+            }
             let doc_id = view!(editor).doc;
             check_docs(editor, [doc_id]);
         });

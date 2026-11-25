@@ -205,13 +205,17 @@ where
     // the hex view (this fork): its layout and whether typing overwrites
     let hex_cursor = context.doc.hex().map(|hex| hex.cursor(context.view.id));
     let hex_label = hex_cursor.as_ref().map(super::hex_view::mode_label);
-    let mode_str = hex_label
-        .or(context.mode_label)
-        .unwrap_or(match context.editor.mode() {
-            Mode::Insert => &modenames.insert,
-            Mode::Select => &modenames.select,
-            Mode::Normal => &modenames.normal,
-        });
+    // a screen (this fork): a terminal's view mode
+    let screen_label = crate::screens::mode_label(context.editor, context.doc);
+    let mode_str =
+        hex_label
+            .or(screen_label)
+            .or(context.mode_label)
+            .unwrap_or(match context.editor.mode() {
+                Mode::Insert => &modenames.insert,
+                Mode::Select => &modenames.select,
+                Mode::Normal => &modenames.normal,
+            });
     let content = if visible {
         format!(" {mode_str} ")
     } else {
@@ -412,18 +416,23 @@ where
     );
 }
 
-/// `SH` while the terminal panel's shell runs. Its color says what the shell does, also while
-/// the panel is hidden: at the prompt, running a command, or how the last command ended (until
-/// the panel is focused).
+/// `SH` while a shell runs: a terminal's window shows its own; the other windows the scratch
+/// terminal's (`C-t`), also while it is hidden. Its color says what the shell does: at the
+/// prompt, running a command, or how the last command ended (until its window is focused).
 fn render_shell<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
     use vortex_view::{graphics::Color, terminal::ShellStatus, theme::Modifier};
 
-    let Some(shell) = &context.editor.terminal.shell else {
+    let terminals = &context.editor.terminals;
+    let Some(terminal) = terminals
+        .get(context.doc.id())
+        .or_else(|| terminals.scratch())
+    else {
         return;
     };
+    let shell = &terminal.shell;
     let theme = &context.editor.theme;
     let (scope, fallback) = match shell.status() {
         ShellStatus::Idle => ("ui.statusline.shell", None),

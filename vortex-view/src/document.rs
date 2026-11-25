@@ -310,6 +310,11 @@ pub struct Document {
     /// left as it was and can't change: transactions are refused.
     hex: Option<Box<crate::hex::HexBuffer>>,
 
+    /// What the document's windows show instead of its text, when it is a screen (this fork:
+    /// a terminal). Its text is only what the screen puts there (view mode's lines): transactions
+    /// are refused.
+    screen: Option<crate::screen::Screen>,
+
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
     /// Annotations for LSP document color swatches
@@ -868,6 +873,7 @@ impl Document {
             focused_at: std::time::Instant::now(),
             readonly: false,
             hex: None,
+            screen: None,
             bookmarks: Default::default(),
             jump_labels: HashMap::new(),
             document_highlights: HashMap::new(),
@@ -993,6 +999,66 @@ impl Document {
 
     pub fn is_hex(&self) -> bool {
         self.hex.is_some()
+    }
+
+    /// A screen document (this fork): what a window that isn't a text document shows, named
+    /// `name`. It has no path and its text can't be edited.
+    pub fn screen_document(
+        kind: crate::screen::ScreenKind,
+        name: String,
+        config: Arc<dyn DynAccess<Config>>,
+        syn_loader: Arc<ArcSwap<syntax::Loader>>,
+    ) -> Self {
+        let mut doc = Self::default(config, syn_loader);
+        doc.screen = Some(crate::screen::Screen { kind, name });
+        doc
+    }
+
+    /// What the document's windows show, when it is a screen.
+    pub fn screen(&self) -> Option<&crate::screen::Screen> {
+        self.screen.as_ref()
+    }
+
+    pub fn screen_kind(&self) -> Option<crate::screen::ScreenKind> {
+        self.screen.as_ref().map(|screen| screen.kind)
+    }
+
+    pub fn is_screen(&self) -> bool {
+        self.screen.is_some()
+    }
+
+    /// Renames a screen document (the buffer picker, the statusline).
+    pub fn set_screen_name(&mut self, name: String) {
+        if let Some(screen) = &mut self.screen {
+            screen.name = name;
+        }
+    }
+
+    /// Empties the text of a screen document (view mode ended).
+    pub fn clear_screen_text(&mut self) {
+        let views: Vec<ViewId> = self.selections.keys().copied().collect();
+        if let Some(&view) = views.first() {
+            self.set_screen_text(Rope::new(), view, Selection::point(0));
+        }
+    }
+
+    /// Replaces the text of a screen document with `text` (view mode's lines), with `selection`
+    /// in `view`, as a document of its own: no history, no change to undo.
+    pub fn set_screen_text(&mut self, text: Rope, view: ViewId, selection: Selection) {
+        debug_assert!(self.screen.is_some());
+        self.text = text;
+        self.changes = ChangeSet::new(self.text.slice(..));
+        self.old_state = None;
+        self.history = Cell::new(History::default());
+        self.version += 1;
+        let start = Selection::point(0);
+        for selection in self.selections.values_mut() {
+            *selection = start.clone();
+        }
+        for data in self.view_data.values_mut() {
+            data.view_position = ViewPosition::default();
+        }
+        self.set_selection(view, selection);
     }
 
     /// Shows the document in the hex view: its file on disk, so the document must have one and
@@ -1763,8 +1829,9 @@ impl Document {
     ) -> bool {
         use vortex_core::Assoc;
 
-        // the text of a document in the hex view is hidden: nothing may change it unseen
-        if self.hex.is_some() {
+        // the text of a document in the hex view is hidden: nothing may change it unseen; a
+        // screen's (this fork) is what the screen put there
+        if self.hex.is_some() || self.screen.is_some() {
             return false;
         }
 
@@ -2481,6 +2548,9 @@ impl Document {
     }
 
     pub fn display_name(&self) -> Cow<'_, str> {
+        if let Some(screen) = &self.screen {
+            return screen.name.as_str().into();
+        }
         if let Some(memory) = self.memory() {
             return format!("memory: {}", memory.label).into();
         }
@@ -2797,7 +2867,8 @@ impl Document {
             .or_else(|| config.soft_wrap.wrap_indicator.clone())
             .unwrap_or_else(|| "↪ ".into());
         let tab_width = self.tab_width() as u16;
-        let soft_wrap = enable_soft_wrap && viewport_width > 10;
+        // a screen's lines (this fork) are already as wide as its window was
+        let soft_wrap = enable_soft_wrap && viewport_width > 10 && self.screen.is_none();
         let except = language_soft_wrap
             .and_then(|soft_wrap| soft_wrap.except.as_deref())
             .or(editor_soft_wrap.except.as_deref())

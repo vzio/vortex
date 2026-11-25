@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -9,7 +9,7 @@ use std::time::Duration;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Flags, Hyperlink};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{
     Color as AnsiColor, CursorShape as AnsiCursorShape, NamedColor, Processor, Rgb,
@@ -21,9 +21,18 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::osc133::{Marker, Scanner};
 use crate::{
-    Cell, Color, Cursor, CursorShape, InputModes, MouseTracking, ShellEvent, ShellOptions,
-    ShellStatus, Size,
+    Cell, Color, Cursor, CursorShape, InputModes, LineKind, MouseTracking, ShellEvent,
+    ShellOptions, ShellStatus, Size, Snapshot, SnapshotLine,
 };
+
+/// The id of the hyperlink the prompt and the command typed at it are written with (OSC 133 `A`
+/// to `C`): the cells keep it through scrolling, so a snapshot knows which lines are prompts.
+const PROMPT_LINK: &str = "vortex-prompt";
+
+/// What Vortex's integration binds in bash and zsh: reports the command line being edited
+/// (OSC 6973), and clears it.
+const REPORT_COMMAND_LINE: &[u8] = b"\x1b[5556~";
+const CLEAR_COMMAND_LINE: &[u8] = b"\x1b[5557~";
 
 /// How long input is held at most, waiting for the shell to be ready.
 const READY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -56,6 +65,12 @@ struct Common {
     /// The shell is ready at its first prompt marker (with the integration), else at its first
     /// output.
     ready_at_marker: bool,
+    /// Vortex's own integration was injected (bash, zsh).
+    vortex_integration: bool,
+    /// At a prompt: between a prompt's start and its command running (OSC 133 `A` to `C`).
+    at_prompt: AtomicBool,
+    /// The working directory the shell last reported (OSC 7).
+    cwd: Mutex<Option<PathBuf>>,
 }
 
 impl Common {
@@ -103,9 +118,23 @@ impl Common {
         }
     }
 
-    fn handle_marker(&self, marker: Marker) {
+    fn handle_marker(&self, marker: &Marker) {
+        match marker {
+            Marker::Cwd(cwd) => {
+                *self.cwd.lock() = Some(cwd.clone());
+                self.send(ShellEvent::Cwd(cwd.clone()));
+                return;
+            }
+            Marker::CommandLine(line) => {
+                self.send(ShellEvent::CommandLine(line.clone()));
+                return;
+            }
+            Marker::PromptStart => self.at_prompt.store(true, Ordering::SeqCst),
+            Marker::CommandExecuted => self.at_prompt.store(false, Ordering::SeqCst),
+            _ => {}
+        }
         self.integrated.store(true, Ordering::SeqCst);
-        self.update_status(|status| match (marker, status) {
+        self.update_status(|status| match (marker.clone(), status) {
             (Marker::CommandExecuted, _) => Some(ShellStatus::Running),
             // The shell may send `D` without a command having run (bash on an empty line).
             (Marker::CommandFinished(code), ShellStatus::Running) => {
@@ -231,6 +260,10 @@ pub struct Shell {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: Option<u32>,
+    /// The directory the shell started in.
+    start_cwd: Option<PathBuf>,
+    /// The program started.
+    program: String,
     /// Holds the integration scripts; removed when the shell is dropped.
     _integration_dir: Option<tempfile::TempDir>,
 }
@@ -412,6 +445,9 @@ impl Shell {
             exited: AtomicBool::new(false),
             held_input: Mutex::new(Some(Vec::new())),
             ready_at_marker: integration.dir.is_some(),
+            vortex_integration: integration.dir.is_some(),
+            at_prompt: AtomicBool::new(false),
+            cwd: Mutex::new(None),
         });
         let config = Config {
             scrolling_history: options.scrollback,
@@ -472,6 +508,8 @@ impl Shell {
             master,
             killer: Mutex::new(killer),
             pid,
+            start_cwd: options.cwd.clone(),
+            program,
             _integration_dir: integration.dir,
         })
     }
@@ -602,6 +640,136 @@ impl Shell {
     pub fn pid(&self) -> Option<u32> {
         self.pid
     }
+
+    /// The name of the program, without its directory: `bash`, `zsh`.
+    pub fn name(&self) -> String {
+        Path::new(&self.program)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.program.clone())
+    }
+
+    /// The shell's working directory: the one it reported last (OSC 7), else the process's own
+    /// where the system tells it (Linux), else the one it started in.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        if let Some(cwd) = self.common.cwd.lock().clone() {
+            return Some(cwd);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(pid) = self.pid {
+            if let Ok(cwd) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+                return Some(cwd);
+            }
+        }
+        self.start_cwd.clone()
+    }
+
+    /// Whether the shell sends OSC 133 markers (its own, or Vortex's integration).
+    pub fn has_markers(&self) -> bool {
+        self.common.integrated.load(Ordering::SeqCst)
+    }
+
+    /// Whether Vortex's own integration runs in the shell (bash and zsh): the command line can
+    /// be read and replaced.
+    pub fn has_vortex_integration(&self) -> bool {
+        self.common.vortex_integration && self.has_markers()
+    }
+
+    /// At a prompt, by the markers: a prompt was shown and its command doesn't run yet. Always
+    /// false without markers.
+    pub fn at_prompt(&self) -> bool {
+        self.has_markers()
+            && self.common.at_prompt.load(Ordering::SeqCst)
+            && !self.term.lock().mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Asks the shell for the command line it is editing: it comes back as
+    /// [`ShellEvent::CommandLine`]. Only with Vortex's integration, at a prompt.
+    pub fn request_command_line(&self) {
+        self.common.write(REPORT_COMMAND_LINE);
+    }
+
+    /// Replaces the command line the shell is editing with `line`, without running it (a paste,
+    /// bracketed when the shell asked for it). Only with Vortex's integration, at a prompt.
+    pub fn replace_command_line(&self, line: &str) {
+        let modes = self.input_modes();
+        let mut bytes = CLEAR_COMMAND_LINE.to_vec();
+        if modes.bracketed_paste {
+            bytes.extend_from_slice(b"\x1b[200~");
+            bytes.extend(line.bytes().filter(|&b| b != 0x1b));
+            bytes.extend_from_slice(b"\x1b[201~");
+        } else {
+            // without bracketed paste a newline would run the line: one line only
+            bytes.extend(line.replace(['\r', '\n'], " ").bytes());
+        }
+        self.write(&bytes);
+    }
+
+    /// Every line of the terminal as it is now, the scrollback first (the alternate screen has
+    /// none), for view mode.
+    pub fn snapshot(&self) -> Snapshot {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let history = grid.total_lines() - grid.screen_lines();
+        let columns = grid.columns();
+        let mut lines = Vec::with_capacity(grid.total_lines());
+        let mut cell = Cell::default();
+        for line in -(history as i32)..grid.screen_lines() as i32 {
+            let mut snapshot = SnapshotLine::default();
+            let mut prompt = false;
+            let row = &grid[Line(line)];
+            let mut chars = 0;
+            for col in 0..columns {
+                let source = &row[Column(col)];
+                if !prompt {
+                    prompt = source
+                        .hyperlink()
+                        .is_some_and(|link| link.id() == PROMPT_LINK);
+                }
+                convert_cell(source, &mut cell);
+                if cell.text.is_empty() {
+                    continue;
+                }
+                let style = cell.style();
+                if snapshot.runs.last().map(|(_, last)| *last) != Some(style) {
+                    snapshot.runs.push((chars, style));
+                }
+                for c in cell.text.chars() {
+                    snapshot.text.push(c);
+                    snapshot.cols.push(col as u16);
+                    chars += 1;
+                }
+            }
+            // trailing blanks with nothing drawn on them
+            while snapshot.text.ends_with(' ')
+                && snapshot.style_at(chars - 1) == crate::CellStyle::default()
+            {
+                snapshot.text.pop();
+                snapshot.cols.pop();
+                chars -= 1;
+            }
+            snapshot.runs.retain(|(start, _)| *start < chars);
+            snapshot.kind = if prompt {
+                LineKind::Prompt
+            } else {
+                LineKind::Other
+            };
+            lines.push(snapshot);
+        }
+        let cursor = (term.mode().contains(TermMode::SHOW_CURSOR)).then(|| {
+            let point = grid.cursor.point;
+            (
+                history + point.line.0.max(0) as usize,
+                point.column.0 as u16,
+            )
+        });
+        Snapshot {
+            lines,
+            screen_top: history,
+            view_top: history - grid.display_offset(),
+            cursor,
+        }
+    }
 }
 
 impl Drop for Shell {
@@ -639,19 +807,51 @@ fn read_loop(mut reader: Box<dyn Read + Send>, common: &Common, term: &SharedTer
             }
         };
         let chunk = &buf[..n];
-        for marker in scanner.feed(chunk) {
-            common.handle_marker(marker);
+        // the output before a marker goes to the emulator first, so that the marker applies
+        // where it was in the output
+        let mut from = 0;
+        for (end, marker) in scanner.feed_at(chunk) {
+            {
+                let mut term = term.lock();
+                processor.advance(&mut *term, &chunk[from..end]);
+                mark_prompt(&mut term, &marker);
+            }
+            from = end;
+            common.handle_marker(&marker);
             if marker == Marker::PromptStart {
                 common.ready();
             }
         }
-        processor.advance(&mut *term.lock(), chunk);
+        processor.advance(&mut *term.lock(), &chunk[from..]);
         if !common.ready_at_marker {
             common.ready();
         }
         if !common.output_pending.swap(true, Ordering::SeqCst) {
             common.send(ShellEvent::Output);
         }
+    }
+}
+
+/// Writes the prompt and the command typed at it with [`PROMPT_LINK`]: from a prompt's start to
+/// its command running, on the primary screen.
+fn mark_prompt(term: &mut Term<Listener>, marker: &Marker) {
+    let alt_screen = term.mode().contains(TermMode::ALT_SCREEN);
+    let template = &mut term.grid_mut().cursor.template;
+    match marker {
+        Marker::PromptStart if !alt_screen => {
+            template.set_hyperlink(Some(Hyperlink::new(
+                Some(PROMPT_LINK),
+                String::from("vortex:prompt"),
+            )));
+        }
+        Marker::CommandExecuted | Marker::CommandFinished(_)
+            if template
+                .hyperlink()
+                .is_some_and(|link| link.id() == PROMPT_LINK) =>
+        {
+            template.set_hyperlink(None);
+        }
+        _ => {}
     }
 }
 

@@ -7,9 +7,14 @@
 //! - `ESC ] 133 ; D [; exit code] ST`: the command finished
 //!
 //! where ST is `BEL` or `ESC \`. A marker may be split between two reads.
+//!
+//! Two more sequences come through the same scanner: OSC 7 (`ESC ] 7 ; file://host/path ST`), the
+//! shell's working directory, and Vortex's own OSC 6973 (`ESC ] 6973 ; hex ST`), the command line
+//! the shell is editing, in hexadecimal bytes, which the integration sends when asked (editing
+//! the command in a Vortex buffer).
 
 /// A shell integration marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Marker {
     /// `A`: the prompt starts.
     PromptStart,
@@ -19,10 +24,15 @@ pub enum Marker {
     CommandExecuted,
     /// `D`: the command finished, with its exit code when the shell gave one.
     CommandFinished(Option<i32>),
+    /// OSC 7: the shell's working directory.
+    Cwd(std::path::PathBuf),
+    /// OSC 6973 (Vortex's integration): the command line being edited at the prompt.
+    CommandLine(String),
 }
 
-/// The longest OSC that is kept to look at; longer ones (clipboard, images...) are skipped.
-const MAX_OSC_LEN: usize = 128;
+/// The longest OSC that is kept to look at; longer ones (clipboard, images...) are skipped. Long
+/// enough for a working directory and a command line in hexadecimal.
+const MAX_OSC_LEN: usize = 32 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum State {
@@ -53,8 +63,18 @@ impl Scanner {
     /// Scans a chunk of output, returning the markers that ended in it, in order. The bytes
     /// themselves are not changed: the emulator still gets all of them.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Marker> {
+        self.feed_at(bytes)
+            .into_iter()
+            .map(|(_, marker)| marker)
+            .collect()
+    }
+
+    /// As [`Self::feed`], with where each marker ends in `bytes`: the index of the byte after
+    /// its terminator, so that the output before it can go to the emulator first.
+    pub fn feed_at(&mut self, bytes: &[u8]) -> Vec<(usize, Marker)> {
         let mut markers = Vec::new();
-        for &byte in bytes {
+        for (at, &byte) in bytes.iter().enumerate() {
+            let end = at + 1;
             match self.state {
                 State::Ground => {
                     if byte == 0x1b {
@@ -67,7 +87,7 @@ impl Scanner {
                     _ => self.state = State::Ground,
                 },
                 State::Osc => match byte {
-                    0x07 => self.end_osc(&mut markers),
+                    0x07 => self.end_osc(end, &mut markers),
                     0x1b => self.state = State::OscEscape,
                     // CAN and SUB cancel the sequence.
                     0x18 | 0x1a => self.state = State::Ground,
@@ -80,7 +100,7 @@ impl Scanner {
                     }
                 },
                 State::OscEscape => match byte {
-                    b'\\' => self.end_osc(&mut markers),
+                    b'\\' => self.end_osc(end, &mut markers),
                     // `ESC ]` starts a new OSC, anything else is a new escape sequence.
                     b']' => self.start_osc(),
                     0x1b => {}
@@ -97,11 +117,11 @@ impl Scanner {
         self.overflow = false;
     }
 
-    fn end_osc(&mut self, markers: &mut Vec<Marker>) {
+    fn end_osc(&mut self, end: usize, markers: &mut Vec<(usize, Marker)>) {
         self.state = State::Ground;
         if !self.overflow {
             if let Some(marker) = parse(&self.buf) {
-                markers.push(marker);
+                markers.push((end, marker));
             }
         }
         self.buf.clear();
@@ -110,6 +130,12 @@ impl Scanner {
 
 /// Parses the body of an OSC: `133;A`, `133;D;1`, `133;D;1;key=value`...
 fn parse(body: &[u8]) -> Option<Marker> {
+    if let Some(url) = body.strip_prefix(b"7;") {
+        return parse_cwd(url).map(Marker::Cwd);
+    }
+    if let Some(hex) = body.strip_prefix(b"6973;") {
+        return parse_hex(hex).map(Marker::CommandLine);
+    }
     let rest = body.strip_prefix(b"133;")?;
     let mut params = rest.split(|&b| b == b';');
     let code = params.next()?;
@@ -126,6 +152,56 @@ fn parse(body: &[u8]) -> Option<Marker> {
         }
         _ => None,
     }
+}
+
+/// `file://host/path` (percent-encoded) to the path. The host is not checked: the shell runs on
+/// this machine.
+fn parse_cwd(url: &[u8]) -> Option<std::path::PathBuf> {
+    let rest = url.strip_prefix(b"file://")?;
+    let path = &rest[rest.iter().position(|&b| b == b'/')?..];
+    let bytes = percent_decode(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Some(std::ffi::OsString::from_vec(bytes).into())
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8(bytes).ok().map(Into::into)
+    }
+}
+
+fn percent_decode(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Some(out)
+}
+
+/// Hexadecimal bytes (any case, whitespace ignored) to text; invalid UTF-8 is replaced.
+fn parse_hex(hex: &[u8]) -> Option<String> {
+    let digits: Vec<u8> = hex
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    if !digits.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes = digits
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[cfg(test)]
@@ -256,6 +332,46 @@ mod tests {
         for markers in scan_everywhere(b"\x1b]133;A\x1b\\\x1b]133;C\x07") {
             assert_eq!(markers, [Marker::PromptStart, Marker::CommandExecuted]);
         }
+    }
+
+    #[test]
+    fn working_directory() {
+        assert_eq!(
+            scan(b"\x1b]7;file://host/home/me/my%20dir\x07"),
+            [Marker::Cwd("/home/me/my dir".into())]
+        );
+        assert_eq!(
+            scan(b"\x1b]7;file:///tmp\x1b\\"),
+            [Marker::Cwd("/tmp".into())]
+        );
+        assert_eq!(scan(b"\x1b]7;http://x/y\x07"), []);
+    }
+
+    #[test]
+    fn command_line() {
+        assert_eq!(
+            scan(b"\x1b]6973;6c73202d6c\x07"),
+            [Marker::CommandLine("ls -l".into())]
+        );
+        assert_eq!(
+            scan(b"\x1b]6973;\x07"),
+            [Marker::CommandLine(String::new())]
+        );
+        // od's output: spaces and newlines between the bytes
+        assert_eq!(
+            scan(b"\x1b]6973; 65 63\n 68 6f 0a 78\x07"),
+            [Marker::CommandLine("echo\nx".into())]
+        );
+        assert_eq!(scan(b"\x1b]6973;6\x07"), []);
+    }
+
+    #[test]
+    fn where_markers_end() {
+        let bytes = b"ab\x1b]133;A\x07cd\x1b]133;C\x1b\\";
+        assert_eq!(
+            Scanner::new().feed_at(bytes),
+            [(10, Marker::PromptStart), (21, Marker::CommandExecuted)]
+        );
     }
 
     #[test]

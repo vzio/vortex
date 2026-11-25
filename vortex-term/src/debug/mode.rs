@@ -119,6 +119,11 @@ fn follow_now(editor: &mut Editor) {
 /// third of the view (another file opens centered, as any jump; within the file the view
 /// scrolls only when the line leaves the middle third, and then centers it).
 pub(crate) fn camera(editor: &mut Editor, frame: &StackFrame) {
+    // with a terminal focused (this fork), in the window for documents
+    vortex_view::handlers::dap::in_source_view(editor, |editor| camera_here(editor, frame))
+}
+
+fn camera_here(editor: &mut Editor, frame: &StackFrame) {
     let Some(path) = frame.source.as_ref().and_then(|source| source.path.clone()) else {
         return;
     };

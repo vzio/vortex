@@ -279,9 +279,13 @@ impl MappableCommand {
             }
             Self::Static { name, fun, .. } => {
                 // in watch mode and debug mode, moving waits until you look around, and editing
-                // until you leave it
-                if crate::watch::before_command(cx.editor, name)
-                    && crate::debug::mode::before_command(cx.editor, name)
+                // until you leave it; a command that walks a terminal's lines (this fork) is the
+                // terminal's, not theirs; moving the focus between windows is neither's, since
+                // they follow and play in the window for documents
+                if crate::screens::before_command(cx.editor, name)
+                    || moves_focus(name)
+                    || crate::watch::before_command(cx.editor, name)
+                        && crate::debug::mode::before_command(cx.editor, name)
                 {
                     (fun)(cx)
                 }
@@ -571,7 +575,15 @@ impl MappableCommand {
         swap_view_up, "Swap with split above",
         swap_view_down, "Swap with split below",
         transpose_view, "Transpose splits",
-        toggle_terminal, "Show and focus the terminal panel, or go back to the editor",
+        toggle_terminal, "Show and focus the scratch terminal, or hide it (its shell keeps running)",
+        hsplit_terminal, "New terminal in a horizontal split",
+        vsplit_terminal, "New terminal in a vertical split",
+        terminal_view, "Terminal: view mode, walking its lines and scrollback",
+        terminal_edit_command, "Terminal: edit the command line at the prompt in a buffer",
+        terminal_select, "Terminal view mode: start (or stop) extending the selection",
+        terminal_next_prompt, "Terminal view mode: the next prompt",
+        terminal_prev_prompt, "Terminal view mode: the previous prompt",
+        terminal_select_output, "Terminal view mode: select the output of the command under the cursor",
         watch_look, "Watch mode: look around, or follow the changes again",
         watch_next_change, "Watch mode: the next change (the newest follows again)",
         watch_prev_change, "Watch mode: the previous change",
@@ -995,15 +1007,22 @@ fn goto_previous_buffer(cx: &mut Context) {
 
 fn goto_buffer(editor: &mut Editor, direction: Direction, count: usize) {
     let current = view!(editor).doc;
+    // the buffers to go through: not the screens (this fork: terminals), which have their windows
+    let ids: Vec<DocumentId> = editor
+        .documents
+        .iter()
+        .filter(|(id, doc)| !doc.is_screen() || **id == current)
+        .map(|(id, _)| *id)
+        .collect();
 
     let id = match direction {
         Direction::Forward => {
-            let iter = editor.documents.keys();
+            let iter = ids.iter();
             // skip 'count' times past current buffer
             iter.cycle().skip_while(|id| *id != &current).nth(count)
         }
         Direction::Backward => {
-            let iter = editor.documents.keys();
+            let iter = ids.iter();
             // skip 'count' times past current buffer
             iter.rev()
                 .cycle()
@@ -6248,7 +6267,48 @@ fn swap_view_down(cx: &mut Context) {
 }
 
 fn toggle_terminal(cx: &mut Context) {
-    crate::terminal::toggle_focus(cx.editor);
+    crate::terminal::window::toggle_scratch(cx.editor);
+}
+
+fn hsplit_terminal(cx: &mut Context) {
+    crate::terminal::window::open_new(cx.editor, tree::Layout::Horizontal);
+}
+
+fn vsplit_terminal(cx: &mut Context) {
+    crate::terminal::window::open_new(cx.editor, tree::Layout::Vertical);
+}
+
+fn terminal_view(cx: &mut Context) {
+    crate::terminal::modes::view(cx.editor);
+}
+
+fn terminal_edit_command(cx: &mut Context) {
+    crate::terminal::edit::request(cx.editor);
+}
+
+fn terminal_select(cx: &mut Context) {
+    if cx.editor.mode() == Mode::Select {
+        exit_select_mode(cx);
+    } else {
+        select_mode(cx);
+    }
+}
+
+/// The commands that only move the focus to another window (`C-w h/j/k/l`, `C-w w`).
+fn moves_focus(name: &str) -> bool {
+    name.starts_with("jump_view_") || matches!(name, "rotate_view" | "rotate_view_reverse")
+}
+
+fn terminal_next_prompt(cx: &mut Context) {
+    crate::terminal::modes::goto_prompt(cx.editor, true, cx.count());
+}
+
+fn terminal_prev_prompt(cx: &mut Context) {
+    crate::terminal::modes::goto_prompt(cx.editor, false, cx.count());
+}
+
+fn terminal_select_output(cx: &mut Context) {
+    crate::terminal::modes::select_output(cx.editor);
 }
 
 fn transpose_view(cx: &mut Context) {
@@ -6275,6 +6335,10 @@ fn split(editor: &mut Editor, action: Action) {
 }
 
 fn hsplit(cx: &mut Context) {
+    // a terminal's window (this fork) splits into a new terminal
+    if crate::terminal::focused(cx.editor).is_some() {
+        return hsplit_terminal(cx);
+    }
     split(cx.editor, Action::HorizontalSplit);
 }
 
@@ -6283,6 +6347,10 @@ fn hsplit_new(cx: &mut Context) {
 }
 
 fn vsplit(cx: &mut Context) {
+    // a terminal's window (this fork) splits into a new terminal
+    if crate::terminal::focused(cx.editor).is_some() {
+        return vsplit_terminal(cx);
+    }
     split(cx.editor, Action::VerticalSplit);
 }
 

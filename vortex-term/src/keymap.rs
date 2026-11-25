@@ -334,16 +334,27 @@ pub type ReverseKeymap = HashMap<String, Vec<Vec<KeyEvent>>>;
 pub enum Layer {
     Watch,
     Debug,
+    /// A terminal's normal mode (its own keys, before the editor's normal mode).
+    Terminal,
+    /// A terminal's view mode.
+    TerminalView,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 2] = [Layer::Watch, Layer::Debug];
+    pub const ALL: [Layer; 4] = [
+        Layer::Watch,
+        Layer::Debug,
+        Layer::Terminal,
+        Layer::TerminalView,
+    ];
 
     /// The name of its table under `[keys]`.
     pub fn name(self) -> &'static str {
         match self {
             Layer::Watch => "watch",
             Layer::Debug => "debug",
+            Layer::Terminal => "terminal",
+            Layer::TerminalView => "terminal-view",
         }
     }
 }

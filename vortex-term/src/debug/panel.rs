@@ -32,9 +32,8 @@ pub const FOCUS_KEY: KeyEvent = KeyEvent {
     modifiers: KeyModifiers::CONTROL,
 };
 
-/// Shows the panel; the terminal panel, which shares its place, hides.
+/// Shows the panel.
 pub fn show(editor: &mut Editor) {
-    editor.terminal.hide();
     editor.debug.show();
 }
 

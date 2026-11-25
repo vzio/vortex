@@ -215,6 +215,10 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
                 "C-s" | "s" => hsplit_new,
                 "C-v" | "v" => vsplit_new,
             },
+            "T" => { "New terminal"
+                "C-s" | "s" => hsplit_terminal,
+                "C-v" | "v" => vsplit_terminal,
+            },
             ["focus"]
             "C-w" | "w" => rotate_view,
             "C-h" | "h" | "left" => jump_view_left,
@@ -290,6 +294,10 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
                 "n" => { "New split scratch buffer"
                     "C-s" | "s" => hsplit_new,
                     "C-v" | "v" => vsplit_new,
+                },
+                "T" => { "New terminal"
+                    "C-s" | "s" => hsplit_terminal,
+                    "C-v" | "v" => vsplit_terminal,
                 },
                 ["focus"]
                 "C-w" | "w" => rotate_view,
@@ -499,8 +507,24 @@ pub fn layers() -> HashMap<Layer, KeyTrie> {
         "?" => debug_help,
         "esc" => debug_leave,
     });
+    // a terminal's normal mode (this fork): the rest is the editor's normal mode
+    let terminal = keymap!({ "Terminal"
+        "i" => insert_mode,
+        "a" => append_mode,
+        "v" => terminal_view,
+        "e" => terminal_edit_command,
+    });
+    // a terminal's view mode: the rest is the editor's normal and select modes
+    let terminal_view = keymap!({ "Terminal view"
+        "ret" => terminal_select,
+        "]" => terminal_next_prompt,
+        "[" => terminal_prev_prompt,
+        "o" => terminal_select_output,
+    });
     hashmap!(
         Layer::Watch => watch,
         Layer::Debug => debug,
+        Layer::Terminal => terminal,
+        Layer::TerminalView => terminal_view,
     )
 }
