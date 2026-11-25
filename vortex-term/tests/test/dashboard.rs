@@ -125,15 +125,29 @@ async fn esc_closes_it_and_stays_in_normal_mode() {
     assert!(empty_scratch(&session));
 }
 
+/// It takes every key: typing, a key that would edit or change the mode, doesn't close it.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_key_that_edits_or_changes_the_mode_makes_it_vanish() {
-    for keys in ["o", "a", "v"] {
+async fn typing_does_not_close_it() {
+    for keys in ["o", "a", "v", "x", "dd", "hello world", "<ret>", "<C-w>v"] {
         let mut session = session().await;
         assert!(up(&session));
         session.keys(keys).await;
-        assert!(!up(&session), "still up after {keys:?}");
-        assert_ne!(session.app.editor.mode(), Mode::Normal, "{keys:?}");
+        assert!(up(&session), "closed by {keys:?}");
+        assert_eq!(session.app.editor.mode(), Mode::Normal, "{keys:?}");
+        assert!(empty_scratch(&session), "{keys:?}");
+        assert_eq!(session.app.editor.tree.windows().count(), 1, "{keys:?}");
     }
+}
+
+/// On a bare start, `Esc` shows the empty buffer under it.
+#[tokio::test(flavor = "multi_thread")]
+async fn esc_on_a_bare_start_shows_the_empty_buffer() {
+    let mut session = session().await;
+    session.keys("hello<esc>").await;
+    assert!(!up(&session));
+    assert!(empty_scratch(&session));
+    assert_eq!(session.app.editor.documents().count(), 1);
+    assert!(on_screen(&session.rows(), "1 "), "{:#?}", session.rows());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -191,29 +205,46 @@ async fn q_quits() {
     assert!(session.quits_on("q").await);
 }
 
+/// `:dashboard` brings it back over everything, adding nothing; `Esc` leaves everything exactly
+/// as it was: the windows, the focus, the buffers, the cursor, the mode.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_command_brings_it_back_over_a_new_buffer() {
-    let file = temp_file_with_contents("hello\n").unwrap();
+async fn the_command_brings_it_back_and_esc_leaves_everything_as_it_was() {
+    let file = temp_file_with_contents("one\ntwo\nthree\nfour\n").unwrap();
     let mut session = session().await;
     session
-        .keys(&format!(":open {}<ret>ox<esc>", file.path().display()))
+        .keys(&format!(
+            ":open {}<ret>ox<esc><C-w>v3jl",
+            file.path().display()
+        ))
         .await;
     assert!(!up(&session));
-    assert!(doc!(session.app.editor).is_modified());
-    assert_eq!(session.app.editor.documents().count(), 1);
+    let state = |session: &Session| {
+        let editor = &session.app.editor;
+        let (view, doc) = vortex_view::current_ref!(editor);
+        (
+            editor.tree.focus,
+            editor.tree.windows().count(),
+            editor.documents().count(),
+            doc.id(),
+            doc.selection(view.id).clone(),
+            doc.text().to_string(),
+            doc.is_modified(),
+            editor.mode(),
+        )
+    };
+    let before = state(&session);
+    let rows = session.rows();
 
     session.keys(":dashboard<ret>").await;
     session
         .wait_for_screen("the dashboard", |rows| on_screen(rows, MENU))
         .await;
-    assert!(empty_scratch(&session));
-    // the edited buffer still exists
-    assert_eq!(session.app.editor.documents().count(), 2);
-    assert!(session
-        .app
-        .editor
-        .documents()
-        .any(|doc| doc.is_modified() && doc.path().is_some()));
+    assert_eq!(state(&session), before, "nothing added under it");
+
+    session.keys("<esc>").await;
+    assert!(!up(&session));
+    assert_eq!(state(&session), before);
+    assert_eq!(session.rows(), rows);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -721,15 +752,14 @@ mod worktree_rows {
             .await;
     }
 
-    /// `t` is not an action here: no label, and the key is the keymap's (`t` waits for a
-    /// character to move to).
+    /// `t` is not an action here: no label, and the key does nothing (the dashboard takes
+    /// every key).
     async fn no_t(session: &mut Session) {
         settled_without_worktrees(session).await;
         assert!(!on_screen(&session.rows(), ACTION), "{:#?}", session.rows());
         session.keys("t").await;
         assert!(!picker(session), "{:#?}", session.rows());
-        session.keys("<esc>").await;
-        assert!(!picker(session));
+        assert!(up(session), "{:#?}", session.rows());
     }
 
     async fn settled_without_worktrees(session: &mut Session) {
@@ -922,33 +952,30 @@ async fn outside_of_a_repository_w_is_not_a_dashboard_key() {
     assert!(up(&session));
 }
 
+/// It isn't a place of history: `ga` with it up does nothing (it takes every key), and after
+/// `Esc` history goes on from the buffer as if it had never been up.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_command_then_ga_returns_to_the_buffer_and_the_cursor() {
+async fn it_is_not_a_place_of_history() {
     let file = temp_file_with_contents("one\ntwo\nthree\nfour\n").unwrap();
     let mut session = session().await;
     session
         .keys(&format!(":open {}<ret>3jl", file.path().display()))
         .await;
-    let (id, cursor) = {
-        let (view, doc) = vortex_view::current_ref!(session.app.editor);
-        (doc.id(), doc.selection(view.id).primary())
-    };
-    assert_eq!(
-        doc!(session.app.editor).text().line(3).to_string(),
-        "four\n"
-    );
-
+    let place = session.app.editor.place();
+    let len = vortex_view::view!(session.app.editor).history.len();
     session.keys(":dashboard<ret>").await;
     session
         .wait_for_screen("the dashboard", |rows| on_screen(rows, MENU))
         .await;
-    assert_ne!(doc!(session.app.editor).id(), id);
-
     session.keys("ga").await;
-    assert!(!up(&session), "{:#?}", session.rows());
-    let (view, doc) = vortex_view::current_ref!(session.app.editor);
-    assert_eq!(doc.id(), id);
-    assert_eq!(doc.selection(view.id).primary(), cursor);
+    assert!(up(&session));
+    session.keys("<esc>").await;
+    assert!(!up(&session));
+    assert_eq!(vortex_view::view!(session.app.editor).history.len(), len);
+    assert!(session
+        .app
+        .editor
+        .same_place(&session.app.editor.place(), &place));
 }
 
 #[tokio::test(flavor = "multi_thread")]

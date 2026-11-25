@@ -923,8 +923,7 @@ pub(super) fn buffers_remaining_impl(editor: &mut Editor) -> anyhow::Result<()> 
             // If the current document is unmodified, and there are modified
             // documents, switch focus to the first modified doc (not from a screen's window,
             // which a switch would close).
-            if !modified_ids.contains(&current.id()) && !editor.is_screen_view(editor.tree.focus)
-            {
+            if !modified_ids.contains(&current.id()) && !editor.is_screen_view(editor.tree.focus) {
                 editor.switch(*first, Action::Replace);
             }
         } else if let Some((screen, _)) = hex.first() {

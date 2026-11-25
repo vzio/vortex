@@ -867,26 +867,28 @@ async fn enter_on_the_present_and_esc_do_nothing() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_screen_is_listed_by_name_and_enter_goes_to_the_place_before_it() -> anyhow::Result<()> {
+async fn a_screen_is_listed_by_name_and_enter_shows_it_again() -> anyhow::Result<()> {
     let (_dir, mut h) = forty()?;
-    h.keys("3j:dashboard<ret>").await;
+    // the hex view over the file, closed: history keeps it
+    h.keys("3j:hex<ret>").await;
     h.settle(Duration::from_millis(300)).await;
+    assert!(h.app.editor.is_screen_view(h.app.editor.tree.focus));
+    h.keys("<esc>").await;
     let rows = h.picker();
     assert_eq!(rows.len(), 2, "{rows:?}");
-    assert_eq!((rows[0].0, rows[0].1.as_str()), (true, "the dashboard"));
-    assert!(rows[1].1.ends_with("forty.txt:4"), "{rows:?}");
-    assert!(!rows[1].0);
+    assert!(rows[0].0 && rows[0].1.ends_with("forty.txt:4"), "{rows:?}");
+    assert_eq!((rows[1].0, rows[1].1.as_str()), (false, "forty.txt (hex)"));
     open_picker(&mut h).await;
     assert!(
-        on_screen(&h.app, "the dashboard"),
+        on_screen(&h.app, "forty.txt (hex)"),
         "{:#?}",
         screen_rows(&h.app)
     );
     h.keys("j<ret>").await;
     h.settle(Duration::from_millis(300)).await;
-    assert_eq!(h.name(), "forty.txt");
-    assert_eq!(h.line(), 3);
     assert!(!picker_is_open(&h));
+    let focused = h.app.editor.focused_screen().map(|screen| screen.kind);
+    assert_eq!(focused, Some(vortex_view::screen::ScreenKind::Hex));
     h.finish().await
 }
 

@@ -475,6 +475,8 @@ async fn a_theme_without_either_scope_leaves_the_screen_alone() {
 
 /// Opens `notes.md` in `dir`, rendered: a page focused over its window.
 async fn a_page(session: &mut Session, dir: &Path) {
+    // the page highlights with the theme's scopes: the test theme's, set as a theme is
+    session.app.editor.set_theme(mode_theme()).unwrap();
     let path = dir.join("notes.md");
     std::fs::write(&path, "# Notes\n\nSome text.\n").unwrap();
     session

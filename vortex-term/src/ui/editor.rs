@@ -1831,7 +1831,8 @@ impl Component for EditorView {
 
                 let mode = cx.editor.mode();
 
-                if !layer_handled && !self.on_next_key(OnKeyCallbackKind::PseudoPending, &mut cx, key)
+                if !layer_handled
+                    && !self.on_next_key(OnKeyCallbackKind::PseudoPending, &mut cx, key)
                 {
                     match mode {
                         Mode::Insert => {

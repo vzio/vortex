@@ -621,8 +621,9 @@ impl Editor {
     }
 
     /// The focus came back to a window from a screen that just closed.
-    fn screen_focused_from_screen(&mut self, _screen: ScreenId) {
-        self.focus_moved(None);
+    fn screen_focused_from_screen(&mut self, screen: ScreenId) {
+        // from the screen (gone now): the mode stays as the command left it (`i` on a page)
+        self.focus_moved(Some(Content::Screen(screen)));
     }
 
     /// The focus moved from `from` (`Editor::focus` and the screen's windows): entering a

@@ -282,11 +282,17 @@ fn focused_memory(editor: &Editor) -> Option<(ScreenId, &HexView)> {
 }
 
 /// The windows shown of the memory screen `screen`.
-fn windows_of(editor: &Editor, screen: ScreenId) -> impl Iterator<Item = &vortex_view::tree::ScreenView> {
-    editor.tree.windows().filter_map(move |(window, _)| match window {
-        Window::Screen(view) if view.screen == screen => Some(view),
-        _ => None,
-    })
+fn windows_of(
+    editor: &Editor,
+    screen: ScreenId,
+) -> impl Iterator<Item = &vortex_view::tree::ScreenView> {
+    editor
+        .tree
+        .windows()
+        .filter_map(move |(window, _)| match window {
+            Window::Screen(view) if view.screen == screen => Some(view),
+            _ => None,
+        })
 }
 
 /// Shows memory of `session` at `address` in a split (or the view showing it already), the
@@ -647,8 +653,7 @@ pub fn open_views(editor: &Editor) -> usize {
     memory_screens(editor)
         .into_iter()
         .filter(|&id| {
-            memory_of(editor, id)
-                .is_some_and(|memory| memory.session == session && !memory.ended)
+            memory_of(editor, id).is_some_and(|memory| memory.session == session && !memory.ended)
                 && windows_of(editor, id).next().is_some()
         })
         .count()

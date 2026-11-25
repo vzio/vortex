@@ -802,12 +802,12 @@ async fn focus_and_keys_of_the_panel() -> anyhow::Result<()> {
     e.h.keys("<C-g>").await?;
     assert!(e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
 
-    // q gives them back too
+    // q hides its window (the keys go back to the documents); C-g shows and focuses it again
     e.h.keys("<C-g>").await?;
     e.h.keys("q").await?;
-    assert!(e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
+    assert!(!e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
     e.h.keys("<C-g>").await?;
-    assert!(e.h.app.editor.debug_panel_focused());
+    assert!(e.h.app.editor.debug_panel_shown() && e.h.app.editor.debug_panel_focused());
 
     // j moves the panel's cursor, not the editor's
     let line = cursor_line(&e.h.app);
@@ -981,14 +981,22 @@ async fn a_failed_evaluation_shows_the_adapters_message() -> anyhow::Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn esc_in_the_focused_panel_gives_the_keys_back_and_the_panel_stays() -> anyhow::Result<()> {
+async fn esc_in_the_focused_panel_hides_its_window_and_space_g_shows_it_again() -> anyhow::Result<()>
+{
     let mut e = env(|p| Script::new(p).stop(Stop::new(3, "entry").scope(simple("1")))).await?;
     e.launch()?;
     e.stopped("x = 1").await;
     e.h.keys("<C-g>").await?;
     assert!(e.h.app.editor.debug_panel_focused());
     e.h.keys("<esc>").await?;
-    assert!(e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
+    // a screen's Esc: its window goes, the session goes on
+    assert!(!e.h.app.editor.debug_panel_shown() && !e.h.app.editor.debug_panel_focused());
+    assert!(
+        e.h.app.editor.debug.status.is_active(),
+        "the session goes on"
+    );
+    e.h.keys("<C-g>").await?;
+    assert!(e.h.app.editor.debug_panel_shown() && e.h.app.editor.debug_panel_focused());
     e.h.finish().await
 }
 

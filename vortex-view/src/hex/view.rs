@@ -180,7 +180,15 @@ impl Editor {
     pub fn unwritten_hex_screens(&self) -> Vec<(ScreenId, String)> {
         self.hex_screens()
             .filter(|(_, view)| view.is_modified())
-            .map(|(id, _)| (id, self.screens.get(id).map(|s| s.name.clone()).unwrap_or_default()))
+            .map(|(id, _)| {
+                (
+                    id,
+                    self.screens
+                        .get(id)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default(),
+                )
+            })
             .collect()
     }
 

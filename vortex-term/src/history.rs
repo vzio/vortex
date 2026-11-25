@@ -153,6 +153,10 @@ fn describe(editor: &Editor, place: &Place) -> (String, String, Option<(Document
                 Some((*doc, line)),
             )
         }
+        // the hex view is named after its file: said, to tell it from the file's places
+        Place::Screen(screen) if screen.kind == vortex_view::screen::ScreenKind::Hex => {
+            (format!("{} (hex)", screen.name), String::new(), None)
+        }
         Place::Screen(screen) => (screen.name.clone(), String::new(), None),
     }
 }

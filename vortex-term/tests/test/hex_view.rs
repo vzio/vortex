@@ -1190,9 +1190,7 @@ async fn the_hex_command_toggles_the_view() {
     assert!(!is_hex(&session.app));
     assert_eq!(doc(&session.app).text().to_string(), "xhello\nworld\n");
     session.keys(":w<ret>").await;
-    session
-        .wait_for("the write", |app| !is_modified(app))
-        .await;
+    session.wait_for("the write", |app| !is_modified(app)).await;
     session.keys(":hex<ret>").await;
     assert!(is_hex(&session.app));
     assert_eq!(bytes(&session.app), b"xhello\nworld\n");
@@ -1221,7 +1219,11 @@ async fn a_binary_file_has_no_text_to_come_back_to() {
     assert!(is_hex(&session.app));
     session.keys(":hex<ret>").await;
     assert!(!is_hex(&session.app));
-    assert_eq!(doc(&session.app).path(), None, "the scratch buffer under it");
+    assert_eq!(
+        doc(&session.app).path(),
+        None,
+        "the scratch buffer under it"
+    );
     assert!(session.app.editor.document_by_path(&path).is_none());
     assert_eq!(session.app.editor.screens.len(), 0);
     session.close().await;
@@ -1236,11 +1238,23 @@ async fn a_hex_view_in_a_split_is_drawn_within_its_window() {
     let (_dir, path) = file_with("notes.txt", b"hello\nworld\n");
     let mut session = Session::open(&path, 100).await;
     session.keys(":vsplit<ret>").await;
-    let windows: Vec<_> = session.app.editor.tree.views().map(|(v, _)| (v.id, v.area)).collect();
+    let windows: Vec<_> = session
+        .app
+        .editor
+        .tree
+        .views()
+        .map(|(v, _)| (v.id, v.area))
+        .collect();
     assert_eq!(windows.len(), 2);
     session.keys(":hex<ret>").await;
     assert!(is_hex(&session.app));
-    let hex_window = session.app.editor.tree.screen_view(view_id(&session.app)).unwrap().clone();
+    let hex_window = session
+        .app
+        .editor
+        .tree
+        .screen_view(view_id(&session.app))
+        .unwrap()
+        .clone();
     // the hex screen is in the new window (the focused one), the other still shows its text
     let other = windows
         .iter()
@@ -1266,16 +1280,22 @@ async fn a_hex_view_in_a_split_is_drawn_within_its_window() {
         .map(|row| in_window(row, other).trim_end().to_owned())
         .collect();
     // 8 bytes a row in a window this narrow
-    assert_eq!(
-        hex_rows[0],
-        "0x00000000  68 65 6c 6c 6f 0a 77 6f  hello.wo"
-    );
+    assert_eq!(hex_rows[0], "0x00000000  68 65 6c 6c 6f 0a 77 6f  hello.wo");
     assert_eq!(hex_rows[1], "0x00000008  72 6c 64 0a              rld.");
-    assert!(text_rows.iter().any(|row| row.contains("hello")), "{text_rows:#?}");
-    assert!(text_rows.iter().all(|row| !row.contains("0x0000")), "{text_rows:#?}");
+    assert!(
+        text_rows.iter().any(|row| row.contains("hello")),
+        "{text_rows:#?}"
+    );
+    assert!(
+        text_rows.iter().all(|row| !row.contains("0x0000")),
+        "{text_rows:#?}"
+    );
     // the statusline of the hex window is its own
     let height = hex_window.area.height as usize;
-    let status_row = in_window(&rows[hex_window.area.y as usize + height - 1], hex_window.area);
+    let status_row = in_window(
+        &rows[hex_window.area.y as usize + height - 1],
+        hex_window.area,
+    );
     assert!(status_row.contains("HEX RO"), "{status_row}");
     assert!(status_row.contains("notes.txt"), "{status_row}");
     assert!(!in_window(&rows[other.y as usize + other.height as usize - 1], other).contains("HEX"));

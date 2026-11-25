@@ -534,7 +534,11 @@ async fn offsets_are_absolute_addresses_of_16_hex_digits() -> anyhow::Result<()>
     let (view, hex) = focused_hex(&e.h.app);
     let hex = &hex.buffer;
     assert_eq!(hex.len(), u64::MAX);
-    let rows = Rows::new(hex.cursor(view.id).layout, hex.len(), view.inner_area().width);
+    let rows = Rows::new(
+        hex.cursor(view.id).layout,
+        hex.len(),
+        view.inner_area().width,
+    );
     assert_eq!(rows.offset_digits, 16);
     assert_eq!(rows.bytes_per_row, 16);
     // 16 bytes a row, from the row of the cursor
@@ -925,10 +929,7 @@ async fn a_failed_write_is_an_error_and_keeps_the_overwrite() -> anyhow::Result<
     assert_eq!(e.fake.memory_at(0x1010, 2), [None, None]);
     // still overwritten, not written
     let doc = memory_view(&e.h.app).unwrap();
-    assert_eq!(
-        doc.buffer.edit_runs(None),
-        [(0x1010, vec![0xab, 0xcd])]
-    );
+    assert_eq!(doc.buffer.edit_runs(None), [(0x1010, vec![0xab, 0xcd])]);
     assert_eq!(cells(&e.h.app, 0x1010, 2), bytes(&[0xab, 0xcd]));
     e.h.finish().await
 }

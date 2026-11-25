@@ -148,10 +148,8 @@ async fn the_dashboard_keeps_the_main_theme() {
 
     session.keys(":dashboard<ret>").await;
     assert_main(&session);
-    // (the dashboard is over a new scratch buffer: it has no language)
+    // (an overlay: Esc leaves the buffer as it was, with its theme)
     session.keys("<esc>").await;
-    assert_main(&session);
-    session.keys(":bp<ret>").await;
     assert_language_theme(&session, "gruvbox");
 }
 

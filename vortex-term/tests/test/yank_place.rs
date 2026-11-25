@@ -321,8 +321,14 @@ async fn ctrl_y_in_the_history_picker_yanks_the_place_of_the_row() {
 async fn ctrl_y_on_a_screen_in_the_history_picker_is_an_error() {
     let work = forty();
     let mut session = work.session();
-    session.keys("3j:dashboard<ret>").await;
+    // the hex view over the file, closed: history keeps it
+    session.keys("3j:hex<ret>").await;
     session.run_for(Duration::from_millis(300)).await;
+    assert!(session
+        .app
+        .editor
+        .is_screen_view(session.app.editor.tree.focus));
+    session.keys("<esc>").await;
     session
         .app
         .editor
@@ -331,9 +337,22 @@ async fn ctrl_y_on_a_screen_in_the_history_picker_is_an_error() {
         .unwrap();
     session.keys("gA").await;
     session.run_for(Duration::from_millis(300)).await;
-    assert!(on_screen(&session.rows(), "the dashboard"));
 
-    // the cursor is on the present, the dashboard
+    // the cursor is on the present, a place in the file
+    ctrl_y(&mut session).await;
+    let place = work.place("forty.txt:4");
+    assert_eq!(clipboard(&session.app), place);
+    assert_eq!(said(&session.app), (format!("yanked {place}"), false));
+    assert!(framed(&session));
+
+    // the row below is the hex view
+    session
+        .app
+        .editor
+        .registers
+        .write('+', vec!["before".to_string()])
+        .unwrap();
+    session.keys("j").await;
     ctrl_y(&mut session).await;
     assert_eq!(
         said(&session.app),
@@ -343,14 +362,6 @@ async fn ctrl_y_on_a_screen_in_the_history_picker_is_an_error() {
         register(&session.app, '+'),
         Some(vec!["before".to_string()])
     );
-    assert!(framed(&session));
-
-    // the row below is a place in the file
-    session.keys("j").await;
-    ctrl_y(&mut session).await;
-    let place = work.place("forty.txt:4");
-    assert_eq!(clipboard(&session.app), place);
-    assert_eq!(said(&session.app), (format!("yanked {place}"), false));
     assert!(framed(&session));
 }
 
