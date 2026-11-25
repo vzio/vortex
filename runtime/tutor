@@ -585,9 +585,10 @@
  first; Esc again leaves the mode.
 
  Where the adapter reads memory, a value that lives in memory
- has a ▦ after it, and M shows its bytes in the hex view, in a
- split, at its address. They are read again at every stop, and
- the bytes the program changed since the stop before stand out.
+ has a ▦ after it, and M shows its bytes in the hex view, over
+ the window for documents, at its address. They are read
+ again at every stop, and the bytes the program changed since
+ the stop before stand out.
  i overwrites them while the program is paused (where the
  adapter writes memory), :w sends them, and u writes the old
  ones back. A byte that can't be read shows ??.
@@ -718,7 +719,8 @@
  view: offsets, the bytes in hex, and the same bytes as ASCII.
  It reads only what it shows, so even a huge file opens at once.
  :hex shows any file this way, over its window: Esc shows the
- text again.
+ text again. It is a window like the others: ga goes back too,
+ and the buffer picker lists it.
 
   h l  j k       a byte, a row
   w b            the next, the previous word of 4 bytes

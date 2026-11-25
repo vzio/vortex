@@ -144,7 +144,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Terminals | `vortex-terminal/` (the shell, pty and emulator, OSC 133 and 7, the command line report, bash/zsh integration, the snapshot of the lines), `vortex-view/src/terminal.rs` (the terminals' state, `[editor.terminal]`), `vortex-view/src/screen.rs` (the screens, the window for documents, showing and hiding them: see Screens), the tree's shares, places and covers in `vortex-view/src/tree.rs`, `vortex-term/src/screens.rs` (what each screen kind draws and takes), `vortex-term/src/terminal/` (`window.rs` starting, showing and closing terminals, `:sh`, the `vx` requests; `modes.rs` the keys of the three modes, view mode, prompts; `edit.rs` the command line in a buffer; `render.rs` drawing; `mouse.rs` the mouse; `input.rs` the encoding of keys, mouse and paste; `shim.rs` the `vx` shim; `phosphor.rs` the filter), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
 | API browser (in progress) | `vortex-term/src/api/` (`mod.rs` the browser: the tree, its tasks and their cancellation; `load.rs` the providers; `node.rs` the nodes; `temp.rs` temporary documents; `tags.rs` the tree-sitter skeleton; `picker.rs` `:api-browse`), `Client::cancellable_call` and `Client::set_config_overlay` in `vortex-lsp/src/client.rs`, `HiddenDocuments` in `vortex-lsp/src/lib.rs`, `vortex-term/tests/fake_lsp/main.rs` (a scripted fake language server), `vortex-term/tests/test/fake_lsp.rs`, `vortex-term/tests/test/api_browser.rs`, `vortex-term/tests/test/api_report.rs` (the measurements against real servers) |
-| Hex view | `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`), `vortex-term/tests/test/hex_view.rs` |
+| Hex view | `vortex-view/src/hex/view.rs` (the screen's state and how the editor opens it), `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`), `vortex-term/tests/test/hex_view.rs` |
 | Dashboard | `vortex-term/src/dashboard.rs` (the overlay: when it is up, its keys), `vortex-term/src/dashboard/` (`stats.rs` the background reading, `languages.rs` the line counts, `render.rs` the layout and the panels, `timeline.rs` when things move, `title.rs` the title, `vortex.rs` the vortex, `charset.rs` blocks or ASCII, `wrap.rs` long values on two rows, `snapshots/` the drawings the tests compare with), `vortex-vcs/src/git/summary.rs` (the git summary), `vortex-term/tests/test/dashboard.rs` |
 | Worktrees | `vortex-term/src/commands/worktrees.rs` (the `:worktrees` picker: its rows, columns, background jobs and `Enter`), `vortex-vcs/src/git/summary.rs` (the worktrees, missing ones flagged; `Repo::status`, the last modified time; `Repo::dated_worktrees`; `Worktree::details`), `vortex-stdx/src/time.rs` (`format_ago`), the dashboard's worktree rows and `t` in `vortex-term/src/dashboard/`, `vortex-term/tests/test/worktrees.rs` |
 | Watch mode | `vortex-view/src/watch.rs` (the session: the baseline, the files and hunks numbered in the order they changed, following, `n`/`N`, the new count), `vortex-term/src/watch.rs` (`:watch` and the other commands, the keys of the mode, reading the changed files on the watcher's thread, following, the flash, which commands are held, the mode bar's rows, the statusline element and its blinking, catching up, review (`watch_accept`, `watch_reject`, `watch_yank`), the `:watch-changes` picker), `RepoWatch::start_tapped` in `vortex-term/src/live.rs`, the session's gutter markers and review marks (`reviews`) in `vortex-view/src/gutter.rs`, `vortex-term/tests/test/watch.rs` |
@@ -252,12 +252,10 @@ not opening a frame's missing file in `handlers/dap.rs`; the time-per-line decor
 `capabilities` in `DebugAdapterConfig` (`vortex-core`); the step requests' `singleThread` and
 granularity, paged `variables`, the configured capabilities and the arrival time of `stopped`
 events in `vortex-dap`; `supportsSingleThreadExecutionRequests` and `SteppingGranularity` in
-`vortex-dap-types`. Memory in the hex view adds: `Document::open_memory`, the memory's name in
-`display_name` and `save_impl` refusing it in `vortex-view/src/document.rs`; `in_source_view` in
-`handlers/dap.rs` (a stop moves the source in another view than a memory view); reading memory
-after each frame, `Esc` going first to a hex view that overwrites or selects, and the hex view
-leaving its keys to an open sticky menu, in `ui/editor.rs`; `:debug-memory` and `:w` writing memory
-in `typed.rs`; a name for buffers without a path and the memory note in `ui/statusline.rs`;
+`vortex-dap-types`. Memory in the hex view adds: `Editor::open_memory` in `vortex-view/src/hex/view.rs`;
+`in_source_view` in `handlers/dap.rs` (a stop moves the source in another window than a memory
+view); reading memory after each frame in `ui/editor.rs`; `:debug-memory` and `:w` writing memory
+in `typed.rs`; the memory note in `ui/statusline.rs`;
 `readMemory`/`writeMemory`, `supportsMemoryReferences` and `supportsMemoryEvent` in `vortex-dap`
 and `vortex-dap-types`; a `capabilities` event merged into the capabilities instead of replacing
 them, in `vortex-term/src/debug/session.rs`. The engine adds: `stopped` events going through the
@@ -298,16 +296,12 @@ handler dropping hidden documents' diagnostics and the configuration answer in
 `commands/lsp.rs`; `autotests = false` and the test targets listed in `vortex-term/Cargo.toml`, for
 the fake server's binary.
 
-The hex view changes core files: the `hex` field of `Document` and what it changes there
-(`open_hex`, `enter_hex`/`leave_hex`, `apply` refusing transactions, `is_modified`, `save_impl`
-writing in place, `disk_change` and `reload`, `remove_view`) and `DocumentSavedEvent::hex_written`
-in `vortex-view/src/document.rs`; binary files opening with `open_hex` in `Editor::open`
-(`vortex-view/src/editor.rs`); `is_binary`, moved from `vortex-term/src/lib.rs` to
-`vortex_view::hex`; the key, mouse, drawing and cursor hooks in `ui/editor.rs`
-(`render_view_frame` is the border and statusline the hex view shares); the mode, position and
-other elements in `ui/statusline.rs`; `:hex`, and `:goto`/`:0x…` going to an offset, in
-`typed.rs`; the write message in `application.rs`; the hex preview of binary files in
-`ui/picker.rs`; the blame request skipping it in `handlers/blame.rs`; `ui.hex.*` in `theme.toml`.
+The hex view changes core files: `ScreenKind::Hex` in `vortex-view/src/screen.rs`; binary files
+opening with `open_binary` in `Editor::open` (`vortex-view/src/editor.rs`); `is_binary`, moved from
+`vortex-term/src/lib.rs` to `vortex_view::hex`; its routing (keys, mouse, drawing, the modes' keys
+before its own) in `vortex-term/src/screens.rs`; the statusline texts in `ui/statusline.rs`; `:hex`,
+and `:goto`/`:0x…` going to an offset, and `:w` writing in place, in `typed.rs`; the hex preview of
+binary files in `ui/picker.rs`; `ui.hex.*` in `theme.toml`.
 
 The dashboard changes core files: it is a layer of the compositor, over everything and taking
 every key (`dashboard.rs`), not a field of `EditorView`; `EditorView::live_dashboard` in `ui/editor.rs`; the startup decision in `Application::new` (and
@@ -576,13 +570,11 @@ a tie (same score). The list lives in memory only: nothing is saved, it is gone 
 A window shows one of two things: a **text document**, or a **screen**. A screen is a full-window
 view that isn't text of a file, and a type of its own, not a document: the
 [terminals](#terminals), the [side by side diff](#side-by-side-git-diff), the
-[Markdown page](#markdown-render-mode) and the [debug panel](#the-panel). Screens are windows of the
+[Markdown page](#markdown-render-mode), the [debug panel](#the-panel), the [hex view](#hex-view) and
+the debugger's [memory view](#memory). Screens are windows of the
 tree like any other, so they follow the window motions, splits, resizing, `:q`, focus, the mouse
 and the window menu. Pickers, popups, the command line and the [dashboard](#dashboard) are not
 screens: they stay overlays.
-
-The [hex view](#hex-view) and the debugger's [memory view](#memory) are not screens yet: they are
-still a mode of a text document (see Limitations).
 
 ### Where a screen opens
 
@@ -592,6 +584,8 @@ still a mode of a text document (see Limitations).
 | The same, `C-w V` | In a vertical split of the current window | `V`, `Esc`, `C-w q` |
 | Diff of a file (`space =`, a list of changes, the commit log) | In the window for documents, covering it | `q`, `Esc`, `C-c` |
 | The same, `C-w =` | In a vertical split of the current window | as above, or `C-w q` |
+| Hex view (a binary file opened from anywhere, `:hex`) | In the current window, covering it | `Esc`, `ga`, `:hex` again |
+| Memory view (`M` in the panel, `m` in debug mode, `:debug-memory`) | In the window for documents, covering it (in the current window when that shows text) | `Esc`, `ga` |
 | Terminal | In a split or along an edge, per `[editor.terminal]` | `:q`, `C-w q`, `exit`; `C-t` hides the scratch one |
 | Debug panel (`space G`, a session starting, `P`) | Along an edge, per `[editor.debugger.panel]` | `Esc`, `q` or `P` hide it |
 
@@ -631,19 +625,32 @@ buffers only.
   debug panel) has no history: `A screen's window has no history`.
 - Closing a diff, a page or a hex view that covered a window records it in that window's history
   (see [History and bookmarks](#history-and-bookmarks)); a terminal or the debug panel never.
+- **`gA`** (the history picker) on a screen that covers a window lists the screen as the present
+  row, and the covered place as the row under it; picking that row closes the screen.
+- Closing a screen (`:q`, `C-w q`) that covers the **last** text window, when the other windows are
+  all screens, hides that text window instead of leaving the editor without one: its buffer,
+  cursor and view come back in the next window a document opens in.
 
 ### Modes on screens
 
 [Watch mode](#watch-mode) and [debug mode](#debug-mode) act on windows: they follow edits and
 stops in the last focused text window (opening one beside the screen when there is none), and a
-focused screen keeps the focus and its keys. `Esc` on a focused screen gives the screen's `Esc`
-first (hiding the debug panel, closing a page); a second `Esc` leaves the mode. Before, the first
-one left the mode and kept the screen.
+focused screen keeps the focus. `Esc` on a focused screen gives the screen's `Esc` first (hiding
+the debug panel, closing a page); a second `Esc` leaves the mode. Before, the first one left the
+mode and kept the screen.
+
+The modes' keys go **before** the keys of a focused page, hex view and memory view (so `n`, `s`,
+`c`... step the debugger while the memory view is focused), except while the hex view is in a modal
+state (a key pending, overwriting after `i`, a selection with `v`): then its keys go first. A
+terminal, the diff and the debug panel keep their own keys first.
+
+`Esc` in a text window no longer hides an unfocused debug panel (it used to): `Esc` or `q` in the
+focused panel hides it, and `C-g` goes back to the documents.
 
 ### The buffer picker
 
 The buffer picker (`space b`) lists the screens after the buffers. The id column says the kind:
-`terminal`, `hex`, `diff`, `page`, `debug`. Picking one shows it: it goes to its window, or opens
+`terminal`, `hex` (the hex view and the memory view), `diff`, `page`, `debug`. Picking one shows it: it goes to its window, or opens
 it again where it opens.
 
 ### Configuration
@@ -683,17 +690,18 @@ back). Nothing is saved to disk and nothing uses the network.
   window.
 - Opening a file from a screen (a picker, `:e`, `gf`) shows it in the visible window for documents,
   else in the text the focused screen covers (the screen closes), else in a split.
+- `:w <path>` on the memory view is refused (`memory isn't a file: it can't be written to one (:w
+  writes it to the program)`); `:w` without a path writes the overwritten bytes to the program.
 
 ### Practice
 
 Screens don't change text, so they have no `:practice` exercise; they are in the tutor: section 9
 (splits) has `C-w V` and `C-w =` and says what a screen is, and sections 5, 6, 12, 16 and 18 say
-how the page, history, the diff, the debug panel and the terminals behave as screens.
+how the page, history, the diff, the debug panel and the terminals behave as screens, and section 19
+(the hex view) says that it is a window too.
 
 ### Limitations
 
-- The hex view and the debugger's memory view still are a mode of a text document, shown in a text
-  window: they aren't in the list of screens, nor in the buffer picker's screen rows.
 - A screen shows in one window at a time.
 - The debug panel is one screen, with its sections (variables, watch, call stack, breakpoints,
   console) sharing one stop and one cursor model; from 120 columns it puts the console beside the
@@ -2625,8 +2633,11 @@ expressions), **Call stack** (the threads; the current one open on its frames), 
 evaluated). From 120 columns the console shows beside the data section; narrower, it is the fifth
 tab. The tab bar shows the session's status and name, and the search of the section.
 
-The panel is a [screen](#screens): a window of its own kind, one screen with its five sections
-(they share one stop and one cursor model). It opens when a session starts (the editor keeps the
+The panel is a [screen](#screens): a window of its own kind, opened at the bottom by default and
+placed and sized by `[editor.debugger.panel]` `position` and `size`. `Esc` or `q` while it is
+focused hides it; `Esc` in a text window doesn't. It is **one** screen with its five sections
+because they share one stop, one cursor model and one layout (the console beside the data from 120
+columns): splitting it into windows would duplicate that state for nothing. It opens when a session starts (the editor keeps the
 keys) and hides when it ends; `P` in debug mode shows it again with the last console. By default it
 opens along the bottom of the editor, `size` percent high; `position` puts it at the `top`, `left`
 or `right` as the terminal's, and it shares no place with a terminal. `Tab` or `Ctrl-g` in debug
@@ -3032,14 +3043,16 @@ answer:
 
 ### Memory
 
-A debugged program's memory shows in the [hex view](#hex-view), with its colors, hex and bin modes,
+A debugged program's memory shows in the [hex view](#hex-view), a [screen](#screens): it covers
+the window it opens in, `Esc` closes it and the window shows what it held, `ga` does the same and
+history keeps it, and the buffer picker lists it. It has the hex view's colors, hex and bin modes,
 ASCII column, search, `v`/`y`, `G` to an address and statusline. Whether memory is offered depends
 only on the adapter's capabilities and on each value, never on the language:
 
 - An adapter that reads memory (`supportsReadMemoryRequest`) gives the values that live in memory a
   `memoryReference`: those get a `▦` after them in Variables and Watch (`ui.debug.memory`), and `M`
-  in the panel (`m` in debug mode) opens their memory, in a split, the cursor on their address in the
-  middle. `M` on another value says `<name> has no memory to show`. Without the capability there
+  in the panel (`m` in debug mode) opens their memory, covering the window for documents (the
+  current window when that shows text), the cursor on their address in the middle. `M` on another value says `<name> has no memory to show`. Without the capability there
   is no `▦` anywhere, and `M` or `:debug-memory` say `this debugger (<name>) doesn't support viewing
   memory`. Messages only: no popup, nothing greyed out.
 - `:debug-memory 0x7ffee3b4a010` opens at an address (read through the reference of a memory view
@@ -3056,7 +3069,7 @@ only on the adapter's capabilities and on each value, never on the language:
   stop before stay highlighted (`ui.hex.changed`) until the next one. An adapter's `memory` event
   reads them again too. While the program runs, the view keeps its last stop's bytes and the
   statusline says `running · the last stop's bytes`; after the session, `session ended · its last
-  bytes`. A stop never replaces a memory view: the source moves in another split.
+  bytes`. A stop never replaces a memory view: the source moves in another window.
 - During playback and fast forward the views are read at most at the screen's rate (about 30 times a
   second), not at every step; the highlight is then against the refresh before.
 - **Overwrite**: `i` as in a file, only where the adapter writes memory (`supportsWriteMemoryRequest`;
@@ -3366,7 +3379,9 @@ Measured on small projects (see the PR's report for the numbers):
 
 Binary files open in a hex view instead of as garbled text: offsets, the bytes in hex (or bits),
 and the same bytes as ASCII. It is read-only until you ask to overwrite, it never inserts or
-deletes a byte, and it never loads the file: a file of several GB opens at once.
+deletes a byte, and it never loads the file: a file of several GB opens at once. It is a
+[screen](#screens): it covers the window it opens in, `Esc` closes it and the window shows what it
+held, `ga` does the same and history keeps it, and the buffer picker lists it (`hex`).
 
 ```text
 0x00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52  .PNG........IHDR
@@ -3463,12 +3478,12 @@ bytes; the elements about text (line ending, indentation, encoding, total lines)
 
 ### How it lives in the editor
 
-The hex view is not a [screen](#screens) (yet): it is shown in a text window, and `Esc`, `ga` and
-`:q` work on it as on any buffer. It is a mode of the document, not a separate view or component: a `Document` in the hex
-view has a `HexBuffer` (`vortex-view/src/hex.rs`) and draws its rows instead of its text. So it is a
-buffer like any other: splits (each view with its own cursor and hex or bin mode, a new split
-starting where the view it splits is), the buffer picker, `:q`, `:w`, `:bc`, history (`ga`,
-`gA`) between buffers, the modified flag.
+The hex view is a [screen](#screens) (`ScreenKind::Hex`, `vortex-view/src/screen.rs`), not a mode
+of a text document: a file in it never becomes a `Document`. Its state is a `HexView`
+(`vortex-view/src/hex/view.rs`) that owns a `HexBuffer` and the file's state on disk; the keys are
+routed in `vortex-term/src/screens.rs`. So it is a window like the others: it covers the window it
+opens in, and the window motions, splits, `:q`, `:bc`, `:w`, history (`ga`, `gA`), the buffer picker
+and the modified flag work on it. A view has its own cursor and hex or bin mode per window.
 
 - **The bytes are read in windows**: a `HexBuffer` holds the open file and reads what it is asked
   for, through a 64 KiB window cache, with positioned reads. Drawing reads a screen of rows; a
@@ -3480,9 +3495,8 @@ starting where the view it splits is), the buffer picker, `:q`, `:w`, `:bc`, his
 - **A debugged program's memory** is another source of bytes for the same buffer, with the
   addresses as offsets and pages read through the debug adapter as they are drawn: see the
   debugger's [Memory](#memory).
-- **The text of the document** stays as it was (empty for a file opened in the hex view), and
-  `Document::apply` refuses every transaction meanwhile: the keys that reach the keymap can't
-  change it unseen. Going back to text reloads it from the file.
+- **No text document**: the hex view has none, so text commands, language servers and saving never
+  meet it. Going back to text (`:hex` again) opens the file as a document.
 - **Files changed on disk**: the check compares the modification time and size only, since hashing
   the content (what text buffers do) would read the whole file.
 
