@@ -1079,10 +1079,9 @@ async fn splits_resize_the_shell() -> anyhow::Result<()> {
     open_panel(&mut h).await?;
     let first = focused_terminal(&h.app).unwrap();
     let first_view = h.app.editor.tree.focus;
+    let _ = first;
     let inner_size = |app: &Application| {
-        let view = app.editor.tree.get(first_view);
-        let doc = app.editor.document(first).unwrap();
-        let inner = view.inner_area(doc);
+        let inner = app.editor.tree.screen_view(first_view).unwrap().inner_area();
         (inner.height, inner.width)
     };
     let shell_size = |app: &Application| {
@@ -1411,7 +1410,7 @@ async fn e_refuses_while_a_program_runs() -> anyhow::Result<()> {
         .app
         .editor
         .documents()
-        .all(|d| d.is_screen() || d.path().is_none()));
+        .all(|d| d.path().is_none()));
     // let go of the program
     h.keys("i<C-c>").await?;
     h.finish().await
@@ -1609,7 +1608,7 @@ fn make_watch_repo(parent: &Path) -> PathBuf {
 fn editor_window(app: &Application) -> Option<(String, usize)> {
     app.editor.tree.views().find_map(|(view, _)| {
         let doc = app.editor.document(view.doc)?;
-        if doc.is_screen() {
+        if doc.lines_of().is_some() {
             return None;
         }
         let text = doc.text().slice(..);
@@ -1680,7 +1679,7 @@ async fn watch_mode_follows_an_agent_in_a_terminal_split() -> anyhow::Result<()>
     assert!(h.app.editor.watch.is_active());
     // the terminal's window still shows the terminal
     let view = h.app.editor.view_of(terminal_doc).expect("still shown");
-    assert_eq!(h.app.editor.tree.get(view).doc, terminal_doc);
+    assert!(h.app.editor.tree.is_visible(view));
     // keys typed meanwhile reached the shell
     h.until("the typed command to run", |app| {
         screen(app).lines().any(|l| l.trim() == "still-typing")
@@ -1774,9 +1773,9 @@ async fn terminals_are_listed_by_name_and_switching_shows_the_hidden_one() -> an
     let doc = h.app.editor.terminals.scratch.unwrap();
     let names = |app: &Application| {
         app.editor
-            .documents()
-            .filter(|d| d.is_screen())
-            .map(|d| d.display_name().into_owned())
+            .screens
+            .iter()
+            .map(|screen| screen.name.clone())
             .collect::<Vec<_>>()
     };
     let listed = names(&h.app);
@@ -1788,8 +1787,8 @@ async fn terminals_are_listed_by_name_and_switching_shows_the_hidden_one() -> an
     assert!(scratch_view(&h.app).is_none());
     assert_eq!(names(&h.app), listed);
 
-    // switching to it shows its window
-    h.app.editor.switch(doc, Action::Replace);
+    // switching to it (the buffer picker) shows its window
+    h.app.editor.show_screen(doc);
     h.step(Duration::from_millis(200)).await;
     assert!(scratch_view(&h.app).is_some(), "shown by the switch");
     assert_eq!(focused_terminal(&h.app), Some(doc));
