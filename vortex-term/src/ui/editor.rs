@@ -1820,7 +1820,7 @@ impl Component for EditorView {
                 // watch mode's and debug mode's keys come before the hex view's and a page's own
                 // (stepping while looking at memory); a terminal, the diff and the debug panel
                 // keep theirs
-                let mode_first = crate::screens::modes_first(cx.editor)
+                let mode_first = crate::screens::modes_first(cx.editor, key)
                     && self.mode_layer_key(key, &mut cx).is_some();
                 if !mode_first {
                     let mut ccx = Context {

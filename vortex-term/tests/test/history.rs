@@ -780,8 +780,9 @@ async fn the_picker_is_modal_s_filters_and_question_mark_shows_its_keys() -> any
     h.keys("j").await;
     assert!(!on_screen(&h.app, "go there"));
 
-    // `s` filters: the rows narrow to the matching ones
-    h.keys("s10").await;
+    // `s` filters: the rows narrow to the matching ones (`:10`, so the random name of the temporary
+    // directory can't match it fuzzily)
+    h.keys("s:10").await;
     h.settle(Duration::from_millis(300)).await;
     let rows = screen_rows(&h.app);
     assert!(

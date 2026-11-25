@@ -138,8 +138,13 @@ impl Env {
             self.h.keys(if entered { "<C-g>" } else { "<tab>" }).await?;
         }
         if entered {
-            // one batch, so the program has no time to answer between the keys
-            let leave = if keys.starts_with('c') { "" } else { "<esc>" };
+            // one batch, so the program has no time to answer between the keys; the command
+            // leaves the mode (`Esc` would close a focused memory view first)
+            let leave = if keys.starts_with('c') {
+                ""
+            } else {
+                ":debug-mode<ret>"
+            };
             self.h.keys(&format!("<space>G{keys}{leave}")).await
         } else {
             self.h.keys(keys).await

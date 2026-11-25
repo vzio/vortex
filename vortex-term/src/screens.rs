@@ -402,8 +402,13 @@ fn handle_key(cx: &mut compositor::Context, key: KeyEvent, idle: bool) -> Option
 
 /// Whether watch mode's and debug mode's keys come before the focused screen's own: on the hex
 /// view and a Markdown page, which only look, as they did before they were windows. A terminal
-/// types, the diff reviews and the debug panel is debug mode's own: they keep their keys.
-pub fn modes_first(editor: &Editor) -> bool {
+/// types, the diff reviews and the debug panel is debug mode's own: they keep their keys. `Esc`
+/// is never the modes' first: it closes the screen, and the next one leaves the mode (a mode and
+/// its screen stay atomic).
+pub fn modes_first(editor: &Editor, key: KeyEvent) -> bool {
+    if key.code == vortex_view::keyboard::KeyCode::Esc {
+        return false;
+    }
     match focused_kind(editor) {
         // overwriting or selecting, the view takes every key
         Some(ScreenKind::Hex) => !commands::hex::modal(editor),
