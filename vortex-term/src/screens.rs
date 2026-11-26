@@ -399,6 +399,11 @@ fn handle_key(cx: &mut compositor::Context, key: KeyEvent, idle: bool) -> Option
             }
             let (taken, callback) =
                 with_commands(cx, |ccx| commands::hex::handle_screen_key(ccx, key));
+            if taken {
+                // a register given to a key it took (`"ap`, refused: read-only) is spent, as a
+                // command spends it: it isn't left for the next one
+                cx.editor.selected_register = None;
+            }
             taken.then_some(EventResult::Consumed(callback))
         }
     }

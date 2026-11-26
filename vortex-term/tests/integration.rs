@@ -49,6 +49,7 @@ mod test {
     mod practice_panel;
     mod repo_gen;
     mod screen_windows;
+    mod screens_guard;
     mod selective_wrap;
     mod soft_wrap;
     mod splits;
