@@ -229,7 +229,7 @@ pub fn handle_screen_key(cx: &mut Context, key: KeyEvent) -> bool {
 fn close(cx: &mut Context) {
     let view = cx.editor.tree.focus;
     if state(cx.editor).is_some_and(|state| state.is_modified()) {
-        cx.editor.set_error("unwritten bytes: :w writes them");
+        cx.editor.set_error("unwritten bytes");
         return;
     }
     crate::screens::close(cx.editor, view);
@@ -823,7 +823,7 @@ pub fn toggle(cx: &mut compositor::Context) -> anyhow::Result<()> {
             anyhow::bail!("this is a program's memory: it has no text to show");
         }
         if state.is_modified() {
-            anyhow::bail!("unwritten bytes: :w writes them");
+            anyhow::bail!("unwritten bytes");
         }
         crate::screens::close(editor, view);
         return Ok(());
