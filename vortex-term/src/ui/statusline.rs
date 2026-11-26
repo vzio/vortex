@@ -202,35 +202,22 @@ where
     let visible = context.focused;
     let config = context.editor.config();
     let modenames = &config.statusline.mode;
-    // the hex view (this fork): its layout and whether typing overwrites
-    let hex_cursor = context.doc.hex().map(|hex| hex.cursor(context.view.id));
-    let hex_label = hex_cursor.as_ref().map(super::hex_view::mode_label);
-    // a screen (this fork): a terminal's view mode
+    // a screen's lines (this fork): a terminal's view mode
     let screen_label = crate::screens::mode_label(context.editor, context.doc);
-    let mode_str =
-        hex_label
-            .or(screen_label)
-            .or(context.mode_label)
-            .unwrap_or(match context.editor.mode() {
-                Mode::Insert => &modenames.insert,
-                Mode::Select => &modenames.select,
-                Mode::Normal => &modenames.normal,
-            });
+    let mode_str = screen_label
+        .or(context.mode_label)
+        .unwrap_or(match context.editor.mode() {
+            Mode::Insert => &modenames.insert,
+            Mode::Select => &modenames.select,
+            Mode::Normal => &modenames.normal,
+        });
     let content = if visible {
         format!(" {mode_str} ")
     } else {
         // If not focused, explicitly leave an empty space instead of returning None.
         " ".repeat(mode_str.width() + 2)
     };
-    let style = if visible && config.color_modes && hex_cursor.is_some() {
-        match hex_cursor {
-            Some(cursor) if cursor.overwrite => context.editor.theme.get("ui.statusline.insert"),
-            Some(cursor) if cursor.anchor.is_some() => {
-                context.editor.theme.get("ui.statusline.select")
-            }
-            _ => context.editor.theme.get("ui.statusline.normal"),
-        }
-    } else if visible && config.color_modes {
+    let style = if visible && config.color_modes {
         match context.editor.mode() {
             Mode::Insert => context.editor.theme.get("ui.statusline.insert"),
             Mode::Select => context.editor.theme.get("ui.statusline.select"),
@@ -401,9 +388,6 @@ fn render_selections<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if context.doc.is_hex() {
-        return;
-    }
     let selection = context.doc.selection(context.view.id);
     let count = selection.len();
     write(
@@ -426,8 +410,10 @@ where
     use vortex_view::{graphics::Color, terminal::ShellStatus, theme::Modifier};
 
     let terminals = &context.editor.terminals;
-    let Some(terminal) = terminals
-        .get(context.doc.id())
+    let Some(terminal) = context
+        .doc
+        .lines_of()
+        .and_then(|screen| terminals.get(screen))
         .or_else(|| terminals.scratch())
     else {
         return;
@@ -529,13 +515,6 @@ fn render_primary_selection_length<'a, F>(context: &mut RenderContext<'a>, write
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if let Some(hex) = context.doc.hex() {
-        let selection = hex.cursor(context.view.id).selection();
-        let len = selection.end - selection.start;
-        let s = if len == 1 { "" } else { "s" };
-        write(context, format!(" {len} byte{s} ").into());
-        return;
-    }
     let tot_sel = context.doc.selection(context.view.id).primary().len();
     write(
         context,
@@ -558,16 +537,6 @@ fn render_position<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if let Some(hex) = context.doc.hex() {
-        let cursor = hex.cursor(context.view.id);
-        let mut text = super::hex_view::position(hex, &cursor);
-        // memory (this fork): which stop the bytes are from, when not the live one
-        if let Some(note) = crate::debug::memory::note(context.editor, context.doc) {
-            text = format!("{text}  {note}");
-        }
-        write(context, format!(" {text} ").into());
-        return;
-    }
     let position = get_position(context);
     write(
         context,
@@ -579,9 +548,6 @@ fn render_total_line_numbers<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if context.doc.is_hex() {
-        return;
-    }
     let total_line_numbers = context.doc.text().len_lines();
 
     write(context, format!(" {} ", total_line_numbers).into());
@@ -591,16 +557,6 @@ fn render_position_percentage<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if let Some(hex) = context.doc.hex() {
-        // memory has no size to be a percentage of
-        if hex.is_memory() {
-            return;
-        }
-        let offset = hex.cursor(context.view.id).offset;
-        let percent = (offset + 1) * 100 / hex.len().max(1);
-        write(context, format!("{}%", percent.min(100)).into());
-        return;
-    }
     let position = get_position(context);
     let maxrows = context.doc.text().len_lines();
     write(
@@ -615,7 +571,7 @@ where
 {
     let enc = context.doc.encoding();
 
-    if enc != encoding::UTF_8 && !context.doc.is_hex() {
+    if enc != encoding::UTF_8 {
         write(context, format!(" {} ", enc.name()).into());
     }
 }
@@ -625,9 +581,6 @@ where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
     use vortex_core::LineEnding::*;
-    if context.doc.is_hex() {
-        return;
-    }
     let line_ending = match context.doc.line_ending {
         Crlf => "CRLF",
         LF => "LF",
@@ -652,11 +605,7 @@ fn render_file_type<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let file_type = match context.doc.is_hex() {
-        true if context.doc.memory().is_some() => "memory",
-        true => "hex",
-        false => context.doc.language_name().unwrap_or(DEFAULT_LANGUAGE_NAME),
-    };
+    let file_type = context.doc.language_name().unwrap_or(DEFAULT_LANGUAGE_NAME);
 
     write(context, format!(" {} ", file_type).into());
 }
@@ -778,9 +727,6 @@ fn render_file_indent_style<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if context.doc.is_hex() {
-        return;
-    }
     let style = context.doc.indent_style;
 
     write(

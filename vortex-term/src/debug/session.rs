@@ -512,6 +512,7 @@ pub fn end_with(editor: &mut Editor, id: DebugAdapterId, disconnect: bool) {
         }
     }
     editor.debug.end_session();
+    editor.hide_debug_panel();
     // an error that ended it (a failed launch) stays shown
     if !editor.is_err() {
         crate::debug::mode::say(

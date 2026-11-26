@@ -1,4 +1,4 @@
-//! The bytes of a document shown in the hex view (this fork).
+//! The bytes shown in the hex view (this fork), a screen of its own ([`HexView`]).
 //!
 //! A [`HexBuffer`] never loads its file: it reads the bytes it is asked for, through a small
 //! window cache, so a file of any size opens at once and only what is on screen is read. The
@@ -21,7 +21,9 @@ use std::{
 use crate::ViewId;
 
 pub mod memory;
+mod view;
 pub use memory::{Cell, MemorySource};
+pub use view::HexView;
 
 /// Whether the start of a file looks like the bytes of a binary file rather than text: a NUL in
 /// its first KiB, or the signature of a PDF or a PNG. A byte order mark means text in a UTF
@@ -372,6 +374,19 @@ impl HexBuffer {
 
     pub fn remove_view(&mut self, view: ViewId) {
         self.cursors.remove(&view);
+    }
+
+    /// Moves the cursor to the window `view`: the screen shows in a new window (history shows
+    /// it again) and keeps where it was. Without a cursor for another window, nothing changes.
+    pub fn adopt_cursor(&mut self, view: ViewId) {
+        if self.cursors.contains_key(&view) {
+            return;
+        }
+        let old = self.cursors.keys().next().copied();
+        if let Some(cursor) = old.and_then(|old| self.cursors.remove(&old)) {
+            self.cursors.clear();
+            self.cursors.insert(view, cursor);
+        }
     }
 
     /// Keeps the cursors of `other` (the buffer this one replaces when the file is read again),

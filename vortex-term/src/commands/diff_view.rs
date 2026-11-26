@@ -9,7 +9,6 @@ use crate::live::Live;
 use crate::ui::diff_view::{
     Actions, Closed, DiffView, FileNav, ListFiles, SelectFile, Side, Snapshot, Staging, Target,
 };
-use crate::ui::picker;
 
 /// Whether the git configuration of the repository `path` is in can be trusted.
 fn trust_full(editor: &Editor, path: &Path) -> bool {
@@ -131,11 +130,7 @@ fn uncommitted_view(
     change: &FileChange,
     live: Option<Live>,
 ) -> anyhow::Result<DiffView> {
-    let view = head_view(editor, change)?.with_on_open(|compositor| {
-        // the uncommitted files picker and the commit log below it
-        compositor.remove(picker::ID);
-        compositor.remove(picker::ID);
-    });
+    let view = head_view(editor, change)?;
     Ok(match live {
         Some(live) => view.with_live(live),
         None => view,
@@ -171,9 +166,7 @@ pub(crate) fn open_uncommitted(
     if let Some(line) = line {
         view.go_to_line(line);
     }
-    // a screen opens: a jump (this fork: history)
-    crate::history::opened_screen(editor);
-    compositor.push(Box::new(view.with_nav(nav)));
+    crate::ui::diff_view::open(compositor, editor, view.with_nav(nav));
 }
 
 /// The HEAD path and the current path to diff for an entry of the changed files picker.
@@ -192,12 +185,7 @@ pub(crate) fn open_from_picker(cx: &mut crate::compositor::Context, change: &Fil
         let call = move |editor: &mut Editor, compositor: &mut Compositor| match head_view(
             editor, &change,
         ) {
-            Ok(view) if view.has_changes() => {
-                crate::history::opened_screen(editor);
-                compositor.push(Box::new(view.with_on_open(|compositor| {
-                    compositor.remove(picker::ID);
-                })))
-            }
+            Ok(view) if view.has_changes() => crate::ui::diff_view::open(compositor, editor, view),
             Ok(_) => editor.set_status(format!("No changes in {}", relative(change.path()))),
             Err(err) => editor.set_error(err.to_string()),
         };
@@ -206,8 +194,9 @@ pub(crate) fn open_from_picker(cx: &mut crate::compositor::Context, change: &Fil
 }
 
 /// Opens the diff for the file of the current buffer, or, for a buffer without a file, the diff
-/// against its diff base (a `:practice` buffer).
-pub(crate) fn open_current(editor: &mut Editor, compositor: &mut Compositor) {
+/// against its diff base (a `:practice` buffer): over its window, or in a split beside it
+/// (`split`).
+pub(crate) fn open_current(editor: &mut Editor, compositor: &mut Compositor, split: bool) {
     let doc = vortex_view::doc!(editor);
     let view = match doc.path() {
         Some(path) => head_view(
@@ -223,8 +212,11 @@ pub(crate) fn open_current(editor: &mut Editor, compositor: &mut Compositor) {
     };
     match view {
         Ok(view) if view.has_changes() => {
-            crate::history::opened_screen(editor);
-            compositor.push(Box::new(view))
+            if split {
+                let doc = vortex_view::doc!(editor).id();
+                editor.switch(doc, vortex_view::editor::Action::VerticalSplit);
+            }
+            crate::ui::diff_view::open(compositor, editor, view)
         }
         Ok(_) => editor.set_status(format!("No changes in {}", doc_name(editor))),
         Err(err) => editor.set_error(err.to_string()),
@@ -277,15 +269,13 @@ fn buffer_view(editor: &Editor, doc: DocumentId) -> DiffView {
 }
 
 /// The diff of `change` in the commits from `oldest` to `newest` (the same commit for one): from
-/// the first parent of `oldest` to `newest`. Opening the file from it closes the `pickers`
-/// pickers below it. It may have no changes.
+/// the first parent of `oldest` to `newest`. It may have no changes.
 fn commit_view(
     editor: &Editor,
     cwd: &Path,
     oldest: &CommitInfo,
     newest: &CommitInfo,
     change: &FileChange,
-    pickers: usize,
 ) -> anyhow::Result<DiffView> {
     let trust_full = editor
         .workspace_trust
@@ -330,13 +320,7 @@ fn commit_view(
         path.exists().then_some(path.clone()),
         tab_width,
     )
-    .with_soft_wrap(soft_wrap(editor, &path))
-    // the commit's files picker and the commit picker below it, or the line history
-    .with_on_open(move |compositor| {
-        for _ in 0..pickers {
-            compositor.remove(picker::ID);
-        }
-    }))
+    .with_soft_wrap(soft_wrap(editor, &path)))
 }
 
 /// Opens the diff of `change` in the commits from `oldest` to `newest` on top of the commit
@@ -354,7 +338,7 @@ pub(crate) fn open_commit(
     files: ListFiles,
     select: SelectFile,
 ) -> anyhow::Result<()> {
-    let mut view = commit_view(editor, cwd, oldest, newest, change, 2)?;
+    let mut view = commit_view(editor, cwd, oldest, newest, change)?;
     if !view.has_changes() {
         editor.set_status(format!("No changes in {}", relative(change.path())));
         return Ok(());
@@ -363,16 +347,14 @@ pub(crate) fn open_commit(
     let nav = FileNav {
         files,
         current: change.clone(),
-        open: Rc::new(move |editor, change| commit_view(editor, &cwd, &oldest, &newest, change, 2)),
+        open: Rc::new(move |editor, change| commit_view(editor, &cwd, &oldest, &newest, change)),
         select,
         closed: None,
     };
     if let Some(line) = line {
         view.go_to_line(line);
     }
-    // a screen opens: a jump (this fork: history)
-    crate::history::opened_screen(editor);
-    compositor.push(Box::new(view.with_nav(nav)));
+    crate::ui::diff_view::open(compositor, editor, view.with_nav(nav));
     Ok(())
 }
 
@@ -387,15 +369,13 @@ pub(crate) fn open_lines_in_commits(
     change: &FileChange,
     lines: &[std::ops::Range<u32>],
 ) -> anyhow::Result<()> {
-    let mut view = commit_view(editor, cwd, oldest, newest, change, 1)?;
+    let mut view = commit_view(editor, cwd, oldest, newest, change)?;
     if !view.has_changes() {
         editor.set_status(format!("No changes in {}", relative(change.path())));
         return Ok(());
     }
     view.go_to_lines(lines);
-    // a screen opens: a jump (this fork: history)
-    crate::history::opened_screen(editor);
-    compositor.push(Box::new(view));
+    crate::ui::diff_view::open(compositor, editor, view);
     Ok(())
 }
 
@@ -411,15 +391,12 @@ pub(crate) fn open_lines_uncommitted(
         path: path.to_path_buf(),
     };
     let mut view = match head_view(editor, &change) {
-        Ok(view) if view.has_changes() => view.with_on_open(|compositor| {
-            compositor.remove(picker::ID);
-        }),
+        Ok(view) if view.has_changes() => view,
         Ok(_) => return editor.set_status(format!("No changes in {}", relative(path))),
         Err(err) => return editor.set_error(err.to_string()),
     };
     view.go_to_lines(lines);
-    crate::history::opened_screen(editor);
-    compositor.push(Box::new(view));
+    crate::ui::diff_view::open(compositor, editor, view);
 }
 
 /// Whether lines of `path` wrap in the editor: the setting of its buffer when it is open, else

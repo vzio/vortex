@@ -11,6 +11,7 @@ use vortex_view::{
     document::Mode,
     graphics::{Color, CursorKind, Modifier, Rect, Style, UnderlineStyle},
     terminal::{self, CellStyle, CursorShape, Snapshot},
+    tree::ScreenView,
     Document, Editor, View,
 };
 
@@ -32,27 +33,14 @@ fn base(editor: &Editor) -> (Style, Option<Phosphor>) {
     (base, phosphor)
 }
 
-/// Draws the terminal of `doc` in its window `view` (above the statusline).
-pub fn render(editor: &Editor, doc: &Document, view: &View, surface: &mut Surface, focused: bool) {
-    let area = view.inner_area(doc);
+/// Draws the terminal of the screen's window `view` (above its statusline).
+pub fn render(editor: &Editor, view: &ScreenView, surface: &mut Surface, focused: bool) {
+    let area = view.inner_area();
     let (base, phosphor) = base(editor);
     surface.set_style(area, base);
-    let Some(terminal) = editor.terminals.get(doc.id()) else {
+    let Some(terminal) = editor.terminals.get(view.screen) else {
         return;
     };
-    if let Some(snapshot) = &terminal.snapshot {
-        render_snapshot(
-            editor,
-            doc,
-            view,
-            snapshot,
-            area,
-            base,
-            phosphor.as_ref(),
-            surface,
-        );
-        return;
-    }
     let shell = &terminal.shell;
     // cleared before reading the screen, so output that comes after sends a new redraw
     shell.take_output_pending();
@@ -106,6 +94,34 @@ fn cursor_style(editor: &Editor, primary: bool) -> Style {
     } else {
         style
     }
+}
+
+/// Draws a terminal's lines in view mode, `doc` in its text window `view` over the terminal's:
+/// in the colors they had. Returns whether `doc` is a terminal's lines.
+pub fn render_lines(editor: &Editor, doc: &Document, view: &View, surface: &mut Surface) -> bool {
+    let Some(terminal) = doc
+        .lines_of()
+        .and_then(|screen| editor.terminals.get(screen))
+    else {
+        return false;
+    };
+    let Some(snapshot) = &terminal.snapshot else {
+        return false;
+    };
+    let area = view.inner_area(doc);
+    let (base, phosphor) = base(editor);
+    surface.set_style(area, base);
+    render_snapshot(
+        editor,
+        doc,
+        view,
+        snapshot,
+        area,
+        base,
+        phosphor.as_ref(),
+        surface,
+    );
+    true
 }
 
 /// View mode: the snapshot's lines from the window's scroll position, the selections and the
@@ -249,10 +265,12 @@ fn cell_style(cell: CellStyle) -> Style {
 /// The cursor of the focused terminal: in insert mode the program's, where and as it shows it;
 /// in normal and view mode the terminal draws Vortex's itself.
 pub fn cursor(editor: &Editor) -> Option<(Position, CursorKind)> {
-    let (doc, view) = super::modes::focused(editor)?;
-    let terminal = editor.terminals.get(doc)?;
-    let document = editor.document(doc)?;
-    let area = editor.tree.get(view).inner_area(document);
+    let (screen, view) = super::modes::focused(editor)?;
+    let terminal = editor.terminals.get(screen)?;
+    let area = match editor.tree.window(view)? {
+        vortex_view::tree::Window::Screen(view) => view.inner_area(),
+        vortex_view::tree::Window::Text(view) => view.inner_area(editor.document(view.doc)?),
+    };
     if editor.mode() != Mode::Insert || terminal.viewing() {
         return Some((
             Position::new(area.y as usize, area.x as usize),

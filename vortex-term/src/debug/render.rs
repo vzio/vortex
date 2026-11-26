@@ -170,7 +170,7 @@ pub fn render(editor: &mut Editor, area: Rect, surface: &mut Surface) {
     let layout = layout(editor, area);
 
     // the tab bar
-    let focused = editor.debug.is_focused();
+    let focused = editor.debug_panel_focused();
     let bar = exact_or(theme, "ui.debug.tab", "ui.statusline.inactive");
     surface.set_style(area.with_height(1), base.patch(bar));
     let active_tab = theme
@@ -431,7 +431,7 @@ fn draw_section(
     let cursor = *cursor;
 
     let theme = &editor.theme;
-    let active = editor.debug.is_focused() && editor.debug.section == section;
+    let active = editor.debug_panel_focused() && editor.debug.section == section;
     let selected = if active {
         theme.get("ui.menu.selected")
     } else {

@@ -1,9 +1,8 @@
-//! The keys and commands of the hex view (this fork). A document in the hex view shows its bytes
-//! (see `ui/hex_view.rs` and `vortex_view::hex`); its keys are handled here, before the keymap,
-//! which still gets the ones the view leaves alone: `:`, `space`, and the keys with `Ctrl` or
-//! `Alt` that it doesn't use (`C-w` for the windows, `C-o`/`C-i` for the bookmarks...). The text of
-//! the document can't change meanwhile (`Document::apply` refuses), so no command reaching the
-//! keymap can edit it unseen.
+//! The keys and commands of the hex view (this fork). The hex view is a screen (see
+//! `vortex_view::hex::HexView`, `screens.rs` and `ui/hex_view.rs`) that shows bytes; its keys are
+//! handled here, before the keymap ([`handle_screen_key`]), which still gets the ones the view
+//! leaves alone: `:`, `space`, and the keys with `Ctrl` or `Alt` that it doesn't use (`C-w` for
+//! the windows...). No text command runs on a screen, so none can edit the text under it unseen.
 //!
 //! Read-only (`RO`, the default): typing a character only says how to overwrite. `i` enters
 //! overwrite mode (`OVR`), where typing overwrites the byte under the cursor, in the column the
@@ -14,9 +13,10 @@ use vortex_view::{
     document::Mode,
     editor::Editor,
     graphics::Rect,
-    hex::{self, Column, HexBuffer, HexCursor, Layout, Rows},
+    hex::{self, Column, HexBuffer, HexCursor, HexView, Layout, Rows},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     keyboard::{KeyCode, KeyModifiers},
+    screen::Placement,
     ViewId,
 };
 
@@ -32,13 +32,41 @@ const MAX_YANK: u64 = 16 * 1024 * 1024;
 /// What a typed character does in read-only mode.
 pub const READ_ONLY: &str = "read-only";
 
-/// The key state of the hex view kept between keys: the first key of `g` sequences.
-#[derive(Default)]
-pub struct HexKeys {
-    pending: Option<char>,
+/// Whether the focused hex screen shows a program's memory.
+pub fn focused_memory(editor: &Editor) -> bool {
+    editor
+        .focused_screen()
+        .and_then(|screen| screen.state::<HexView>())
+        .is_some_and(|hex| hex.buffer.is_memory())
 }
 
-/// The focused view, if its document is in the hex view, with what moving in it needs.
+/// Whether the focused hex screen is in one of its own modal states (overwriting, selecting, a
+/// `g` pending): then it takes every key, `Esc` included, before the modes' keys.
+pub fn modal(editor: &Editor) -> bool {
+    let view = editor.tree.focus;
+    editor
+        .focused_screen()
+        .and_then(|screen| screen.state::<HexView>())
+        .is_some_and(|hex| {
+            let cursor = hex.buffer.cursor(view);
+            hex.pending.is_some() || cursor.overwrite || cursor.anchor.is_some()
+        })
+}
+
+/// Whether the focused window shows a hex screen.
+pub fn focused(editor: &Editor) -> bool {
+    editor
+        .focused_screen()
+        .is_some_and(|screen| screen.state::<HexView>().is_some())
+}
+
+/// The state of the focused hex screen.
+fn state(editor: &mut Editor) -> Option<&mut HexView> {
+    let screen = editor.tree.focused_screen()?;
+    editor.screens.state_mut::<HexView>(screen)
+}
+
+/// The hex window `view`, with what moving in it needs.
 struct Target<'a> {
     hex: &'a mut HexBuffer,
     view: ViewId,
@@ -49,12 +77,19 @@ struct Target<'a> {
 }
 
 impl Target<'_> {
+    /// The focused window.
     fn of(editor: &mut Editor) -> Option<Target<'_>> {
+        let view = editor.tree.focus;
+        Self::at(editor, view)
+    }
+
+    fn at(editor: &mut Editor, view: ViewId) -> Option<Target<'_>> {
         let scrolloff = editor.config().scrolloff as u64;
-        let (view, doc) = current!(editor);
-        let area = hex_view::rows_area(view);
-        let view = view.id;
-        let hex = doc.hex_mut()?;
+        let window = editor.tree.screen_view(view)?;
+        let (screen, area) = (window.screen, hex_view::rows_area(window));
+        let hex = &mut editor.screens.state_mut::<HexView>(screen)?.buffer;
+        // (the screen shows in a new window when history shows it again)
+        hex.adopt_cursor(view);
         let layout = hex.cursor(view).layout;
         let rows = Rows::new(layout, hex.len(), area.width);
         Some(Target {
@@ -150,11 +185,10 @@ impl Target<'_> {
     }
 }
 
-/// Handles a key for a focused document in the hex view. Returns false for the keys the view
-/// leaves to the keymap (and for documents not in the hex view).
-pub fn handle_key(cx: &mut Context, key: KeyEvent, keys: &mut HexKeys) -> bool {
-    if !doc!(cx.editor).is_hex() {
-        keys.pending = None;
+/// Handles a key for the focused hex screen. Returns false for the keys the view leaves to the
+/// keymap (and when the focus isn't on a hex screen).
+pub fn handle_screen_key(cx: &mut Context, key: KeyEvent) -> bool {
+    if !focused(cx.editor) {
         return false;
     }
     // the view has no insert or select mode of the editor's
@@ -165,7 +199,9 @@ pub fn handle_key(cx: &mut Context, key: KeyEvent, keys: &mut HexKeys) -> bool {
         return false;
     };
     if target.cursor().overwrite {
-        keys.pending = None;
+        if let Some(state) = state(cx.editor) {
+            state.pending = None;
+        }
         // memory can only be overwritten while its program is paused, and that can change
         // while overwriting (it runs, a rewind starts)
         if let Some(why) = crate::debug::memory::not_editable(cx.editor) {
@@ -180,15 +216,33 @@ pub fn handle_key(cx: &mut Context, key: KeyEvent, keys: &mut HexKeys) -> bool {
         }
         return overwrite_key(cx, key);
     }
-    if let Some(prefix) = keys.pending.take() {
+    let pending = state(cx.editor).and_then(|state| state.pending.take());
+    if let Some(prefix) = pending {
         goto_key(cx, prefix, key);
         return true;
     }
-    read_only_key(cx, key, keys)
+    read_only_key(cx, key)
 }
 
-fn read_only_key(cx: &mut Context, key: KeyEvent, keys: &mut HexKeys) -> bool {
+/// `Esc` the view has no use of: the hex screen closes and the window shows what it covered.
+/// Bytes overwritten and not written stay: the screen is kept.
+fn close(cx: &mut Context) {
+    let view = cx.editor.tree.focus;
+    if state(cx.editor).is_some_and(|state| state.is_modified()) {
+        cx.editor.set_error("unwritten bytes");
+        return;
+    }
+    crate::screens::close(cx.editor, view);
+}
+
+fn read_only_key(cx: &mut Context, key: KeyEvent) -> bool {
     use KeyCode::*;
+    if key.code == Char('g') && key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+        if let Some(state) = state(cx.editor) {
+            state.pending = Some('g');
+        }
+        return true;
+    }
     let Some(mut target) = Target::of(cx.editor) else {
         return false;
     };
@@ -234,7 +288,6 @@ fn read_only_key(cx: &mut Context, key: KeyEvent, keys: &mut HexKeys) -> bool {
         Char('b') => target.move_to(cursor.offset.saturating_sub(1) / 4 * 4),
         Home => target.move_to(cursor.offset / per_row * per_row),
         End => target.move_to(cursor.offset / per_row * per_row + per_row - 1),
-        Char('g') => keys.pending = Some('g'),
         Tab => {
             let cursor = target.hex.cursor_mut(target.view);
             cursor.column = match cursor.column {
@@ -260,7 +313,10 @@ fn read_only_key(cx: &mut Context, key: KeyEvent, keys: &mut HexKeys) -> bool {
                 None => Some(cursor.offset),
             };
         }
-        Char(';') | Esc => target.hex.cursor_mut(target.view).anchor = None,
+        Char(';') => target.hex.cursor_mut(target.view).anchor = None,
+        // Esc drops a selection; with none it closes the view
+        Esc if cursor.anchor.is_some() => target.hex.cursor_mut(target.view).anchor = None,
+        Esc => close(cx),
         Char('y') => yank(cx),
         Char('n') => search_next(cx.editor, Direction::Forward),
         Char('N') => search_next(cx.editor, Direction::Backward),
@@ -371,7 +427,7 @@ fn undo(cx: &mut Context, undo: bool) {
 
 /// The second key of a `g` sequence.
 fn goto_key(cx: &mut Context, prefix: char, key: KeyEvent) {
-    // history (this fork): the hex view is a place like any buffer
+    // history (this fork): the hex view is a place in a window's history
     match (prefix, key.code) {
         ('g', KeyCode::Char('a')) => return crate::history::back(cx),
         ('g', KeyCode::Char('A')) => return crate::history::history_picker(cx),
@@ -580,8 +636,8 @@ fn search_prompt(cx: &mut Context, direction: Direction) {
             }
             match hex::parse_pattern(input) {
                 Ok(pattern) => {
-                    if let Some(hex) = doc_mut!(cx.editor).hex_mut() {
-                        hex.search = Some(pattern);
+                    if let Some(state) = state(cx.editor) {
+                        state.buffer.search = Some(pattern);
                     }
                     search_next(cx.editor, direction);
                 }
@@ -631,7 +687,7 @@ fn search_next(editor: &mut Editor, direction: Direction) {
 // Going to an offset
 
 fn goto_prompt(cx: &mut Context) {
-    let memory = doc!(cx.editor).memory().is_some();
+    let memory = state(cx.editor).is_some_and(|state| state.buffer.is_memory());
     let prompt = ui::Prompt::new(
         if memory {
             "goto address:"
@@ -653,7 +709,7 @@ fn goto_prompt(cx: &mut Context) {
 }
 
 /// Moves the cursor of the focused view to an offset, hex after `0x` (`0x1a4`), else decimal.
-/// An offset past the end goes to the last byte. Fails for a document not in the hex view.
+/// An offset past the end goes to the last byte. Fails when the focus isn't on a hex screen.
 pub fn goto(editor: &mut Editor, input: &str) -> anyhow::Result<()> {
     let offset = hex::parse_offset(input).map_err(anyhow::Error::msg)?;
     let Some(mut target) = Target::of(editor) else {
@@ -672,47 +728,53 @@ pub fn goto(editor: &mut Editor, input: &str) -> anyhow::Result<()> {
 
 // The mouse
 
-/// Handles a mouse event over a view whose document is in the hex view: the wheel scrolls it,
-/// a click puts the cursor on a byte (in the column clicked), dragging selects. `None` for the
-/// events over other views, which the editor handles.
+/// Handles a mouse event over a hex screen's window: the wheel scrolls it, a click puts the
+/// cursor on a byte (in the column clicked), dragging selects. `None` for the events over other
+/// windows, which the editor handles.
 pub fn handle_mouse(editor: &mut Editor, event: &MouseEvent) -> Option<EventResult> {
     let MouseEvent {
         kind, row, column, ..
     } = *event;
+    let is_hex = |editor: &Editor, view: ViewId| {
+        editor
+            .tree
+            .screen_view(view)
+            .is_some_and(|window| editor.screens.state::<HexView>(window.screen).is_some())
+    };
     let view_id = match kind {
-        // dragging goes on in the view where it started
-        MouseEventKind::Drag(MouseButton::Left) => view!(editor).id,
-        _ => editor.tree.views().find_map(|(view, _)| {
-            let area = hex_view::rows_area(view);
+        // dragging goes on in the window where it started
+        MouseEventKind::Drag(MouseButton::Left) => editor.tree.focus,
+        _ => editor.tree.windows().find_map(|(window, _)| {
+            let window = match window {
+                vortex_view::tree::Window::Screen(window) => window,
+                _ => return None,
+            };
+            let area = hex_view::rows_area(window);
             let inside = (area.left()..area.right()).contains(&column)
                 && (area.top()..area.bottom()).contains(&row);
-            inside.then_some(view.id)
+            inside.then_some(window.id)
         })?,
     };
-    let doc_id = editor.tree.get(view_id).doc;
-    if !editor.documents[&doc_id].is_hex() {
+    if !is_hex(editor, view_id) {
         return None;
     }
     let lines = editor.config().scroll_lines.max(1) as i64;
     match kind {
         MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
-            let focused = editor.tree.focus;
-            editor.tree.focus = view_id;
-            if let Some(mut target) = Target::of(editor) {
+            if let Some(mut target) = Target::at(editor, view_id) {
                 target.scroll(if kind == MouseEventKind::ScrollDown {
                     lines
                 } else {
                     -lines
                 });
             }
-            editor.tree.focus = focused;
         }
         MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
             if matches!(kind, MouseEventKind::Down(_)) {
                 editor.focus(view_id);
             }
-            let area = hex_view::rows_area(editor.tree.get(view_id));
-            let mut target = Target::of(editor)?;
+            let area = hex_view::rows_area(editor.tree.screen_view(view_id)?);
+            let mut target = Target::at(editor, view_id)?;
             let Some((offset, clicked)) = byte_at(&target, area, column, row) else {
                 return Some(EventResult::Consumed(None));
             };
@@ -748,18 +810,106 @@ fn byte_at(target: &Target, area: Rect, column: u16, row: u16) -> Option<(u64, C
     (offset < target.hex.len()).then_some((offset, clicked))
 }
 
-/// `:hex`: shows the current document in the hex view, or back as text.
+/// `:hex`: shows the current buffer's file in the hex view, a screen over its window, or (on the
+/// hex screen) back as text.
 pub fn toggle(cx: &mut compositor::Context) -> anyhow::Result<()> {
-    let trust_full = super::typed::doc_trust_full(cx.editor);
-    let scrolloff = cx.editor.config().scrolloff;
-    let (view, doc) = current!(cx.editor);
-    if doc.is_hex() {
-        doc.leave_hex()?;
-        // the text as the file is now (empty until now for a file opened in the hex view)
-        doc.reload(view, &cx.editor.diff_providers, trust_full)?;
-        view.ensure_cursor_in_view(doc, scrolloff);
-    } else {
-        doc.enter_hex()?;
+    let editor = &mut *cx.editor;
+    if focused(editor) {
+        let view = editor.tree.focus;
+        let Some(state) = state(editor) else {
+            return Ok(());
+        };
+        if state.buffer.is_memory() {
+            anyhow::bail!("this is a program's memory: it has no text to show");
+        }
+        if state.is_modified() {
+            anyhow::bail!("unwritten bytes");
+        }
+        crate::screens::close(editor, view);
+        return Ok(());
     }
+    let doc = doc!(editor);
+    let Some(path) = doc.path().map(ToOwned::to_owned) else {
+        anyhow::bail!("the hex view shows a file: write the buffer to one first");
+    };
+    if doc.is_modified() {
+        anyhow::bail!("the hex view shows the file on disk: write or :reload the buffer first");
+    }
+    editor.open_hex(&path, Placement::Cover)?;
+    Ok(())
+}
+
+// Writing and reloading
+
+/// The name of the focused hex screen if it has bytes overwritten and not written.
+pub fn unwritten(editor: &Editor) -> Option<String> {
+    let screen = editor.focused_screen()?;
+    screen
+        .state::<HexView>()
+        .is_some_and(|hex| hex.is_modified())
+        .then(|| screen.name.clone())
+}
+
+/// `:w` on the focused hex screen: its overwritten bytes are written, in place; memory sends them
+/// to the program.
+pub fn write(editor: &mut Editor, force: bool) -> anyhow::Result<()> {
+    let Some(screen) = editor.tree.focused_screen() else {
+        return Ok(());
+    };
+    // memory isn't a file: `:w` sends its overwritten bytes to the program
+    if editor
+        .screens
+        .state::<HexView>(screen)
+        .is_some_and(|hex| hex.buffer.is_memory())
+    {
+        return crate::debug::memory::write(editor);
+    }
+    write_screen(editor, screen, force)
+}
+
+/// Writes the overwritten bytes of the hex screen `screen` to its file, in place, and says how
+/// many. A file changed on disk since it was read is only overwritten with `force`. The buffer
+/// of the same file, if open, sees the change on disk.
+pub fn write_screen(
+    editor: &mut Editor,
+    screen: vortex_view::screen::ScreenId,
+    force: bool,
+) -> anyhow::Result<()> {
+    let name = editor
+        .screens
+        .get(screen)
+        .map(|screen| screen.name.clone())
+        .unwrap_or_default();
+    let Some(hex) = editor.screens.state_mut::<HexView>(screen) else {
+        return Ok(());
+    };
+    if hex.buffer.is_memory() {
+        return Ok(());
+    }
+    if !force && hex.disk_change() == vortex_view::document::DiskChange::Changed {
+        anyhow::bail!("{name} changed on disk: :write! to overwrite it");
+    }
+    let written = hex.write()?;
+    let path = hex.path.clone();
+    editor.set_status(format!(
+        "'{name}' written, {written} byte{} changed in place",
+        if written == 1 { "" } else { "s" },
+    ));
+    if let Some(path) = path {
+        crate::handlers::disk::check_paths(editor, &[path]);
+    }
+    Ok(())
+}
+
+/// `:reload` on the focused hex screen: the bytes as they are on disk, the overwritten ones
+/// dropped.
+pub fn reload(editor: &mut Editor) -> anyhow::Result<()> {
+    let Some(hex) = state(editor) else {
+        return Ok(());
+    };
+    if hex.buffer.is_memory() {
+        anyhow::bail!("memory isn't a file: it can't be reloaded");
+    }
+    hex.reload()?;
     Ok(())
 }

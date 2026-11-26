@@ -412,9 +412,7 @@ impl ExplorerPicker {
                     if close {
                         compositor.remove(ID);
                     }
-                    if let Some(view) = compositor.find::<crate::ui::EditorView>() {
-                        view.open_markdown(cx.editor, crate::markdown_view::Start::Source, false);
-                    }
+                    crate::markdown_view::open(cx.editor, crate::markdown_view::Start::Source);
                 })))
             }
             Ok(_) if close => close_callback(),

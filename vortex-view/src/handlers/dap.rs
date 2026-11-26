@@ -29,14 +29,18 @@ pub fn dap_pos_to_pos(doc: &vortex_core::Rope, line: usize, column: usize) -> Op
 /// program's memory (this fork) or a screen (a terminal), which keep their place and the focus
 /// while the source moves in another view (a split of it when there is none).
 pub fn in_source_view<R>(editor: &mut Editor, f: impl FnOnce(&mut Editor) -> R) -> R {
-    // a terminal: the window for documents
-    if editor.is_screen_view(editor.tree.focus) {
+    // a screen (a terminal, the debug panel) or a terminal's lines: the window for documents
+    let on_buffer = editor
+        .tree
+        .try_get(editor.tree.focus)
+        .is_some_and(|view| editor.is_buffer(view.doc));
+    if !on_buffer {
         return editor.in_document_window(f);
     }
     let focused = editor.tree.focus;
     let shows_memory = |editor: &Editor, view: crate::ViewId| {
         let doc = editor.tree.get(view).doc;
-        editor.documents[&doc].memory().is_some() || editor.documents[&doc].is_screen()
+        !editor.is_buffer(doc)
     };
     if !shows_memory(editor, focused) {
         return f(editor);

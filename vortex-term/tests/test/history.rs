@@ -780,8 +780,9 @@ async fn the_picker_is_modal_s_filters_and_question_mark_shows_its_keys() -> any
     h.keys("j").await;
     assert!(!on_screen(&h.app, "go there"));
 
-    // `s` filters: the rows narrow to the matching ones
-    h.keys("s10").await;
+    // `s` filters: the rows narrow to the matching ones (`:10`, so the random name of the temporary
+    // directory can't match it fuzzily)
+    h.keys("s:10").await;
     h.settle(Duration::from_millis(300)).await;
     let rows = screen_rows(&h.app);
     assert!(
@@ -867,26 +868,32 @@ async fn enter_on_the_present_and_esc_do_nothing() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_screen_is_listed_by_name_and_enter_goes_to_the_place_before_it() -> anyhow::Result<()> {
+async fn a_screen_is_listed_by_name_and_enter_shows_it_again() -> anyhow::Result<()> {
     let (_dir, mut h) = forty()?;
-    h.keys("3j:dashboard<ret>").await;
+    // the hex view over the file, closed: history keeps it
+    h.keys("3j:hex<ret>").await;
     h.settle(Duration::from_millis(300)).await;
+    assert!(h.app.editor.is_screen_view(h.app.editor.tree.focus));
+    h.keys("<esc>").await;
     let rows = h.picker();
     assert_eq!(rows.len(), 2, "{rows:?}");
-    assert_eq!((rows[0].0, rows[0].1.as_str()), (true, "the dashboard"));
-    assert!(rows[1].1.ends_with("forty.txt:4"), "{rows:?}");
-    assert!(!rows[1].0);
+    assert!(rows[0].0 && rows[0].1.ends_with("forty.txt:4"), "{rows:?}");
+    // named by its path, as the file's places are
+    assert!(
+        !rows[1].0 && rows[1].1.ends_with("forty.txt (hex)"),
+        "{rows:?}"
+    );
     open_picker(&mut h).await;
     assert!(
-        on_screen(&h.app, "the dashboard"),
+        on_screen(&h.app, "forty.txt (hex)"),
         "{:#?}",
         screen_rows(&h.app)
     );
     h.keys("j<ret>").await;
     h.settle(Duration::from_millis(300)).await;
-    assert_eq!(h.name(), "forty.txt");
-    assert_eq!(h.line(), 3);
     assert!(!picker_is_open(&h));
+    let focused = h.app.editor.focused_screen().map(|screen| screen.kind);
+    assert_eq!(focused, Some(vortex_view::screen::ScreenKind::Hex));
     h.finish().await
 }
 
@@ -908,7 +915,7 @@ async fn the_picker_goes_to_a_place_in_another_file() -> anyhow::Result<()> {
     h.finish().await
 }
 
-/// The diff view: `gA` opens the picker over it (the present is "a diff"), and `Enter` leaves
+/// The diff view: `gA` opens the picker over it (the present is the diff), and `Enter` leaves
 /// the diff for the place.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_diff() {
@@ -947,7 +954,7 @@ async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_dif
         session.rows()
     );
 
-    // `gA` over the diff: the picker lists the present, "a diff", and the place before it
+    // `gA` over the diff: the picker lists the present, the diff, and the place it covers
     session.keys("gA").await;
     session
         .wait_for_screen("the history picker", |rows| rows_have(rows, "●"))
@@ -955,7 +962,7 @@ async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_dif
     let rows = session.rows();
     assert!(
         rows.iter()
-            .any(|row| row.contains("●") && row.contains("a diff")),
+            .any(|row| row.contains("●") && row.contains("diff a.txt")),
         "{rows:#?}"
     );
     assert!(rows_have(&rows, "a.txt:5"), "{rows:#?}");
@@ -978,7 +985,7 @@ async fn the_picker_from_the_diff_view_opens_the_picker_and_enter_leaves_the_dif
     );
     // the diff is a place of the history now, listed by name
     let rows = history_rows(editor, &editor.place());
-    assert!(rows.iter().any(|row| row.name == "a diff"), "{rows:?}");
+    assert!(rows.iter().any(|row| row.name == "diff a.txt"), "{rows:?}");
 }
 
 // Switching files

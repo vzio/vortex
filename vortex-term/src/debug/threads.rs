@@ -106,7 +106,7 @@ pub fn cycle(editor: &mut Editor, by: isize) {
 
 /// The thread under the cursor in the call stack, else the spectated one.
 pub fn selected_or_spectated(editor: &Editor) -> Option<ThreadKey> {
-    if editor.debug.is_focused() && editor.debug.section == Section::Stack {
+    if editor.debug_panel_focused() && editor.debug.section == Section::Stack {
         if let Some(key) = super::panel::current_thread(editor) {
             return Some(key);
         }

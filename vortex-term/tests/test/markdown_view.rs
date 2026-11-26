@@ -14,7 +14,7 @@ use vortex_term::config::Config;
 use vortex_view::document::Mode;
 use vortex_view::editor::MarkdownViewStartup;
 use vortex_view::graphics::Color;
-use vortex_view::history::{Place, ScreenKind};
+use vortex_view::history::Place;
 use vortex_view::theme::{Loader, Modifier};
 use vortex_view::{doc, doc_mut};
 
@@ -219,20 +219,28 @@ impl Session {
 }
 
 fn up(session: &mut Session) -> bool {
-    session.app.markdown().is_some()
+    session.app.with_markdown(|_, _| ()).is_some()
 }
 
 fn reading(session: &mut Session) -> usize {
-    session.app.markdown().expect("the render mode").0.reading()
+    session
+        .app
+        .with_markdown(|markdown, _| markdown.reading())
+        .expect("the render mode")
 }
 
 fn top(session: &mut Session) -> usize {
-    session.app.markdown().expect("the render mode").0.top()
+    session
+        .app
+        .with_markdown(|markdown, _| markdown.top())
+        .expect("the render mode")
 }
 
 fn page(session: &mut Session) -> Vec<String> {
-    let (markdown, editor) = session.app.markdown().expect("the render mode");
-    markdown.text(editor)
+    session
+        .app
+        .with_markdown(|markdown, editor| markdown.text(editor))
+        .expect("the render mode")
 }
 
 /// The line of the page with `text` in it.
@@ -245,17 +253,17 @@ fn line_of(session: &mut Session, text: &str) -> usize {
 
 /// The line of the source the line `line` of the page comes from.
 fn source_of(session: &mut Session, line: usize) -> usize {
-    let (markdown, editor) = session.app.markdown().expect("the render mode");
-    markdown.page(editor).lines[line].source
+    session
+        .app
+        .with_markdown(|markdown, editor| markdown.page(editor).lines[line].source)
+        .expect("the render mode")
 }
 
 fn offset(session: &mut Session, block: usize) -> usize {
     session
         .app
-        .markdown()
+        .with_markdown(|markdown, _| markdown.offset(block))
         .expect("the render mode")
-        .0
-        .offset(block)
 }
 
 /// The row of the screen with `text`, as text, and its number.
@@ -1012,11 +1020,13 @@ async fn capital_h_and_l_scroll_by_half_and_gh_gl_go_to_the_ends() {
     let fixture = fixture();
     let mut session = rendered(&fixture.guide).await;
     let (_, row) = at_the_long_command(&mut session).await;
-    let (visible, max) = {
-        let (markdown, editor) = session.app.markdown().unwrap();
-        let block = &markdown.page(editor).code_blocks[0];
-        (block.visible, block.max_offset())
-    };
+    let (visible, max) = session
+        .app
+        .with_markdown(|markdown, editor| {
+            let block = &markdown.page(editor).code_blocks[0];
+            (block.visible, block.max_offset())
+        })
+        .unwrap();
     assert!(max > visible / 2 + 1);
     let half = (visible / 2).max(1);
 
@@ -1267,9 +1277,10 @@ async fn ga_after_v_goes_back_to_the_source() {
     let doc_id = doc!(session.app.editor).id();
     session.keys("V").await;
     assert!(up(&mut session));
+    // the page covers the window; the place of text commands is its source's
     assert!(matches!(
         session.app.editor.place(),
-        Place::Screen(screen) if screen.kind == ScreenKind::Markdown(doc_id)
+        Place::Text { doc, .. } if doc == doc_id
     ));
     session.keys("ga").await;
     assert!(!up(&mut session), "{:#?}", session.rows());

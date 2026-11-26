@@ -1,4 +1,4 @@
-//! The terminals (fork feature): shells in windows of the tree, each a screen document (see
+//! The terminals (fork feature): shells in windows of the tree, each a screen (see
 //! `vortex_view::screen`). `C-t` shows and hides the scratch terminal, the window menu opens more,
 //! `:sh` runs a command in the scratch one, and a `vx` in a terminal opens files in this editor.
 //! A terminal's window has modes of its own ([`modes`]): insert types in the shell, normal takes
@@ -16,4 +16,4 @@ pub mod window;
 
 pub use modes::{focused, viewing};
 pub use mouse::handle_mouse;
-pub use render::{cursor, render};
+pub use render::{cursor, render, render_lines};

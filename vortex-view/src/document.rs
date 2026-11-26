@@ -119,8 +119,6 @@ pub struct DocumentSavedEvent {
     pub doc_id: DocumentId,
     pub path: PathBuf,
     pub text: Rope,
-    /// For a document in the hex view (this fork): the number of bytes written in place.
-    pub hex_written: Option<usize>,
 }
 
 /// What the file of a document looks like on disk, as of the last time the document loaded or
@@ -141,17 +139,6 @@ impl DiskState {
         let mtime_len = Self::stat(path)?;
         let bytes = std::fs::read(path).ok()?;
         Some(Self::of(mtime_len, &bytes))
-    }
-
-    /// The state of the file at `path` from its metadata alone, for a document in the hex view,
-    /// whose file can be too big to read whole: any new modification time is a change.
-    fn stat_only(path: &Path) -> Option<Self> {
-        let (mtime, len) = Self::stat(path)?;
-        Some(Self {
-            mtime,
-            len,
-            hash: 0,
-        })
     }
 
     fn stat(path: &Path) -> Option<(SystemTime, u64)> {
@@ -306,14 +293,10 @@ pub struct Document {
 
     pub readonly: bool,
 
-    /// The bytes of the file, while the document is in the hex view (this fork). The text is then
-    /// left as it was and can't change: transactions are refused.
-    hex: Option<Box<crate::hex::HexBuffer>>,
-
-    /// What the document's windows show instead of its text, when it is a screen (this fork:
-    /// a terminal). Its text is only what the screen puts there (view mode's lines): transactions
-    /// are refused.
-    screen: Option<crate::screen::Screen>,
+    /// The screen whose lines this text is (this fork: a terminal's in view mode), with the
+    /// screen's name: a read-only text that isn't a buffer of its own (no path, never modified;
+    /// the buffer picker and the window for documents leave it out). Transactions are refused.
+    lines_of: Option<(crate::screen::ScreenId, String)>,
 
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
@@ -872,8 +855,7 @@ impl Document {
             blame: Default::default(),
             focused_at: std::time::Instant::now(),
             readonly: false,
-            hex: None,
-            screen: None,
+            lines_of: None,
             bookmarks: Default::default(),
             jump_labels: HashMap::new(),
             document_highlights: HashMap::new(),
@@ -954,148 +936,23 @@ impl Document {
         Ok(doc)
     }
 
-    /// Opens the file at `path` in the hex view (this fork), without reading it: the text stays
-    /// empty, and there is no language.
-    pub fn open_hex(
-        path: &Path,
-        config: Arc<dyn DynAccess<Config>>,
-        syn_loader: Arc<ArcSwap<syntax::Loader>>,
-    ) -> Result<Self, DocumentOpenError> {
-        if path.metadata().is_ok_and(|metadata| !metadata.is_file()) {
-            return Err(DocumentOpenError::IrregularFile);
-        }
-        let hex = crate::hex::HexBuffer::open(path)?;
-        let mut doc = Self::from(Rope::new(), None, config, syn_loader);
-        doc.hex = Some(Box::new(hex));
-        doc.set_path_impl(Some(path), true);
-        Ok(doc)
-    }
-
-    /// A document showing a debugged program's memory in the hex view (this fork): it has no
-    /// path and no text, and its name says what it shows.
-    pub fn open_memory(
-        memory: crate::hex::MemorySource,
-        config: Arc<dyn DynAccess<Config>>,
-        syn_loader: Arc<ArcSwap<syntax::Loader>>,
-    ) -> Self {
-        let mut doc = Self::from(Rope::new(), None, config, syn_loader);
-        doc.hex = Some(Box::new(crate::hex::HexBuffer::debuggee(memory)));
-        doc
-    }
-
-    /// The debugged program's memory, for a document that shows it.
-    pub fn memory(&self) -> Option<&crate::hex::MemorySource> {
-        self.hex.as_ref()?.memory()
-    }
-
-    /// The bytes of the document, if it is in the hex view.
-    pub fn hex(&self) -> Option<&crate::hex::HexBuffer> {
-        self.hex.as_deref()
-    }
-
-    pub fn hex_mut(&mut self) -> Option<&mut crate::hex::HexBuffer> {
-        self.hex.as_deref_mut()
-    }
-
-    pub fn is_hex(&self) -> bool {
-        self.hex.is_some()
-    }
-
-    /// A screen document (this fork): what a window that isn't a text document shows, named
-    /// `name`. It has no path and its text can't be edited.
-    pub fn screen_document(
-        kind: crate::screen::ScreenKind,
+    /// The lines of the screen `screen` as a read-only text (this fork: a terminal's in view
+    /// mode), named `name`, `text` with `selection` in the window `view` and its top at `top`.
+    pub fn screen_lines(
+        screen: crate::screen::ScreenId,
         name: String,
+        text: Rope,
         config: Arc<dyn DynAccess<Config>>,
         syn_loader: Arc<ArcSwap<syntax::Loader>>,
     ) -> Self {
-        let mut doc = Self::default(config, syn_loader);
-        doc.screen = Some(crate::screen::Screen { kind, name });
+        let mut doc = Self::from(text, None, config, syn_loader);
+        doc.lines_of = Some((screen, name));
         doc
     }
 
-    /// What the document's windows show, when it is a screen.
-    pub fn screen(&self) -> Option<&crate::screen::Screen> {
-        self.screen.as_ref()
-    }
-
-    pub fn screen_kind(&self) -> Option<crate::screen::ScreenKind> {
-        self.screen.as_ref().map(|screen| screen.kind)
-    }
-
-    pub fn is_screen(&self) -> bool {
-        self.screen.is_some()
-    }
-
-    /// Renames a screen document (the buffer picker, the statusline).
-    pub fn set_screen_name(&mut self, name: String) {
-        if let Some(screen) = &mut self.screen {
-            screen.name = name;
-        }
-    }
-
-    /// Empties the text of a screen document (view mode ended).
-    pub fn clear_screen_text(&mut self) {
-        let views: Vec<ViewId> = self.selections.keys().copied().collect();
-        if let Some(&view) = views.first() {
-            self.set_screen_text(Rope::new(), view, Selection::point(0));
-        }
-    }
-
-    /// Replaces the text of a screen document with `text` (view mode's lines), with `selection`
-    /// in `view`, as a document of its own: no history, no change to undo.
-    pub fn set_screen_text(&mut self, text: Rope, view: ViewId, selection: Selection) {
-        debug_assert!(self.screen.is_some());
-        self.text = text;
-        self.changes = ChangeSet::new(self.text.slice(..));
-        self.old_state = None;
-        self.history = Cell::new(History::default());
-        self.version += 1;
-        let start = Selection::point(0);
-        for selection in self.selections.values_mut() {
-            *selection = start.clone();
-        }
-        for data in self.view_data.values_mut() {
-            data.view_position = ViewPosition::default();
-        }
-        self.set_selection(view, selection);
-    }
-
-    /// Shows the document in the hex view: its file on disk, so the document must have one and
-    /// no unsaved changes. The text stays as it is, unchanged until [`Self::leave_hex`].
-    pub fn enter_hex(&mut self) -> anyhow::Result<()> {
-        if self.hex.is_some() {
-            return Ok(());
-        }
-        let Some(path) = self.path.clone() else {
-            bail!("the hex view shows a file: write the buffer to one first");
-        };
-        if self.is_modified() {
-            bail!("the hex view shows the file on disk: write or :reload the buffer first");
-        }
-        let hex = crate::hex::HexBuffer::open(&path)?;
-        self.hex = Some(Box::new(hex));
-        self.refresh_disk_state();
-        Ok(())
-    }
-
-    /// Leaves the hex view, unless bytes are overwritten and not written. The text is still the
-    /// one before the hex view (empty for a file opened in it): reload it from the file.
-    pub fn leave_hex(&mut self) -> anyhow::Result<()> {
-        if self.memory().is_some() {
-            bail!("this is a program's memory: it has no text to show");
-        }
-        if let Some(hex) = &self.hex {
-            if hex.is_modified() {
-                bail!(
-                    "{} overwritten bytes not written: :w to write them, or :reload to drop them",
-                    hex.modified_bytes()
-                );
-            }
-        }
-        self.hex = None;
-        self.refresh_disk_state();
-        Ok(())
+    /// The screen whose lines this text is, if it is one's (see [`Self::screen_lines`]).
+    pub fn lines_of(&self) -> Option<crate::screen::ScreenId> {
+        self.lines_of.as_ref().map(|(screen, _)| *screen)
     }
 
     /// The same as [`format`], but only returns formatting changes if auto-formatting
@@ -1273,9 +1130,6 @@ impl Document {
         // state without blocking any further edits.
         let text = self.text().clone();
 
-        if self.memory().is_some() {
-            bail!("memory isn't a file: :w in its view writes the changed bytes to the program");
-        }
         let path = match path {
             Some(path) => vortex_stdx::path::canonicalize(path),
             None => {
@@ -1306,35 +1160,8 @@ impl Document {
             );
         }
 
-        // In the hex view, the overwritten bytes are written in place, now: a few small writes
-        // to the file, never all of it.
-        let hex_saved = match self.hex.as_mut() {
-            Some(hex) => {
-                if self.path.as_ref() != Some(&path) {
-                    bail!("the hex view writes its own file only, in place");
-                }
-                let written = hex.write_in_place(&path)?;
-                let save_time = path
-                    .metadata()
-                    .and_then(|metadata| metadata.modified())
-                    .unwrap_or_else(|_| SystemTime::now());
-                Some(DocumentSavedEvent {
-                    revision: current_rev,
-                    save_time,
-                    doc_id,
-                    path: path.clone(),
-                    text: Rope::new(),
-                    hex_written: Some(written),
-                })
-            }
-            None => None,
-        };
-
         // We encode the file according to the `Document`'s encoding.
         let future = async move {
-            if let Some(event) = hex_saved {
-                return Ok(event);
-            }
             use tokio::fs;
             if let Some(parent) = path.parent() {
                 // TODO: display a prompt asking the user if the directories should be created
@@ -1475,7 +1302,6 @@ impl Document {
                 doc_id,
                 path,
                 text: text.clone(),
-                hex_written: None,
             };
 
             for language_server in language_servers {
@@ -1578,14 +1404,6 @@ impl Document {
         if mtime == state.mtime && len == state.len {
             return DiskChange::Unchanged;
         }
-        if self.hex.is_some() {
-            // too big to read and hash, maybe: a new modification time is a change
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::hash::DefaultHasher::new();
-            (mtime, len).hash(&mut hasher);
-            self.changed_hash = Some(hasher.finish());
-            return DiskChange::Changed;
-        }
         let Ok(bytes) = std::fs::read(path) else {
             return DiskChange::Unchanged;
         };
@@ -1609,10 +1427,7 @@ impl Document {
 
     /// Takes the file as it is now for the state of the disk.
     fn refresh_disk_state(&mut self) {
-        self.disk = match self.hex {
-            Some(_) => self.path.as_deref().and_then(DiskState::stat_only),
-            None => self.path.as_deref().and_then(DiskState::read),
-        };
+        self.disk = self.path.as_deref().and_then(DiskState::read);
         self.changed_hash = None;
         self.warned_hash = None;
     }
@@ -1644,16 +1459,6 @@ impl Document {
 
         // Once we have a valid path we check if its readonly status has changed
         self.detect_readonly();
-
-        if let Some(old) = &self.hex {
-            // the bytes as they are now, the overwritten ones dropped, the cursors kept
-            let mut hex = crate::hex::HexBuffer::open(&path)?;
-            hex.keep_cursors(old);
-            self.hex = Some(Box::new(hex));
-            self.refresh_disk_state();
-            self.pickup_last_saved_time();
-            return Ok(());
-        }
 
         let mtime_len = DiskState::stat(&path);
         let bytes = std::fs::read(&path)?;
@@ -1815,9 +1620,6 @@ impl Document {
         self.document_highlight_controllers.remove(&view_id);
         self.code_action_hints.remove(&view_id);
         self.code_action_controllers.remove(&view_id);
-        if let Some(hex) = &mut self.hex {
-            hex.remove_view(view_id);
-        }
     }
 
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
@@ -1829,9 +1631,8 @@ impl Document {
     ) -> bool {
         use vortex_core::Assoc;
 
-        // the text of a document in the hex view is hidden: nothing may change it unseen; a
-        // screen's (this fork) is what the screen put there
-        if self.hex.is_some() || self.screen.is_some() {
+        // a screen's lines (this fork) are as the screen showed them
+        if self.lines_of.is_some() {
             return false;
         }
 
@@ -2214,9 +2015,6 @@ impl Document {
 
     /// If there are unsaved modifications.
     pub fn is_modified(&self) -> bool {
-        if let Some(hex) = &self.hex {
-            return hex.is_modified();
-        }
         let history = self.history.take();
         let current_revision = history.current_revision();
         self.history.set(history);
@@ -2548,11 +2346,8 @@ impl Document {
     }
 
     pub fn display_name(&self) -> Cow<'_, str> {
-        if let Some(screen) = &self.screen {
-            return screen.name.as_str().into();
-        }
-        if let Some(memory) = self.memory() {
-            return format!("memory: {}", memory.label).into();
+        if let Some((_, name)) = &self.lines_of {
+            return name.as_str().into();
         }
         self.relative_path()
             .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |path| path.to_string_lossy())
@@ -2868,7 +2663,7 @@ impl Document {
             .unwrap_or_else(|| "↪ ".into());
         let tab_width = self.tab_width() as u16;
         // a screen's lines (this fork) are already as wide as its window was
-        let soft_wrap = enable_soft_wrap && viewport_width > 10 && self.screen.is_none();
+        let soft_wrap = enable_soft_wrap && viewport_width > 10 && self.lines_of.is_none();
         let except = language_soft_wrap
             .and_then(|soft_wrap| soft_wrap.except.as_deref())
             .or(editor_soft_wrap.except.as_deref())

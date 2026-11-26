@@ -57,13 +57,10 @@ pub(crate) fn request_unconditionally(editor: &mut Editor, doc_id: DocumentId) {
     let Some(doc) = editor.document_mut(doc_id) else {
         return;
     };
-    // scratch buffers have nothing to blame, and neither has the hex view
+    // scratch buffers have nothing to blame
     let Some(path) = doc.path().map(ToOwned::to_owned) else {
         return;
     };
-    if doc.is_hex() {
-        return;
-    }
     // (there is no runtime in some tests)
     if tokio::runtime::Handle::try_current().is_err() {
         return;

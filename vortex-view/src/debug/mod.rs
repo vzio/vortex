@@ -357,13 +357,11 @@ pub struct Cursor {
     pub scroll: usize,
 }
 
-/// The debug panel below the editor's splits, and what it shows.
+/// The debug panel and what it shows. The panel is a screen in a window of its own (this fork:
+/// see `crate::screen`), shown and focused like any window; this is what it shows, which lives on
+/// while its window is hidden.
 #[derive(Debug, Default)]
 pub struct DebugState {
-    /// Shown below the splits.
-    pub visible: bool,
-    /// Keys go to the panel.
-    pub focused: bool,
     /// Where the panel was last drawn.
     pub area: Rect,
     /// The section the keys act on (and the one shown, in a narrow panel).
@@ -410,6 +408,11 @@ pub struct DebugState {
     pub engine: engine::Engine,
     /// Debug mode (this fork): on while `Some`. Its keys come first, and its bar shows.
     pub mode: Option<DebugMode>,
+    /// The panel's screen, while its window is open (this fork: a window of the tree, see
+    /// `crate::screen`).
+    pub panel: Option<crate::screen::ScreenId>,
+    /// Where the panel's window was when it was hidden, to show it there again.
+    pub panel_place: Option<crate::tree::Place>,
 }
 
 /// Debug mode's own state: following the spectated thread, or looking around.
@@ -428,29 +431,80 @@ pub struct SessionThreads {
     pub threads: Vec<Thread>,
 }
 
+impl crate::Editor {
+    /// The debug panel's window, while it is shown (this fork).
+    pub fn debug_panel_view(&self) -> Option<crate::ViewId> {
+        let view = self.view_of(self.debug.panel?)?;
+        self.tree.is_visible(view).then_some(view)
+    }
+
+    /// Whether the debug panel's window is shown.
+    pub fn debug_panel_shown(&self) -> bool {
+        self.debug_panel_view().is_some()
+    }
+
+    /// Whether the debug panel's window has the focus: it takes the keys.
+    pub fn debug_panel_focused(&self) -> bool {
+        self.debug.panel.is_some() && self.tree.focused_screen() == self.debug.panel
+    }
+
+    /// Shows the debug panel's window where it goes (where it was, else along the edge of
+    /// `[editor.debugger.panel]`), focused if `focus`; else the focus stays where it was.
+    pub fn show_debug_panel(&mut self, focus: bool) {
+        let screen = match self.debug.panel {
+            Some(screen) if self.screens.get(screen).is_some() => screen,
+            _ => {
+                let screen = self.screens.add(crate::screen::Screen::new(
+                    crate::screen::ScreenKind::DebugPanel,
+                    "debug",
+                ));
+                self.debug.panel = Some(screen);
+                screen
+            }
+        };
+        if let Some(view) = self.debug_panel_view() {
+            if focus {
+                self.focus(view);
+            }
+            return;
+        }
+        let from = self.tree.focus;
+        self.show_screen(screen);
+        if !focus && self.tree.contains(from) {
+            self.focus(from);
+        }
+    }
+
+    /// Hides the debug panel's window (it comes back where it was).
+    pub fn hide_debug_panel(&mut self) {
+        if let Some(view) = self.debug_panel_view() {
+            let place = self.hide_screen(view);
+            self.debug.panel_place = Some(place);
+        }
+    }
+
+    /// The focus leaves the debug panel for the window for documents, if the panel had it.
+    pub fn unfocus_debug_panel(&mut self) {
+        if self.debug_panel_focused() {
+            // the window for documents, else the screen over the last text window (a memory
+            // view), else any other window shown
+            let panel = self.tree.focus;
+            let covering = Some(self.tree.top_of(self.tree.text_focus()))
+                .filter(|&id| id != panel && self.tree.is_visible(id));
+            let other = || {
+                self.tree
+                    .traverse()
+                    .map(|(id, _)| id)
+                    .find(|&id| id != panel)
+            };
+            if let Some(view) = self.document_view().or(covering).or_else(other) {
+                self.focus(view);
+            }
+        }
+    }
+}
+
 impl DebugState {
-    pub fn show(&mut self) {
-        self.visible = true;
-    }
-
-    pub fn hide(&mut self) {
-        self.visible = false;
-        self.focused = false;
-    }
-
-    pub fn focus(&mut self) {
-        self.visible = true;
-        self.focused = true;
-    }
-
-    pub fn unfocus(&mut self) {
-        self.focused = false;
-    }
-
-    pub fn is_focused(&self) -> bool {
-        self.visible && self.focused
-    }
-
     /// Whether debug mode is on.
     pub fn mode_on(&self) -> bool {
         self.mode.is_some()
@@ -609,7 +663,7 @@ impl DebugState {
         self.generation += 1;
     }
 
-    /// The session ended: the panel hides, the status says how.
+    /// The session ended: the status says how (the caller hides the panel's window).
     pub fn end_session(&mut self) {
         self.status = Status::Ended {
             code: self.exit_code,
@@ -622,7 +676,6 @@ impl DebugState {
         }
         self.spectator.end_session();
         self.engine.end_session();
-        self.hide();
     }
 
     /// Whether the node at `path` is shown expanded.

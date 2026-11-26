@@ -1,4 +1,4 @@
-use crate::{graphics::Rect, View, ViewId};
+use crate::{graphics::Rect, screen::ScreenId, View, ViewId};
 use slotmap::SlotMap;
 
 // the dimensions are recomputed on window resize/tree change.
@@ -15,6 +15,10 @@ pub struct Tree {
 
     // used for traversals
     stack: Vec<(ViewId, Rect)>,
+
+    /// The text window that last had the focus (this fork): what text commands act on while a
+    /// screen's window has the focus (see [`Self::text_focus`]).
+    last_text: Option<ViewId>,
 }
 
 #[derive(Debug)]
@@ -25,6 +29,14 @@ pub struct Node {
     /// a terminal's window takes `[editor.terminal] size`. `None` shares what the sized nodes
     /// leave equally with the other unsized ones.
     share: Option<u16>,
+    /// The window this one covers (this fork): a screen opened in a window (a diff, the Markdown
+    /// page, the hex view) or a terminal's lines in view mode cover what the window showed, which
+    /// is parked meanwhile and takes its place again when the cover closes ([`Tree::uncover`]).
+    under: Option<ViewId>,
+    /// Out of the layout (this fork): covered by another window, or the last text window, closed
+    /// while screens' windows stay ([`Tree::park`]). Kept, so that text commands always have a
+    /// text window to act on.
+    parked: bool,
 }
 
 /// Where a node was in the tree (this fork), to put a window back there after it left the tree
@@ -40,10 +52,99 @@ pub struct Place {
     pub share: Option<u16>,
 }
 
+/// What a node holds (this fork: a window holds a text document or a screen).
 #[derive(Debug)]
 pub enum Content {
+    /// A text window: a [`View`] of a text document.
     View(Box<View>),
+    /// A screen's window (`crate::screen`): something that isn't a text document.
+    Screen(Box<ScreenView>),
     Container(Box<Container>),
+}
+
+/// A window that shows a screen (this fork): no text, no cursor of the editor's; the screen
+/// draws itself in `area` and takes its own keys (`vortex-term`'s `screens`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenView {
+    pub id: ViewId,
+    pub area: Rect,
+    pub screen: ScreenId,
+}
+
+impl ScreenView {
+    pub fn new(screen: ScreenId) -> Self {
+        Self {
+            id: ViewId::default(),
+            area: Rect::default(),
+            screen,
+        }
+    }
+
+    /// The area the screen draws in: its window less the statusline, the last row.
+    pub fn inner_area(&self) -> Rect {
+        self.area.clip_bottom(1)
+    }
+}
+
+/// A new window (this fork): a text window or a screen's.
+// only passed by value to the tree's insertions, which box it: no need to box it here too
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum Leaf {
+    Text(View),
+    Screen(ScreenView),
+}
+
+impl From<View> for Leaf {
+    fn from(view: View) -> Self {
+        Leaf::Text(view)
+    }
+}
+
+impl From<ScreenView> for Leaf {
+    fn from(view: ScreenView) -> Self {
+        Leaf::Screen(view)
+    }
+}
+
+/// A window of the tree (this fork): a text window or a screen's. Text code takes [`View`]s
+/// ([`Tree::get`], [`Tree::views`]), so it never meets a screen; code about windows takes these.
+#[derive(Debug, Clone, Copy)]
+pub enum Window<'a> {
+    Text(&'a View),
+    Screen(&'a ScreenView),
+}
+
+impl<'a> Window<'a> {
+    pub fn id(&self) -> ViewId {
+        match self {
+            Window::Text(view) => view.id,
+            Window::Screen(view) => view.id,
+        }
+    }
+
+    pub fn area(&self) -> Rect {
+        match self {
+            Window::Text(view) => view.area,
+            Window::Screen(view) => view.area,
+        }
+    }
+
+    /// The text window, if it is one.
+    pub fn text(&self) -> Option<&'a View> {
+        match self {
+            Window::Text(view) => Some(view),
+            Window::Screen(_) => None,
+        }
+    }
+
+    /// The screen it shows, if it is a screen's window.
+    pub fn screen(&self) -> Option<ScreenId> {
+        match self {
+            Window::Text(_) => None,
+            Window::Screen(view) => Some(view.screen),
+        }
+    }
 }
 
 impl Node {
@@ -52,14 +153,43 @@ impl Node {
             parent: ViewId::default(),
             content: Content::Container(Box::new(Container::new(layout))),
             share: None,
+            under: None,
+            parked: false,
         }
     }
 
     pub fn view(view: View) -> Self {
+        Self::leaf(Leaf::Text(view))
+    }
+
+    fn leaf(leaf: Leaf) -> Self {
         Self {
             parent: ViewId::default(),
-            content: Content::View(Box::new(view)),
+            content: match leaf {
+                Leaf::Text(view) => Content::View(Box::new(view)),
+                Leaf::Screen(view) => Content::Screen(Box::new(view)),
+            },
             share: None,
+            under: None,
+            parked: false,
+        }
+    }
+
+    /// The window's area, if it is one.
+    fn leaf_area(&self) -> Option<Rect> {
+        match &self.content {
+            Content::View(view) => Some(view.area),
+            Content::Screen(view) => Some(view.area),
+            Content::Container(_) => None,
+        }
+    }
+
+    /// The window it is, if it is one.
+    fn window(&self) -> Option<Window<'_>> {
+        match &self.content {
+            Content::View(view) => Some(Window::Text(view)),
+            Content::Screen(view) => Some(Window::Screen(view)),
+            Content::Container(_) => None,
         }
     }
 }
@@ -119,16 +249,53 @@ impl Tree {
             area,
             nodes,
             stack: Vec::new(),
+            last_text: None,
         }
     }
 
-    pub fn insert(&mut self, view: View) -> ViewId {
+    /// Inserts a new window node, its id set.
+    fn insert_leaf(&mut self, node: Node) -> ViewId {
+        let node = self.nodes.insert(node);
+        match &mut self.nodes[node].content {
+            Content::View(view) => view.id = node,
+            Content::Screen(view) => view.id = node,
+            Content::Container(_) => {}
+        }
+        node
+    }
+
+    /// Focuses `id` (the tree's own moves), noting it when it is a text window.
+    fn set_focus(&mut self, id: ViewId) {
+        self.focus = id;
+        self.note_focus();
+    }
+
+    /// The text window that last had the focus, if it is still there (shown or parked).
+    pub fn last_text(&self) -> Option<ViewId> {
+        self.last_text.filter(|&id| self.try_get(id).is_some())
+    }
+
+    /// Notes the focused window as the last text window to have it, if it is one (this fork):
+    /// called by whoever sets `focus`, see [`Self::text_focus`].
+    pub fn note_focus(&mut self) {
+        if matches!(
+            self.nodes.get(self.focus),
+            Some(Node {
+                content: Content::View(_),
+                parked: false,
+                ..
+            })
+        ) {
+            self.last_text = Some(self.focus);
+        }
+    }
+
+    pub fn insert(&mut self, view: impl Into<Leaf>) -> ViewId {
         let focus = self.focus;
         let parent = self.nodes[focus].parent;
-        let mut node = Node::view(view);
+        let mut node = Node::leaf(view.into());
         node.parent = parent;
-        let node = self.nodes.insert(node);
-        self.get_mut(node).id = node;
+        let node = self.insert_leaf(node);
 
         let container = match &mut self.nodes[parent] {
             Node {
@@ -152,7 +319,7 @@ impl Tree {
 
         container.children.insert(pos, node);
         // focus the new node
-        self.focus = node;
+        self.set_focus(node);
 
         // recalculate all the sizes
         self.recalculate();
@@ -160,13 +327,12 @@ impl Tree {
         node
     }
 
-    pub fn split(&mut self, view: View, layout: Layout) -> ViewId {
+    pub fn split(&mut self, view: impl Into<Leaf>, layout: Layout) -> ViewId {
         let focus = self.focus;
         let parent = self.nodes[focus].parent;
 
-        let node = Node::view(view);
-        let node = self.nodes.insert(node);
-        self.get_mut(node).id = node;
+        let node = Node::leaf(view.into());
+        let node = self.insert_leaf(node);
 
         let container = match &mut self.nodes[parent] {
             Node {
@@ -228,7 +394,7 @@ impl Tree {
         }
 
         // focus the new node
-        self.focus = node;
+        self.set_focus(node);
 
         // recalculate all the sizes
         self.recalculate();
@@ -269,10 +435,27 @@ impl Tree {
         }
     }
 
+    /// Removes the window `index` from the tree, with the windows it covers (this fork: see
+    /// [`Self::chain`]). A parked window just goes.
     pub fn remove(&mut self, index: ViewId) {
+        // what it covers goes with it
+        let mut under = self.nodes[index].under;
+        while let Some(id) = under {
+            under = self.nodes[id].under;
+            self.nodes.remove(id);
+        }
+        if self.nodes[index].parked {
+            // the window that covers it covers nothing now
+            if let Some(cover) = self.cover_of(index) {
+                self.nodes[cover].under = None;
+            }
+            self.nodes.remove(index);
+            return;
+        }
         if self.focus == index {
             // focus on something else
-            self.focus = self.prev();
+            let prev = self.prev();
+            self.set_focus(prev);
         }
 
         let parent = self.nodes[index].parent;
@@ -293,17 +476,21 @@ impl Tree {
         self.recalculate()
     }
 
+    /// The text windows shown (this fork: not the screens' windows, nor the windows parked
+    /// under a cover), with whether each has the focus.
     pub fn views(&self) -> impl Iterator<Item = (&View, bool)> {
         let focus = self.focus;
         self.nodes.iter().filter_map(move |(key, node)| match node {
             Node {
                 content: Content::View(view),
+                parked: false,
                 ..
             } => Some((view.as_ref(), focus == key)),
             _ => None,
         })
     }
 
+    /// The text windows shown, see [`Self::views`].
     pub fn views_mut(&mut self) -> impl Iterator<Item = (&mut View, bool)> {
         let focus = self.focus;
         self.nodes
@@ -311,10 +498,152 @@ impl Tree {
             .filter_map(move |(key, node)| match node {
                 Node {
                     content: Content::View(view),
+                    parked: false,
                     ..
                 } => Some((view.as_mut(), focus == key)),
                 _ => None,
             })
+    }
+
+    /// Every text window, the parked ones too (this fork): what must follow a document (its
+    /// closing, its changes) whether or not it is shown.
+    pub fn all_views(&self) -> impl Iterator<Item = &View> {
+        self.nodes.values().filter_map(|node| match &node.content {
+            Content::View(view) => Some(view.as_ref()),
+            _ => None,
+        })
+    }
+
+    /// Every text window, the parked ones too, see [`Self::all_views`].
+    pub fn all_views_mut(&mut self) -> impl Iterator<Item = &mut View> {
+        self.nodes
+            .values_mut()
+            .filter_map(|node| match &mut node.content {
+                Content::View(view) => Some(view.as_mut()),
+                _ => None,
+            })
+    }
+
+    /// The windows shown, text and screens' (this fork), with whether each has the focus.
+    pub fn windows(&self) -> impl Iterator<Item = (Window<'_>, bool)> {
+        let focus = self.focus;
+        self.nodes.iter().filter_map(move |(key, node)| {
+            if node.parked {
+                return None;
+            }
+            node.window().map(|window| (window, focus == key))
+        })
+    }
+
+    /// Every screen's window, the parked ones too (this fork).
+    pub fn all_screen_views(&self) -> impl Iterator<Item = &ScreenView> {
+        self.nodes.values().filter_map(|node| match &node.content {
+            Content::Screen(view) => Some(view.as_ref()),
+            _ => None,
+        })
+    }
+
+    /// The window `id`, text or a screen's, shown or parked (this fork).
+    pub fn window(&self, id: ViewId) -> Option<Window<'_>> {
+        self.nodes.get(id)?.window()
+    }
+
+    /// The screen's window `id`, shown or parked (this fork); `None` for any other node.
+    pub fn screen_view(&self, id: ViewId) -> Option<&ScreenView> {
+        match self.nodes.get(id) {
+            Some(Node {
+                content: Content::Screen(view),
+                ..
+            }) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// The screen shown in the focused window, if it shows one (this fork).
+    pub fn focused_screen(&self) -> Option<ScreenId> {
+        self.screen_view(self.focus).map(|view| view.screen)
+    }
+
+    /// Whether `id` is a window shown in the layout (this fork): not parked, not gone.
+    pub fn is_visible(&self, id: ViewId) -> bool {
+        self.nodes
+            .get(id)
+            .is_some_and(|node| !node.parked && node.window().is_some())
+    }
+
+    /// Whether the window `id` is parked under a cover (or an orphan text window).
+    pub fn is_parked(&self, id: ViewId) -> bool {
+        self.nodes.get(id).is_some_and(|node| node.parked)
+    }
+
+    /// The window that `id` covers, if any (this fork).
+    pub fn under(&self, id: ViewId) -> Option<ViewId> {
+        self.nodes.get(id)?.under
+    }
+
+    /// The window that covers the parked window `id`, if any (this fork).
+    pub fn cover_of(&self, id: ViewId) -> Option<ViewId> {
+        self.nodes
+            .iter()
+            .find(|(_, node)| node.under == Some(id))
+            .map(|(key, _)| key)
+    }
+
+    /// The window shown in the layout that `id` is (or lies under, through covers).
+    pub fn top_of(&self, mut id: ViewId) -> ViewId {
+        while let Some(cover) = self.cover_of(id) {
+            id = cover;
+        }
+        id
+    }
+
+    /// `id` and the windows it covers, top first (this fork).
+    pub fn chain(&self, id: ViewId) -> Vec<ViewId> {
+        let mut chain = vec![id];
+        let mut under = self.under(id);
+        while let Some(next) = under {
+            chain.push(next);
+            under = self.under(next);
+        }
+        chain
+    }
+
+    /// The text window text commands act on (this fork): the focused window when it is one; else
+    /// (a screen's window has the focus) the text window the focused screen covers, else the
+    /// text window that last had the focus, else any shown, else one parked. The macros
+    /// `current!`, `view!` and `doc!` go through here, so they always give a text window.
+    pub fn text_focus(&self) -> ViewId {
+        let is_text = |id: ViewId| {
+            matches!(
+                self.nodes.get(id),
+                Some(Node {
+                    content: Content::View(_),
+                    ..
+                })
+            )
+        };
+        let focus = self.focus;
+        if is_text(focus) {
+            return focus;
+        }
+        if let Some(id) = self
+            .chain(focus)
+            .into_iter()
+            .skip(1)
+            .find(|&id| is_text(id))
+        {
+            return id;
+        }
+        if let Some(id) = self.last_text.filter(|&id| is_text(id)) {
+            return id;
+        }
+        if let Some((id, _)) = self.traverse().find(|(_, window)| window.text().is_some()) {
+            return id;
+        }
+        self.nodes
+            .iter()
+            .find(|(_, node)| matches!(node.content, Content::View(_)))
+            .map_or(focus, |(key, _)| key)
     }
 
     /// Get reference to a [View] by index.
@@ -352,9 +681,136 @@ impl Tree {
         }
     }
 
-    /// Check if tree contains a [Node] with a given index.
+    /// The text window `index`, mutably, if it is one (this fork).
+    pub fn try_get_mut(&mut self, index: ViewId) -> Option<&mut View> {
+        match self.nodes.get_mut(index) {
+            Some(Node {
+                content: Content::View(view),
+                ..
+            }) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// Check if tree contains a [Node] with a given index (this fork: shown or parked; see
+    /// [`Self::is_visible`]).
     pub fn contains(&self, index: ViewId) -> bool {
         self.nodes.contains_key(index)
+    }
+
+    /// Puts the new window `leaf` in the place of the window `id` in the layout, `id` parked
+    /// under it until the new one closes with [`Self::uncover`] (this fork). The new window takes
+    /// the focus if `id` had it. Returns its id.
+    pub fn cover(&mut self, id: ViewId, leaf: impl Into<Leaf>) -> ViewId {
+        let parent = self.nodes[id].parent;
+        let share = self.nodes[id].share;
+        let mut node = Node::leaf(leaf.into());
+        node.parent = parent;
+        node.share = share;
+        node.under = Some(id);
+        let new = self.insert_leaf(node);
+        if let Content::Container(container) = &mut self.nodes[parent].content {
+            if let Some(pos) = container.children.iter().position(|&child| child == id) {
+                container.children[pos] = new;
+            }
+        }
+        let covered = &mut self.nodes[id];
+        covered.parked = true;
+        covered.parent = new;
+        if self.focus == id {
+            self.set_focus(new);
+        }
+        self.recalculate();
+        new
+    }
+
+    /// Takes the cover `id` out of the tree (this fork): the window it covers takes its place
+    /// again, with the focus if `id` had it. Returns the window shown again; `None` (and nothing
+    /// changes) when `id` covers nothing.
+    pub fn uncover(&mut self, id: ViewId) -> Option<ViewId> {
+        let under = self.nodes.get(id)?.under?;
+        let (parent, share, parked) = {
+            let node = &self.nodes[id];
+            (node.parent, node.share, node.parked)
+        };
+        {
+            let node = &mut self.nodes[under];
+            node.parked = parked;
+            node.parent = parent;
+            node.share = share;
+        }
+        if let Content::Container(container) = &mut self.nodes[parent].content {
+            if let Some(pos) = container.children.iter().position(|&child| child == id) {
+                container.children[pos] = under;
+            }
+        }
+        // a parked cover (under another one) hands its place in the chain down
+        if parked {
+            if let Some(node) = self.nodes.get_mut(parent) {
+                if node.under == Some(id) {
+                    node.under = Some(under);
+                }
+            }
+        }
+        self.nodes.remove(id);
+        if self.focus == id {
+            self.set_focus(under);
+        }
+        self.recalculate();
+        Some(under)
+    }
+
+    /// Takes the text window `id` out of the layout but keeps it, parked (this fork): the last
+    /// text window, closed while screens' windows stay, so that text commands still have one to
+    /// act on (see [`Self::text_focus`]). Its next shown text window drops it.
+    pub fn park(&mut self, id: ViewId) {
+        if self.focus == id {
+            let prev = self.prev();
+            self.set_focus(prev);
+        }
+        let parent = self.nodes[id].parent;
+        let parent_is_root = parent == self.root;
+        let container = self.container_mut(parent);
+        if let Some(pos) = container.children.iter().position(|&item| item == id) {
+            container.children.remove(pos);
+        }
+        let node = &mut self.nodes[id];
+        node.parked = true;
+        node.parent = self.root;
+        let parent_container = self.container_mut(parent);
+        if parent_container.children.len() == 1 && !parent_is_root {
+            let sibling = parent_container.children.pop().unwrap();
+            self.nodes[sibling].share = self.nodes[parent].share;
+            self.remove_or_replace(parent, Some(sibling));
+        }
+        self.recalculate();
+    }
+
+    /// Puts the parked window `id` back in the layout as the only window, focused (this fork:
+    /// the last text window, kept by [`Self::park`], once its screens closed).
+    pub fn unpark(&mut self, id: ViewId) {
+        let root = self.root;
+        let node = &mut self.nodes[id];
+        node.parked = false;
+        node.parent = root;
+        node.share = None;
+        self.container_mut(root).children.push(id);
+        self.set_focus(id);
+        self.recalculate();
+    }
+
+    /// The parked text windows that cover nothing and lie under nothing (this fork): the last
+    /// text window kept by [`Self::park`].
+    pub fn orphans(&self) -> Vec<ViewId> {
+        self.nodes
+            .iter()
+            .filter(|(key, node)| {
+                node.parked
+                    && matches!(node.content, Content::View(_))
+                    && !self.nodes.values().any(|other| other.under == Some(*key))
+            })
+            .map(|(key, _)| key)
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -399,7 +855,7 @@ impl Tree {
                     .iter()
                     .map(|&child| self.nodes[child].share)
                     .collect(),
-                Content::View(_) => Vec::new(),
+                Content::View(_) | Content::Screen(_) => Vec::new(),
             };
             let node = &mut self.nodes[key];
 
@@ -408,6 +864,7 @@ impl Tree {
                     // debug!!("setting view area {:?}", area);
                     view.area = area;
                 } // TODO: call f()
+                Content::Screen(view) => view.area = area,
                 Content::Container(container) => {
                     // debug!!("setting container area {:?}", area);
                     container.area = area;
@@ -490,7 +947,7 @@ impl Tree {
         // Parent must always be a container
         let parent_container = match &self.nodes[parent].content {
             Content::Container(container) => container,
-            Content::View(_) => unreachable!(),
+            Content::View(_) | Content::Screen(_) => unreachable!(),
         };
 
         match (direction, parent_container.layout) {
@@ -544,9 +1001,9 @@ impl Tree {
                 children.iter().skip_while(|i| **i != id).copied().nth(1)?
             }
         };
-        let (current_x, current_y) = match &self.nodes[self.focus].content {
-            Content::View(current_view) => (current_view.area.left(), current_view.area.top()),
-            Content::Container(_) => unreachable!(),
+        let (current_x, current_y) = match self.nodes[self.focus].leaf_area() {
+            Some(area) => (area.left(), area.top()),
+            None => unreachable!(),
         };
 
         // If the child is a container the search finds the closest container child
@@ -559,6 +1016,7 @@ impl Tree {
                     child_id = *container.children.iter().min_by_key(|id| {
                         let x = match &self.nodes[**id].content {
                             Content::View(view) => view.area.left(),
+                            Content::Screen(view) => view.area.left(),
                             Content::Container(container) => container.area.left(),
                         };
                         (current_x as i16 - x as i16).abs()
@@ -570,6 +1028,7 @@ impl Tree {
                     child_id = *container.children.iter().min_by_key(|id| {
                         let y = match &self.nodes[**id].content {
                             Content::View(view) => view.area.top(),
+                            Content::Screen(view) => view.area.top(),
                             Content::Container(container) => container.area.top(),
                         };
                         (current_y as i16 - y as i16).abs()
@@ -634,71 +1093,29 @@ impl Tree {
     pub fn swap_split_in_direction(&mut self, direction: Direction) -> Option<()> {
         let focus = self.focus;
         let target = self.find_split_in_direction(focus, direction)?;
+        // windows only, text or screens' (this fork)
+        self.nodes[target].leaf_area()?;
         let focus_parent = self.nodes[focus].parent;
         let target_parent = self.nodes[target].parent;
-
-        if focus_parent == target_parent {
-            let parent = focus_parent;
-            let [parent, focus, target] = self.nodes.get_disjoint_mut([parent, focus, target])?;
-            match (&mut parent.content, &mut focus.content, &mut target.content) {
-                (
-                    Content::Container(parent),
-                    Content::View(focus_view),
-                    Content::View(target_view),
-                ) => {
-                    let focus_pos = parent.children.iter().position(|id| focus_view.id == *id)?;
-                    let target_pos = parent
-                        .children
-                        .iter()
-                        .position(|id| target_view.id == *id)?;
-                    // swap node positions so that traversal order is kept
-                    parent.children[focus_pos] = target_view.id;
-                    parent.children[target_pos] = focus_view.id;
-                    // swap area so that views rendered at the correct location
-                    std::mem::swap(&mut focus_view.area, &mut target_view.area);
-
-                    Some(())
-                }
-                _ => unreachable!(),
+        let focus_pos = match &self.nodes[focus_parent].content {
+            Content::Container(container) => {
+                container.children.iter().position(|&id| id == focus)?
             }
-        } else {
-            let [focus_parent, target_parent, focus, target] =
-                self.nodes
-                    .get_disjoint_mut([focus_parent, target_parent, focus, target])?;
-            match (
-                &mut focus_parent.content,
-                &mut target_parent.content,
-                &mut focus.content,
-                &mut target.content,
-            ) {
-                (
-                    Content::Container(focus_parent),
-                    Content::Container(target_parent),
-                    Content::View(focus_view),
-                    Content::View(target_view),
-                ) => {
-                    let focus_pos = focus_parent
-                        .children
-                        .iter()
-                        .position(|id| focus_view.id == *id)?;
-                    let target_pos = target_parent
-                        .children
-                        .iter()
-                        .position(|id| target_view.id == *id)?;
-                    // re-parent target and focus nodes
-                    std::mem::swap(
-                        &mut focus_parent.children[focus_pos],
-                        &mut target_parent.children[target_pos],
-                    );
-                    std::mem::swap(&mut focus.parent, &mut target.parent);
-                    // swap area so that views rendered at the correct location
-                    std::mem::swap(&mut focus_view.area, &mut target_view.area);
-
-                    Some(())
-                }
-                _ => unreachable!(),
+            _ => return None,
+        };
+        let target_pos = match &self.nodes[target_parent].content {
+            Content::Container(container) => {
+                container.children.iter().position(|&id| id == target)?
             }
-        }
+            _ => return None,
+        };
+        // swap node positions so that traversal order is kept, and the areas with them
+        self.container_mut(focus_parent).children[focus_pos] = target;
+        self.container_mut(target_parent).children[target_pos] = focus;
+        self.nodes[focus].parent = target_parent;
+        self.nodes[target].parent = focus_parent;
+        self.recalculate();
+        Some(())
     }
 
     pub fn area(&self) -> Rect {
@@ -710,17 +1127,16 @@ impl Tree {
     /// percent of the tree in that direction. Focuses it.
     pub fn split_root(
         &mut self,
-        view: View,
+        view: impl Into<Leaf>,
         layout: Layout,
         at_end: bool,
         share: Option<u16>,
     ) -> ViewId {
         let root = self.root;
-        let mut node = Node::view(view);
+        let mut node = Node::leaf(view.into());
         node.parent = root;
         node.share = share;
-        let node = self.nodes.insert(node);
-        self.get_mut(node).id = node;
+        let node = self.insert_leaf(node);
 
         let children = std::mem::take(&mut self.container_mut(root).children);
         let old_layout = self.container_mut(root).layout;
@@ -745,7 +1161,7 @@ impl Tree {
         let container = self.container_mut(root);
         container.layout = layout;
         container.children = kept;
-        self.focus = node;
+        self.set_focus(node);
         self.recalculate();
         node
     }
@@ -763,7 +1179,7 @@ impl Tree {
                     .unwrap_or(0),
                 container.layout,
             ),
-            Content::View(_) => (0, Layout::Vertical),
+            Content::View(_) | Content::Screen(_) => (0, Layout::Vertical),
         };
         Place {
             parent,
@@ -775,7 +1191,7 @@ impl Tree {
 
     /// Puts `view` back at `place` and focuses it, if its container is still there with the
     /// same layout; else `None`, and the tree doesn't change.
-    pub fn insert_at(&mut self, view: View, place: &Place) -> Option<ViewId> {
+    pub fn insert_at(&mut self, view: impl Into<Leaf>, place: &Place) -> Option<ViewId> {
         match self.nodes.get(place.parent) {
             Some(Node {
                 content: Content::Container(container),
@@ -783,15 +1199,14 @@ impl Tree {
             }) if container.layout == place.layout => {}
             _ => return None,
         }
-        let mut node = Node::view(view);
+        let mut node = Node::leaf(view.into());
         node.parent = place.parent;
         node.share = place.share;
-        let node = self.nodes.insert(node);
-        self.get_mut(node).id = node;
+        let node = self.insert_leaf(node);
         let container = self.container_mut(place.parent);
         let index = place.index.min(container.children.len());
         container.children.insert(index, node);
-        self.focus = node;
+        self.set_focus(node);
         self.recalculate();
         Some(node)
     }
@@ -848,8 +1263,9 @@ impl<'a> Traverse<'a> {
     }
 }
 
+/// The windows shown, in the order of the layout (this fork: text and screens' windows).
 impl<'a> Iterator for Traverse<'a> {
-    type Item = (ViewId, &'a View);
+    type Item = (ViewId, Window<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -858,7 +1274,8 @@ impl<'a> Iterator for Traverse<'a> {
             let node = &self.tree.nodes[key];
 
             match &node.content {
-                Content::View(view) => return Some((key, view)),
+                Content::View(view) => return Some((key, Window::Text(view))),
+                Content::Screen(view) => return Some((key, Window::Screen(view))),
                 Content::Container(container) => {
                     self.stack.extend(container.children.iter().rev());
                 }
@@ -875,7 +1292,8 @@ impl DoubleEndedIterator for Traverse<'_> {
             let node = &self.tree.nodes[key];
 
             match &node.content {
-                Content::View(view) => return Some((key, view)),
+                Content::View(view) => return Some((key, Window::Text(view))),
+                Content::Screen(view) => return Some((key, Window::Screen(view))),
                 Content::Container(container) => {
                     self.stack.extend(container.children.iter());
                 }
@@ -1173,6 +1591,90 @@ mod test {
         let left = tree.split_root(view(), Layout::Vertical, false, Some(10));
         assert_eq!(tree.get(left).area.x, 0);
         assert_eq!(tree.get(left).area.width, 10);
+    }
+
+    #[test]
+    fn a_cover_takes_the_window_place_and_gives_it_back() {
+        let mut tree = tree(100, 30);
+        let main = tree.focus;
+        let other = tree.split(view(), Layout::Vertical);
+        tree.focus = main;
+        let area = tree.get(main).area;
+        let screen = tree.cover(main, ScreenView::new(ScreenId::default()));
+        // the cover has the window's place, size and focus; the text window is parked
+        assert_eq!(tree.focus, screen);
+        assert_eq!(tree.screen_view(screen).unwrap().area, area);
+        assert!(tree.is_parked(main));
+        assert!(!tree.is_visible(main));
+        assert_eq!(tree.views().count(), 1);
+        assert_eq!(tree.windows().count(), 2);
+        assert_eq!(tree.under(screen), Some(main));
+        assert_eq!(tree.top_of(main), screen);
+        // text commands act on the window the screen covers
+        assert_eq!(tree.text_focus(), main);
+        // moving to the other window and back goes through the cover
+        assert_eq!(tree.next(), other);
+        assert_eq!(tree.uncover(screen), Some(main));
+        assert_eq!(tree.focus, main);
+        assert!(tree.is_visible(main));
+        assert_eq!(tree.get(main).area, area);
+        assert!(!tree.contains(screen));
+        assert_eq!(tree.uncover(main), None);
+    }
+
+    #[test]
+    fn covers_stack_and_go_together() {
+        let mut tree = tree(100, 30);
+        let main = tree.focus;
+        let page = tree.cover(main, ScreenView::new(ScreenId::default()));
+        let diff = tree.cover(page, ScreenView::new(ScreenId::default()));
+        assert_eq!(tree.chain(diff), [diff, page, main]);
+        assert_eq!(tree.text_focus(), main);
+        assert_eq!(tree.uncover(diff), Some(page));
+        assert_eq!(tree.focus, page);
+        assert_eq!(tree.chain(page), [page, main]);
+        // removing a window removes what it covers
+        let other = tree.split(view(), Layout::Vertical);
+        tree.remove(page);
+        assert!(!tree.contains(page));
+        assert!(!tree.contains(main));
+        assert_eq!(tree.focus, other);
+    }
+
+    #[test]
+    fn the_last_text_window_stays_for_text_commands() {
+        let mut tree = tree(100, 30);
+        let main = tree.focus;
+        let terminal = tree.split(ScreenView::new(ScreenId::default()), Layout::Horizontal);
+        // the screen has the focus: text commands act on the text window that had it last
+        assert_eq!(tree.focus, terminal);
+        assert_eq!(tree.text_focus(), main);
+        tree.park(main);
+        assert_eq!(tree.windows().count(), 1);
+        assert_eq!(tree.views().count(), 0);
+        assert_eq!(tree.text_focus(), main);
+        assert_eq!(tree.orphans(), [main]);
+        assert_eq!(
+            tree.screen_view(terminal).unwrap().area,
+            Rect::new(0, 0, 100, 30)
+        );
+        // a screen's window draws above its statusline
+        assert_eq!(
+            tree.screen_view(terminal).unwrap().inner_area(),
+            Rect::new(0, 0, 100, 29)
+        );
+    }
+
+    #[test]
+    fn windows_of_both_kinds_swap() {
+        let mut tree = tree(100, 30);
+        let main = tree.focus;
+        let screen = tree.split(ScreenView::new(ScreenId::default()), Layout::Vertical);
+        let (left, right) = (tree.get(main).area, tree.screen_view(screen).unwrap().area);
+        tree.swap_split_in_direction(Direction::Left).unwrap();
+        assert_eq!(tree.get(main).area, right);
+        assert_eq!(tree.screen_view(screen).unwrap().area, left);
+        assert_eq!(tree.focus, screen);
     }
 
     #[test]

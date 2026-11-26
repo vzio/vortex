@@ -1,7 +1,8 @@
-//! The terminals (this fork): each one a shell in a window of its own, a screen document (see
+//! The terminals (this fork): each one a shell in a window of its own, a screen (see
 //! [`crate::screen`]). Here are their shells, the scratch terminal that `C-t` shows and hides,
 //! the place its window had while hidden, and the buffers a `vx` in a terminal waits on.
-//! `vortex-term` draws them and sends them keys.
+//! `vortex-term` draws them and sends them keys. In view mode a terminal's lines are a read-only
+//! text document ([`crate::Document::screen_lines`]) in a text window over the terminal's.
 
 use std::collections::HashMap;
 
@@ -9,6 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     editor::{get_terminal_provider, ExternalTerminal},
+    screen::ScreenId,
     tree::Place,
     DocumentId,
 };
@@ -132,17 +134,19 @@ impl Default for TerminalConfig {
 /// closes, and the terminal it was started from gets the focus back.
 pub struct Waiter {
     pub doc: DocumentId,
-    /// The terminal's document.
-    pub terminal: DocumentId,
+    /// The terminal it was started in.
+    pub terminal: ScreenId,
     pub done: Box<dyn FnOnce() + Send>,
 }
 
 /// One terminal: the shell in it, and view mode's lines while it is on.
 pub struct Terminal {
     pub shell: Shell,
-    /// View mode: the lines as they were when it started, which the document's text is made of.
+    /// View mode: the lines as they were when it started, which the text of `lines` is made of.
     /// `None`: the window shows the live screen.
     pub snapshot: Option<Snapshot>,
+    /// View mode's text document, in the text window over the terminal's.
+    pub lines: Option<DocumentId>,
     /// The edit command key asked the shell for its command line, which opens in a buffer when
     /// it comes.
     pub awaiting_command_line: bool,
@@ -153,6 +157,7 @@ impl Terminal {
         Self {
             shell,
             snapshot: None,
+            lines: None,
             awaiting_command_line: false,
         }
     }
@@ -194,29 +199,37 @@ impl Terminal {
 /// The terminals of the editor.
 #[derive(Default)]
 pub struct Terminals {
-    /// The terminals, by their screen document.
-    pub list: HashMap<DocumentId, Terminal>,
+    /// The terminals, by their screen.
+    pub list: HashMap<ScreenId, Terminal>,
     /// The scratch terminal (`C-t`, `:sh`): the one that is hidden instead of closed.
-    pub scratch: Option<DocumentId>,
+    pub scratch: Option<ScreenId>,
     /// Where the scratch terminal's window was when it was hidden, to show it there again.
     pub scratch_place: Option<Place>,
     /// Buffers a `vx` in a terminal waits on.
     pub waiters: Vec<Waiter>,
     /// The buffers a terminal's command line is edited in, and their terminal.
-    pub edits: HashMap<DocumentId, DocumentId>,
+    pub edits: HashMap<DocumentId, ScreenId>,
 }
 
 impl Terminals {
-    pub fn get(&self, doc: DocumentId) -> Option<&Terminal> {
-        self.list.get(&doc)
+    pub fn get(&self, screen: ScreenId) -> Option<&Terminal> {
+        self.list.get(&screen)
     }
 
-    pub fn get_mut(&mut self, doc: DocumentId) -> Option<&mut Terminal> {
-        self.list.get_mut(&doc)
+    pub fn get_mut(&mut self, screen: ScreenId) -> Option<&mut Terminal> {
+        self.list.get_mut(&screen)
     }
 
-    pub fn is_terminal(&self, doc: DocumentId) -> bool {
-        self.list.contains_key(&doc)
+    pub fn is_terminal(&self, screen: ScreenId) -> bool {
+        self.list.contains_key(&screen)
+    }
+
+    /// The terminal whose lines `doc` shows in view mode, if any.
+    pub fn of_lines(&self, doc: DocumentId) -> Option<ScreenId> {
+        self.list
+            .iter()
+            .find(|(_, terminal)| terminal.lines == Some(doc))
+            .map(|(&screen, _)| screen)
     }
 
     /// The scratch terminal, while its shell runs.
@@ -224,18 +237,21 @@ impl Terminals {
         self.get(self.scratch?)
     }
 
-    /// The terminal of `doc` closed (its shell exited, or its buffer was closed): drops it,
-    /// which kills its shell, and answers the `vx` in it that waited on a buffer.
-    pub fn remove(&mut self, doc: DocumentId) {
-        self.list.remove(&doc);
-        if self.scratch == Some(doc) {
+    /// The screen `screen` closed: if it was a terminal (its shell exited, or its window was
+    /// closed), drops it, which kills its shell, and answers the `vx` in it that waited on a
+    /// buffer.
+    pub fn screen_closed(&mut self, screen: ScreenId) {
+        if self.list.remove(&screen).is_none() {
+            return;
+        }
+        if self.scratch == Some(screen) {
             self.scratch = None;
             self.scratch_place = None;
         }
-        self.edits.retain(|_, terminal| *terminal != doc);
+        self.edits.retain(|_, terminal| *terminal != screen);
         let (done, waiting): (Vec<_>, _) = std::mem::take(&mut self.waiters)
             .into_iter()
-            .partition(|waiter| waiter.terminal == doc);
+            .partition(|waiter| waiter.terminal == screen);
         self.waiters = waiting;
         for waiter in done {
             (waiter.done)();
@@ -244,7 +260,7 @@ impl Terminals {
 
     /// Calls the waiters of `doc`, which was closed. Returns the terminal one of them came from,
     /// to give it the focus back.
-    pub fn document_closed(&mut self, doc: DocumentId) -> Option<DocumentId> {
+    pub fn document_closed(&mut self, doc: DocumentId) -> Option<ScreenId> {
         let (done, waiting): (Vec<_>, _) = std::mem::take(&mut self.waiters)
             .into_iter()
             .partition(|waiter| waiter.doc == doc);
@@ -264,30 +280,49 @@ impl Terminals {
 impl crate::Editor {
     /// Where a terminal's window goes when it is shown: the scratch terminal back where it was
     /// hidden, else at `[editor.terminal] position` and `size`; another terminal as a split.
-    pub fn terminal_placement(&mut self, doc: DocumentId) -> crate::screen::Placement {
+    pub fn terminal_placement(&mut self, screen: ScreenId) -> crate::screen::Placement {
         use crate::{screen::Placement, tree::Layout};
-        if self.terminals.scratch != Some(doc) {
+        if self.terminals.scratch != Some(screen) {
             return Placement::Split(Layout::Horizontal);
         }
         let config = self.config().terminal.clone();
-        let (layout, at_end) = match config.position {
-            TerminalPosition::Bottom => (Layout::Horizontal, true),
-            TerminalPosition::Top => (Layout::Horizontal, false),
-            TerminalPosition::Left => (Layout::Vertical, false),
-            TerminalPosition::Right => (Layout::Vertical, true),
-        };
-        match self.terminals.scratch_place.take() {
-            Some(place) => Placement::Back {
-                place,
-                fallback: layout,
-                at_end,
-            },
-            None => Placement::Edge {
-                layout,
-                at_end,
-                share: config.share(),
-            },
-        }
+        let place = self.terminals.scratch_place.take();
+        edge_placement(config.position, config.share(), place)
+    }
+
+    /// Where the debug panel's window goes (this fork): where it was, else along the edge of
+    /// `[editor.debugger.panel]`.
+    pub fn debug_panel_placement(&mut self) -> crate::screen::Placement {
+        let config = self.config().debugger.panel;
+        let place = self.debug.panel_place.take();
+        edge_placement(config.position, config.share(), place)
+    }
+}
+
+/// A window along the edge `position`, taking `share` percent, or back at `place`.
+fn edge_placement(
+    position: TerminalPosition,
+    share: u16,
+    place: Option<Place>,
+) -> crate::screen::Placement {
+    use crate::{screen::Placement, tree::Layout};
+    let (layout, at_end) = match position {
+        TerminalPosition::Bottom => (Layout::Horizontal, true),
+        TerminalPosition::Top => (Layout::Horizontal, false),
+        TerminalPosition::Left => (Layout::Vertical, false),
+        TerminalPosition::Right => (Layout::Vertical, true),
+    };
+    match place {
+        Some(place) => Placement::Back {
+            place,
+            fallback: layout,
+            at_end,
+        },
+        None => Placement::Edge {
+            layout,
+            at_end,
+            share,
+        },
     }
 }
 

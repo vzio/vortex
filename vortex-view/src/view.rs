@@ -110,8 +110,9 @@ impl View {
     }
 
     pub fn gutter_offset(&self, doc: &Document) -> u16 {
-        // a screen (this fork) has no gutter: it takes the whole window
-        if doc.is_screen() {
+        // a screen's lines (this fork: a terminal's in view mode) have no gutter: they take the
+        // whole window, as the screen did
+        if doc.lines_of().is_some() {
             return 0;
         }
         let total_width = self

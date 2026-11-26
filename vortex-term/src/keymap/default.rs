@@ -219,6 +219,9 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
                 "C-s" | "s" => hsplit_terminal,
                 "C-v" | "v" => vsplit_terminal,
             },
+            ["screens"]
+            "V" => markdown_view_vsplit,
+            "=" => git_diff_view_vsplit,
             ["focus"]
             "C-w" | "w" => rotate_view,
             "C-h" | "h" | "left" => jump_view_left,
@@ -299,6 +302,9 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
                     "C-s" | "s" => hsplit_terminal,
                     "C-v" | "v" => vsplit_terminal,
                 },
+                ["screens"]
+                "V" => markdown_view_vsplit,
+                "=" => git_diff_view_vsplit,
                 ["focus"]
                 "C-w" | "w" => rotate_view,
                 "C-h" | "h" | "left" => jump_view_left,

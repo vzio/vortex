@@ -52,7 +52,7 @@ pub fn restore_editing(editor: &mut Editor) {
     if editor.mode() != EditMode::Normal {
         editor.mode = EditMode::Normal;
     }
-    editor.debug.unfocus();
+    editor.unfocus_debug_panel();
     if let Some(session) = editor.watch.session.as_mut() {
         session.flash = None;
     }

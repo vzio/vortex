@@ -283,7 +283,12 @@ impl Session {
     async fn wait_for_hunk_footer(&mut self, text: &str) {
         let text = text.to_string();
         self.wait_for_screen(&text.clone(), move |rows| {
-            rows.iter().any(|row| row.trim().starts_with(text.as_str()))
+            rows.iter().any(|row| {
+                let row = row.trim();
+                row.strip_prefix("DIFF")
+                    .map_or(row, str::trim_start)
+                    .starts_with(text.as_str())
+            })
         })
         .await;
     }
@@ -679,7 +684,12 @@ async fn the_typable_command_does_what_the_key_does() {
 /// How many places the focused view's history has.
 fn places(session: &Session) -> usize {
     let editor = &session.app.editor;
-    editor.tree.get(editor.tree.focus).history.places().count()
+    editor
+        .tree
+        .get(editor.tree.text_focus())
+        .history
+        .places()
+        .count()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -696,11 +706,12 @@ async fn picking_a_commit_records_one_history_jump() {
     let before = places(&session);
     // (opening the picker is no jump)
 
+    // the diff covers the window: going back closes it, so it is no place yet
     session.keys("<ret>").await;
     session.wait_for_hunk_footer("hunk 2/3").await;
-    assert_eq!(places(&session), before + 1);
+    assert_eq!(places(&session), before);
 
-    // and back in the picker: nothing more is recorded
+    // back in the picker: the diff closed is the one place recorded
     session.keys("q").await;
     assert_eq!(places(&session), before + 1);
 }

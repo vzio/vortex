@@ -30,7 +30,7 @@ use vortex_view::{
     Editor,
 };
 
-use crate::compositor::{Compositor, Context};
+use crate::compositor::Context;
 use crate::ui::{overlay::Overlay, Picker, PickerColumn};
 use crate::{ctrl, key};
 
@@ -768,8 +768,13 @@ pub(crate) fn select_row(
 
 /// Puts the cursor of the topmost list of changes of a commit or range on the first change of
 /// `change`.
-pub(crate) fn select_in_commit_files(compositor: &mut Compositor, change: &FileChange) {
-    if let Some(overlay) = compositor.find::<Overlay<Picker<ChangeRow, RowData>>>() {
+pub(crate) fn select_in_commit_files(
+    layers: &mut [Box<dyn crate::compositor::Component>],
+    change: &FileChange,
+) {
+    if let Some(overlay) =
+        crate::compositor::find_layer::<Overlay<Picker<ChangeRow, RowData>>>(layers)
+    {
         select_row(&mut overlay.content, change.path(), None);
     }
 }

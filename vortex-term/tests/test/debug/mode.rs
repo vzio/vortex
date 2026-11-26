@@ -388,7 +388,7 @@ async fn space_g_enters_and_esc_leaves_a_paused_session_as_it_was() -> anyhow::R
     let mut e = env(|p| run(p, 12)).await?;
     e.start().await?;
     assert!(!on(&e.h.app));
-    assert!(e.h.app.editor.debug.visible);
+    assert!(e.h.app.editor.debug_panel_shown());
 
     e.h.keys("<space>G").await?;
     assert!(on(&e.h.app));
@@ -406,7 +406,7 @@ async fn space_g_enters_and_esc_leaves_a_paused_session_as_it_was() -> anyhow::R
         e.h.app.editor.debug.status,
         Status::Stopped { .. }
     ));
-    assert!(e.h.app.editor.debug.visible, "the panel stays");
+    assert!(e.h.app.editor.debug_panel_shown(), "the panel stays");
     assert_eq!(stops(&e.h.app), 1);
     e.h.pump_for(Duration::from_millis(300)).await;
     assert_eq!(stops(&e.h.app), 1, "nothing played");
@@ -427,7 +427,7 @@ async fn esc_leaves_a_playing_session_playing_with_the_panel_as_it_was() -> anyh
         Playback::Playing,
         "playing stays playing"
     );
-    assert!(e.h.app.editor.debug.visible);
+    assert!(e.h.app.editor.debug_panel_shown());
     e.h.until("playback went on after Esc", |app| stops(app) >= 4)
         .await;
     e.h.finish().await
@@ -606,7 +606,7 @@ async fn without_a_session_the_playback_keys_wait_and_say_so() -> anyhow::Result
         0,
         "nothing was sent: there is no session"
     );
-    assert!(!e.h.app.editor.debug.is_focused());
+    assert!(!e.h.app.editor.debug_panel_focused());
     e.h.finish().await
 }
 
@@ -671,35 +671,35 @@ async fn the_help_the_panel_keys_and_the_mode_keys_that_open_things() -> anyhow:
     assert!(e.tap("s").await?, "s opens the template picker");
 
     // P shows and hides the panel
-    let visible = e.h.app.editor.debug.visible;
+    let visible = e.h.app.editor.debug_panel_shown();
     e.h.keys("P").await?;
-    assert_ne!(e.h.app.editor.debug.visible, visible);
+    assert_ne!(e.h.app.editor.debug_panel_shown(), visible);
     e.h.keys("P").await?;
-    assert_eq!(e.h.app.editor.debug.visible, visible);
+    assert_eq!(e.h.app.editor.debug_panel_shown(), visible);
 
     // Tab focuses the panel, and Tab goes back to the editor while debug mode is on
     e.h.keys("<tab>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     assert!(on(&e.h.app));
     e.h.keys("<tab>").await?;
-    assert!(!e.h.app.editor.debug.is_focused());
+    assert!(!e.h.app.editor.debug_panel_focused());
     assert!(on(&e.h.app));
     // C-g does the same
     e.h.keys("<C-g>").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     e.h.keys("<tab>").await?;
-    assert!(!e.h.app.editor.debug.is_focused());
+    assert!(!e.h.app.editor.debug_panel_focused());
 
     // V focuses the variables, c the capture settings
     e.h.keys("V").await?;
-    assert!(e.h.app.editor.debug.is_focused());
+    assert!(e.h.app.editor.debug_panel_focused());
     assert_eq!(e.h.app.editor.debug.section, Section::Variables);
     e.h.keys("<tab>").await?;
-    assert!(!e.h.app.editor.debug.is_focused());
+    assert!(!e.h.app.editor.debug_panel_focused());
     e.h.keys("c").await?;
     assert_eq!(spectator(&e.h.app).settings, Some(0));
     e.h.app.editor.debug.spectator.settings = None;
-    e.h.app.editor.debug.unfocus();
+    e.h.app.editor.unfocus_debug_panel();
     assert!(on(&e.h.app));
     e.h.finish().await
 }

@@ -301,8 +301,8 @@ pub fn carried_frames(previous: &Snapshot, frames: &[StackFrame]) -> Vec<Option<
 /// The bytes of a memory view recorded at a stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryWindow {
-    /// The document of the memory view.
-    pub doc: crate::DocumentId,
+    /// The screen of the memory view.
+    pub screen: crate::screen::ScreenId,
     pub start: u64,
     /// `None` where unreadable.
     pub bytes: Vec<Option<u8>>,
