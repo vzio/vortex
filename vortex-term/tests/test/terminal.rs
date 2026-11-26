@@ -22,11 +22,11 @@ use vortex_term::{
 use vortex_view::{
     current_ref, doc,
     document::Mode,
-    editor::{Action, Config as EditorConfig, Severity},
+    editor::{Config as EditorConfig, Severity},
     graphics::Rect,
     input::parse_macro,
     terminal::{ShellStatus, Terminal, TerminalConfig, TerminalPosition},
-    DocumentId, ViewId,
+    ViewId,
 };
 
 use super::*;

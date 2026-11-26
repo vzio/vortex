@@ -25,6 +25,7 @@ mod test {
     mod conflicts;
     mod dashboard;
     mod debug;
+    mod diff_layout;
     mod editing_cost;
     mod explorer;
     #[allow(dead_code)]
@@ -47,6 +48,7 @@ mod test {
     mod practice;
     mod practice_panel;
     mod repo_gen;
+    mod screen_windows;
     mod selective_wrap;
     mod soft_wrap;
     mod splits;

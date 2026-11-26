@@ -359,6 +359,10 @@ fn handle_key(cx: &mut compositor::Context, key: KeyEvent, idle: bool) -> Option
             }
         }
         ScreenKind::Diff => {
+            // its own keys; not while keys are pending (`C-w h` moves the focus, not the view)
+            if !idle {
+                return None;
+            }
             use crate::compositor::Component;
             let mut state = cx.editor.screens.take_state(screen)?;
             let result = state

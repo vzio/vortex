@@ -1237,9 +1237,9 @@ impl DiffView {
             KeyCode::Char('q') | KeyCode::Esc => return self.close(editor),
             KeyCode::Char('?') => return EventResult::Consumed(Some(key_help().push())),
             KeyCode::Char('c') if ctrl => return self.close(editor),
-            // the window menu and the command line are the editor's
+            // the window menu, the space menu and the command line are the editor's
             KeyCode::Char('w') if ctrl => return EventResult::Ignored(None),
-            KeyCode::Char(':') => return EventResult::Ignored(None),
+            KeyCode::Char(':' | ' ') => return EventResult::Ignored(None),
             KeyCode::Enter => return self.open_file(editor),
             KeyCode::Char('t') => {
                 let layout = self.layout.other();
@@ -1252,7 +1252,7 @@ impl DiffView {
             KeyCode::Char('b') if ctrl => self.scroll_by(-page),
             KeyCode::Char('j') | KeyCode::Down => self.scroll_by(1),
             KeyCode::Char('k') | KeyCode::Up => self.scroll_by(-1),
-            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_by(page),
+            KeyCode::PageDown => self.scroll_by(page),
             KeyCode::PageUp => self.scroll_by(-page),
             KeyCode::Home => self.scroll_to(0),
             KeyCode::Char('G') | KeyCode::End => self.scroll_to(usize::MAX),

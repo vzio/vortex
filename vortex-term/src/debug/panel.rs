@@ -257,9 +257,9 @@ pub fn handle_key(editor: &mut Editor, key: KeyEvent) -> Handled {
         Char('d') if plain => delete(editor),
         Char('t') if plain => toggle_breakpoint(editor),
         Char('y') if plain => yank(editor),
-        // not the panel's: debug mode's, while it is on
-        _ if editor.debug.mode_on() => return Handled::No,
-        _ => {}
+        // not the panel's: debug mode's while it is on, else the keymap's (`C-w`, `Space`...),
+        // where only the commands about windows and the editor run on a screen
+        _ => return Handled::No,
     }
     Handled::Yes
 }

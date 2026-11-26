@@ -87,6 +87,8 @@ impl ScreenView {
 }
 
 /// A new window (this fork): a text window or a screen's.
+// only passed by value to the tree's insertions, which box it: no need to box it here too
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Leaf {
     Text(View),
