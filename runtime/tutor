@@ -661,6 +661,7 @@
   C-t            show the scratch terminal and type in it; C-t
                  again hides it, from its normal mode or from
                  any other window
+  C-S-t          rerun the scratch terminal's last command
   :sh CMD        run CMD in the scratch terminal, as if typed
   :! CMD         run CMD and show its output in a popup
 

@@ -141,7 +141,7 @@ Each feature lives in its own modules, to keep rebasing on upstream cheap:
 | Soft wrap for Markdown | the markdown entry of `languages.toml`, `vortex-term/tests/test/soft_wrap.rs` |
 | Selective soft wrap | `vortex-core/src/selective_wrap.rs` (the unwrapped lines, found in the syntax tree; `LineOffsets`), `TextFormat::{wraps, col_offset, is_selective}` and the formatter's `wraps` in `vortex-core/src/doc_formatter.rs` (tests in `doc_formatter/test.rs`), `char_idx_at_screen_offset` in `vortex-core/src/position.rs`, `vortex-term/src/ui/text_decorations/rulers.rs` (rulers per line), `vortex-term/src/ui/document/drawing_cost.rs` (the measurement), `vortex-term/tests/test/selective_wrap.rs` |
 | Markdown render mode | `vortex-term/src/markdown_view.rs` (the view: when it is up, the reading line, the keys and the commands it takes over, links, search, the outline, code blocks scrolled sideways, going back to the source, the drawing), `vortex-term/src/markdown_view/` (`parse.rs` Markdown to styled blocks, `page.rs` the layout of the page and its headings, links and code blocks, `wrap.rs` wrapping styled text, `table.rs` the tables' columns and cells, `tests.rs` and `snapshots/` the rendering tests), `vortex-term/tests/test/markdown_view.rs` |
-| Terminals | `vortex-terminal/` (the shell, pty and emulator, OSC 133 and 7, the command line report, bash/zsh integration, the snapshot of the lines), `vortex-view/src/terminal.rs` (the terminals' state, `[editor.terminal]`), `vortex-view/src/screen.rs` (the screens, the window for documents, showing and hiding them: see Screens), the tree's shares, places and covers in `vortex-view/src/tree.rs`, `vortex-term/src/screens.rs` (what each screen kind draws and takes), `vortex-term/src/terminal/` (`window.rs` starting, showing and closing terminals, `:sh`, the `vx` requests; `modes.rs` the keys of the three modes, view mode, prompts; `edit.rs` the command line in a buffer; `render.rs` drawing; `mouse.rs` the mouse; `input.rs` the encoding of keys, mouse and paste; `shim.rs` the `vx` shim; `phosphor.rs` the filter), `vortex-term/tests/test/terminal.rs` |
+| Terminals | `vortex-terminal/` (the shell, pty and emulator, OSC 133 and 7, the command line report, bash/zsh integration, the snapshot of the lines), `vortex-view/src/terminal.rs` (the terminals' state, `[editor.terminal]`), `vortex-view/src/screen.rs` (the screens, the window for documents, showing and hiding them: see Screens), the tree's shares, places and covers in `vortex-view/src/tree.rs`, `vortex-term/src/screens.rs` (what each screen kind draws and takes), `vortex-term/src/terminal/` (`window.rs` starting, showing and closing terminals, `:sh`, the rerun, the `vx` requests; `modes.rs` the keys of the three modes, view mode, prompts; `edit.rs` the command line in a buffer; `render.rs` drawing; `mouse.rs` the mouse; `input.rs` the encoding of keys, mouse and paste; `shim.rs` the `vx` shim; `phosphor.rs` the filter), `vortex-term/tests/test/terminal.rs` |
 | The debugger | `vortex-term/src/debug/` (`session.rs` the sessions, the adapter's events and reverse requests, `load.rs` what the panel loads at a stop, `breakpoints.rs` breakpoints per session (yours and the engine's hidden ones in one request), `engine.rs` the per-line breakpoint engine: finding and installing hidden breakpoints, full-speed runs, the hit decision, `panel.rs` the keys and the mouse, `render.rs` the drawing; spectator mode: `playback.rs` automatic stepping, fast forward and run to cursor, `threads.rs` spectating, freezing and running threads alone, `record.rs` what each stop records, `rewind.rs` scrubbing, `cpu.rs` a thread's CPU time from the OS; `memory.rs` a debugged program's memory in the hex view: opening, reading, refreshing, writing, recording for rewind), `vortex-view/src/debug/` (`mod.rs` the panel's state and rows; `spectator.rs`, `history.rs`, `timing.rs`, `config.rs` spectator mode's state, `[editor.debugger]`; `engine.rs` the engine's state and decisions, `lineline.rs` the record of every hit), `vortex-dap/src/hits.rs` (the engine's fast path: hits of unwatched threads continued by the client), `vortex-term/src/ui/text_decorations/step_times.rs` (the time per line), `vortex-dap/src/requester.rs` (requests that borrow nothing, for background tasks), child sessions in `vortex-dap/src/registry.rs`, `vortex-term/src/commands/dap.rs` (the debug commands, the templates); debug mode: `vortex-term/src/debug/mode.rs` (entering and leaving, view mode and following, the camera, the lineline's seeks, the held keys and the notes), `vortex-term/src/debug/bar.rs` (the three rows: the transport, the lineline's layout and cells, the keys; clicks), `vortex-term/src/debug/launch.rs` (the template of `vx --debug`, the template picker), `vortex-term/tests/test/debug/` (a scripted fake adapter and the tests) |
 | API browser (in progress) | `vortex-term/src/api/` (`mod.rs` the browser: the tree, its tasks and their cancellation; `load.rs` the providers; `node.rs` the nodes; `temp.rs` temporary documents; `tags.rs` the tree-sitter skeleton; `picker.rs` `:api-browse`), `Client::cancellable_call` and `Client::set_config_overlay` in `vortex-lsp/src/client.rs`, `HiddenDocuments` in `vortex-lsp/src/lib.rs`, `vortex-term/tests/fake_lsp/main.rs` (a scripted fake language server), `vortex-term/tests/test/fake_lsp.rs`, `vortex-term/tests/test/api_browser.rs`, `vortex-term/tests/test/api_report.rs` (the measurements against real servers) |
 | Hex view | `vortex-view/src/hex/view.rs` (the screen's state and how the editor opens it), `vortex-view/src/hex/mod.rs` (the bytes: windowed reads, the overwritten bytes, undo, cursors, search, the row layout), `vortex-view/src/hex/memory.rs` (a debugged program's memory as the bytes: the page cache, what each byte is as drawn), `vortex-term/src/ui/hex_view.rs` (drawing, the statusline texts), `vortex-term/src/commands/hex.rs` (keys, mouse, prompts, `:hex`), `vortex-term/tests/test/hex_view.rs` |
@@ -201,8 +201,8 @@ absorbed the debugger's `command`/`args`; the terminals' lines document, with it
 transactions and no soft wrap, in `vortex-view/src/document.rs`; `View::gutter_offset`;
 `Node::share`, `split_root`, `place` and `insert_at` in `vortex-view/src/tree.rs`; `in_source_view`
 in `vortex-view/src/handlers/dap.rs`. In `vortex-term`: `EditorView`'s render, keys, paste, mouse,
-cursor, `layer_key` and mode background in `ui/editor.rs`; `toggle_terminal`, `hsplit`/`vsplit`,
-`goto_buffer`, the new commands and the `before_command` hook in `commands.rs`; `:terminal`,
+cursor, `layer_key` and mode background in `ui/editor.rs`; `toggle_terminal`, `rerun_last_command`,
+`hsplit`/`vsplit`, `goto_buffer`, the new commands and the `before_command` hook in `commands.rs`; `:terminal`,
 `:vterminal`, `:sh`, `:w` and `:q` of the command line buffer in `typed.rs`; `Layer::Terminal` and
 `Layer::TerminalView` in `keymap.rs`, `config.rs` and `keymap/default.rs`; the disk check on leaving
 a terminal in `handlers/disk.rs`; completion skipping screens in `handlers/completion.rs`; the
@@ -1987,7 +1987,8 @@ a statusline indicator tells what its shell is doing while it is hidden.
 
 | Key or command | What it does |
 | --- | --- |
-| `Ctrl-t` | Shows the scratch terminal (starting a shell when none runs) at `position`, `size`% of the editor, and focuses it in insert mode. Again, from its normal mode or from any other window: hides it, the shell keeps running. Alone in the tree, it first opens a scratch buffer split. Not in a terminal's insert mode, where it goes to the program |
+| `Ctrl-t` | Shows the scratch terminal (starting a shell when none runs) at `position`, `size`% of the editor, and focuses it in insert mode. Again, from its normal mode or from any other window: hides it, the shell keeps running. Alone in the tree, it first opens a scratch buffer split. While the strip of a rerun shows: grows it to the full size and focuses it. Not in a terminal's insert mode, where it goes to the program |
+| `Ctrl-Shift-t` | Reruns the scratch terminal's last command ([below](#rerunning-the-last-command)). In normal mode and in the insert mode of text windows; in a terminal's insert mode it goes to the program |
 | `:sh cmd`, `:run-shell-command cmd` | Shows and focuses the scratch terminal and runs `cmd` in its shell, as if typed and Enter pressed |
 | `:sh` | Shows and focuses the scratch terminal, starting a shell only if none runs |
 | `:! cmd`, `:shell-popup cmd` | Runs `cmd` on its own and shows its output in a popup. `:!cmd` without a space works too |
@@ -2009,6 +2010,43 @@ share. Entering a terminal's window by any means lands in insert mode; leaving i
 | `Ctrl-w s`, `Ctrl-w v` in a terminal | The same as the two commands above: a new terminal, not a copy of the window |
 
 `Ctrl-t` doesn't touch these. Close one with `:q`, `Ctrl-w q` or `exit`; its shell is killed.
+
+### Rerunning the last command
+
+`Ctrl-Shift-t` (`rerun_last_command`) runs the scratch terminal's last command again, from any
+window but a terminal's insert mode, without moving the focus or the mode. The command is what was typed between the end of the
+prompt (OSC 133 `B`) and the command running (`C`), read back from the terminal's cells; no Up and
+Enter are sent. The line being typed at the prompt is cleared first (Vortex's integration, bash and
+zsh), then the command is typed and Enter pressed.
+
+If the scratch terminal is hidden, it shows as a small strip at its `position`: at the top or
+bottom, `rerun-size` lines of the terminal plus its statusline, never more than its usual `size`.
+At the left or right a strip of lines can't stand, so it shows at its usual width. If it is already
+shown, the command reruns there at its current size. A strip opens at the edge; when hidden, the
+terminal goes back to where it was hidden from before the strip, if anywhere.
+
+When the command ends, the statusline's message area shows the result: the command, a mark and the time
+for a success (`cargo check ✓ 3.2s`, `1m 05s` past a minute), the exit code as an error for a
+failure (`cargo check ✗ exit 101`). A shell that gives no exit code: the command and the time, no
+mark.
+
+The strip never hides itself, after a success or a failure. It stays until hidden: `:q`,
+`Ctrl-w q` on it, or `Ctrl-t` twice. `Ctrl-t` while it shows grows it to the scratch terminal's
+usual size and focuses it in insert mode; the next `Ctrl-t` hides it, as always.
+
+Refusals, as an error in the statusline:
+
+| Message | When |
+| --- | --- |
+| a program is still running in the scratch terminal | A command is running |
+| no command has run in the scratch terminal yet | Nothing to rerun |
+| the shell sends no OSC 133 markers: its last command is unknown | `sh`, or `shell-integration = false` |
+| no scratch terminal is running | None is started; the key doesn't start one |
+| the last command spans several lines: it isn't rerun | A command typed over several lines |
+
+Nothing runs and nothing is watched until the key is pressed: the command text is read from the
+cells when a command starts running, only at a prompt with markers, and the end of a rerun is
+looked at only while one is pending.
 
 ### The modes
 
@@ -2088,10 +2126,12 @@ pointing to a script that sources your `~/.bashrc` and then adds its hooks (`PS0
 trap before bash 4.4, and the front of `PROMPT_COMMAND`, keeping `$?` for your own prompt); zsh
 runs with a `ZDOTDIR` whose startup files source yours and then add `precmd`/`preexec` hooks, and
 restore your `ZDOTDIR`. The integration also reports the working directory (OSC 7) at each prompt,
-and binds two private sequences to read and clear the command line, which `e` uses. Shells that
-send OSC 133 themselves work too. For other shells, a command is running when the terminal's
-foreground process group isn't the shell's; there is no exit code then, so the indicator goes back
-to idle.
+and binds two private sequences to read and clear the command line, which `e` and the rerun use.
+Each prompt ends with the `B` marker (bash: put back at the end of `PS1` before each prompt when a
+`PROMPT_COMMAND` set `PS1` anew; zsh: at the end of the right prompt when there is one, else the
+left one). Shells that send OSC 133 themselves work too. For other shells, a command is running
+when the terminal's foreground process group isn't the shell's; there is no exit code then, so the
+indicator goes back to idle.
 
 ### Watch mode and debug mode
 
@@ -2115,6 +2155,7 @@ background (`ui.background.mode`) isn't painted over terminals.
 [editor.terminal]
 position = "bottom"      # of the scratch terminal: "bottom", "top", "left" or "right"
 size = 33                # percent of the editor in that direction (10 to 90)
+rerun-size = 4           # lines of the strip `Ctrl-Shift-t` shows, at a top or bottom edge
 shell = []               # the shell and its arguments; empty: $SHELL, else /bin/sh
 shell-integration = true # inject the OSC 133 markers into bash and zsh
 scrollback = 10000       # lines
@@ -2197,6 +2238,12 @@ with the POSIX tools the exercises may use no short text makes them beat typing 
 - The debugger's `runInTerminal` still uses the external terminal, not a terminal window.
 - `vx` in a shell started in a terminal over `ssh` or in a container doesn't reach this editor.
 - A command typed with `:sh` while a full screen program runs goes to that program.
+- `Ctrl-Shift-t` needs a terminal with the enhanced keyboard protocol (kitty keyboard protocol) to
+  be told apart from `Ctrl-t`; elsewhere it arrives as `Ctrl-t` and does what that does. There is
+  no fallback key.
+- A command typed over several lines isn't rerun.
+- The strip of a rerun is only lines tall at a top or bottom edge; at the left or right it has the
+  usual width.
 
 ### Theme effects
 
