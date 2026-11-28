@@ -1,5 +1,6 @@
 # Runs the user's own .zshrc, see .zshenv, then installs the hooks that emit OSC 133 markers:
 #   C: a command starts running      D;status: it finished      A: the prompt starts
+#   B: the prompt ends, the command is typed
 # and OSC 7 (the working directory) at each prompt; binds two keys only Vortex sends, one that
 # reports the command line being edited (OSC 6973, its bytes in hexadecimal) and one that clears
 # it, to edit the command in a Vortex buffer.
@@ -26,8 +27,18 @@ unset __vx_map
 __vx_preexec() {
     printf '\e]133;C\a'
 }
+# Last: the prompt ends with B, where the user types the command (after the right prompt, which
+# zsh draws after the left one). Again when a theme set the prompt anew.
+__vx_prompt_end() {
+    if [[ -n $RPS1 ]]; then
+        [[ $RPS1 == *'133;B'* ]] || RPS1="$RPS1%{"$'\e]133;B\a'"%}"
+    else
+        [[ $PS1 == *'133;B'* ]] || PS1="$PS1%{"$'\e]133;B\a'"%}"
+    fi
+}
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec __vx_preexec
+add-zsh-hook precmd __vx_prompt_end
 # First, to see the exit status of the command.
 add-zsh-hook precmd __vx_precmd
 precmd_functions=(__vx_precmd ${precmd_functions:#__vx_precmd})

@@ -1,6 +1,7 @@
 # Shell integration for Vortex's terminal panel. Started with `bash --init-file`, which replaces
 # ~/.bashrc only (bash still reads /etc/bash.bashrc itself). Emits OSC 133 markers:
 #   C: a command starts running      D;status: it finished      A: the prompt starts
+#   B: the prompt ends, the command is typed
 # and OSC 7 (the working directory) at each prompt; binds two keys only Vortex sends, one that
 # reports the command line being edited (OSC 6973, its bytes in hexadecimal) and one that clears
 # it, to edit the command in a Vortex buffer.
@@ -32,8 +33,10 @@ if [ -z "$__vx_integration_loaded" ]; then
     unset __vx_map
 
     # Runs last in PROMPT_COMMAND: from here on, the DEBUG trap (old bash) is for the command.
+    # The prompt ends with B, where the user types the command; again if PROMPT_COMMAND set PS1.
     __vx_arm() {
         local __vx_status=$?
+        [[ $PS1 == *'133;B'* ]] || PS1="${PS1}"'\[\e]133;B\a\]'
         __vx_at_prompt=1
         return "$__vx_status"
     }
@@ -60,7 +63,4 @@ if [ -z "$__vx_integration_loaded" ]; then
         }
         trap '__vx_preexec' DEBUG
     fi
-
-    # The prompt ends: the user types the command.
-    PS1="${PS1}"'\[\e]133;B\a\]'
 fi

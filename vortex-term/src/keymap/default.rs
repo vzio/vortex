@@ -373,6 +373,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "$" => shell_keep_pipe,
         "C-z" => suspend,
         "C-t" => toggle_terminal,
+        "C-T" => rerun_last_command,
         "C-g" => debug_panel_focus,
 
         "C-a" => increment,
@@ -422,6 +423,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
 
         "C-s" => commit_undo_checkpoint,
         "C-t" => toggle_terminal,
+        "C-T" => rerun_last_command,
         "C-x" => completion,
         "C-r" => insert_register,
 

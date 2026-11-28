@@ -399,8 +399,31 @@ impl Editor {
         }
         self.enter_normal_mode();
         let from = self.tree.focus;
+        let id = self.insert_screen_window(screen, placement);
+        self.tree.focus = id;
+        self.screen_focused(from);
+        self._refresh();
+        id
+    }
+
+    /// Shows the screen `screen` in a new window at `placement` without moving the focus or
+    /// changing the mode (the scratch terminal's rerun strip). Returns the window.
+    pub fn open_screen_aside(&mut self, screen: ScreenId, placement: Placement) -> ViewId {
+        if let Some(view) = self.view_of(screen) {
+            return self.tree.top_of(view);
+        }
+        let from = self.tree.focus;
+        let id = self.insert_screen_window(screen, placement);
+        self.tree.focus = from;
+        self._refresh();
+        id
+    }
+
+    /// Puts a new window of `screen` in the tree at `placement`. The tree focuses it.
+    fn insert_screen_window(&mut self, screen: ScreenId, placement: Placement) -> ViewId {
+        let from = self.tree.focus;
         let window = ScreenView::new(screen);
-        let id = match placement {
+        match placement {
             Placement::Cover => match self.window_to_cover() {
                 Some(covered) => self.tree.cover(covered, window),
                 None if self.tree.is_visible(from) => self.tree.split(window, Layout::Vertical),
@@ -426,11 +449,7 @@ impl Editor {
                     self.tree.split_root(window, fallback, at_end, place.share)
                 }
             },
-        };
-        self.tree.focus = id;
-        self.screen_focused(from);
-        self._refresh();
-        id
+        }
     }
 
     /// Covers the window `covered` with a new text window of the new document `doc` (a
@@ -575,7 +594,7 @@ impl Editor {
         match self.screens.kind(screen) {
             Some(ScreenKind::Terminal) if self.terminals.scratch == Some(screen) => {
                 let place = self.hide_screen(view);
-                self.terminals.scratch_place = Some(place);
+                self.terminals.scratch_hidden(place);
             }
             Some(ScreenKind::DebugPanel) => {
                 let place = self.hide_screen(view);

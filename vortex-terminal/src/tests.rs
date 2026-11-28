@@ -425,3 +425,71 @@ fn no_prompt_without_markers() {
     assert!(!h.shell.at_prompt());
     assert!(!h.shell.has_vortex_integration());
 }
+
+/// The last command is what was typed between OSC 133 `B` and `C`: not the prompt, also when
+/// the terminal wrapped it, when the prompt was drawn again, or when `PROMPT_COMMAND` sets `PS1`
+/// at each prompt. An empty line keeps the one before.
+#[test]
+fn bash_knows_the_last_command() {
+    let mut h = Harness::start(&["bash"], true);
+    h.wait_for("the markers", |h| h.shell.has_markers());
+    assert_eq!(h.shell.last_command(), None);
+    h.type_line("echo  one   'é字' # x");
+    h.wait_row("one é字");
+    h.wait_for("the command", |h| {
+        h.shell.last_command().as_deref() == Some("echo  one   'é字' # x")
+    });
+    // an empty line keeps it
+    h.type_line("");
+    h.type_line("");
+    h.wait_for("two prompts more", |h| h.prompts() >= 3);
+    assert_eq!(
+        h.shell.last_command().as_deref(),
+        Some("echo  one   'é字' # x")
+    );
+    // longer than the terminal is wide
+    let long = format!("echo {}", "w".repeat(100));
+    h.type_line(&long);
+    h.wait_row(&"w".repeat(80));
+    h.wait_for("the long command", |h| {
+        h.shell.last_command().as_deref() == Some(long.as_str())
+    });
+    // Ctrl-L draws the prompt and the line again
+    h.shell.write(b"echo redrawn");
+    h.wait_row("$ echo redrawn");
+    h.shell.write(b"\x0c\r");
+    h.wait_row("redrawn");
+    h.wait_for("the redrawn command", |h| {
+        h.shell.last_command().as_deref() == Some("echo redrawn")
+    });
+    // a prompt that PROMPT_COMMAND sets anew
+    h.type_line("PROMPT_COMMAND=\"PS1='% '; $PROMPT_COMMAND\"");
+    h.wait_row("%");
+    h.type_line("echo after-$((1+1))");
+    h.wait_row("after-2");
+    h.wait_for("the command after", |h| {
+        h.shell.last_command().as_deref() == Some("echo after-$((1+1))")
+    });
+}
+
+/// `run_command` replaces the line being typed and runs the command.
+#[test]
+fn bash_runs_a_command_over_a_half_typed_line() {
+    let mut h = Harness::start(&["bash"], true);
+    h.wait_for("the markers", |h| h.shell.has_vortex_integration());
+    h.shell.write(b"half typed");
+    h.wait_row("$ half typed");
+    h.shell.run_command("echo ran-$((2*3))");
+    h.wait_row("ran-6");
+    h.wait_status(ShellStatus::Finished(0));
+    assert_eq!(h.shell.last_command().as_deref(), Some("echo ran-$((2*3))"));
+}
+
+/// Without a `B` marker there is no last command.
+#[test]
+fn no_last_command_without_markers() {
+    let mut h = Harness::start(&["/bin/sh"], false);
+    h.type_line("echo x-$((1+1))");
+    h.wait_row("x-2");
+    assert_eq!(h.shell.last_command(), None);
+}

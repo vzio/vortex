@@ -8,7 +8,9 @@ use vortex_view::{
     document::Mode,
     editor::Action,
     screen::{Placement, Screen, ScreenId, ScreenKind},
-    terminal::{Shell, ShellEvent, ShellOptions, Size, Terminal, Waiter},
+    terminal::{
+        RerunEnd, RerunWatch, Shell, ShellEvent, ShellOptions, Size, Strip, Terminal, Waiter,
+    },
     tree::Layout,
     Align, Editor,
 };
@@ -51,6 +53,8 @@ fn spawn(editor: &mut Editor) -> anyhow::Result<ScreenId> {
         },
         scrollback: config.scrollback,
     };
+    let rerun = RerunWatch::default();
+    let watch = rerun.clone();
     let (sender, mut receiver) = unbounded_channel();
     let shell = match Shell::spawn(options, sender) {
         Ok(shell) => shell,
@@ -65,9 +69,13 @@ fn spawn(editor: &mut Editor) -> anyhow::Result<ScreenId> {
         let _server = server;
         while let Some(event) = receiver.recv().await {
             match event {
-                ShellEvent::Output | ShellEvent::Status(_) | ShellEvent::Title(_) => {
-                    vortex_event::request_redraw()
+                ShellEvent::Status(status) => {
+                    vortex_event::request_redraw();
+                    if let Some(end) = watch.observe(status) {
+                        job::dispatch(move |editor, _| rerun_ended(editor, end)).await;
+                    }
                 }
+                ShellEvent::Output | ShellEvent::Title(_) => vortex_event::request_redraw(),
                 ShellEvent::Cwd(_) => {
                     job::dispatch(move |editor, _| rename(editor, doc)).await;
                 }
@@ -83,7 +91,7 @@ fn spawn(editor: &mut Editor) -> anyhow::Result<ScreenId> {
         }
     });
 
-    let terminal = Terminal::new(shell);
+    let terminal = Terminal::new(shell, rerun);
     let name = terminal.name();
     editor.terminals.list.insert(doc, terminal);
     if let Some(screen) = editor.screens.get_mut(doc) {
@@ -142,10 +150,18 @@ fn ensure_scratch(editor: &mut Editor) -> Option<ScreenId> {
 }
 
 /// `C-t`: shows the scratch terminal (starting its shell when none runs) and focuses it, or hides
-/// it when it is shown, wherever the focus is. Hidden, its shell keeps running.
+/// it when it is shown, wherever the focus is. Hidden, its shell keeps running. The rerun strip
+/// grows to the usual size instead, and is focused.
 pub fn toggle_scratch(editor: &mut Editor) {
     let shown = editor.terminals.scratch.and_then(|doc| editor.view_of(doc));
     match shown {
+        Some(view) if editor.terminals.strip.is_some() => {
+            editor.terminals.strip = None;
+            let view = editor.tree.top_of(view);
+            let share = editor.config().terminal.share();
+            editor.tree.set_share(view, Some(share));
+            editor.focus(view);
+        }
         Some(view) => {
             let view = editor.tree.top_of(view);
             // the last window: something to show instead
@@ -175,6 +191,66 @@ pub fn run(editor: &mut Editor, command: &str) {
         if !command.is_empty() {
             terminal.shell.write(format!("{command}\r").as_bytes());
         }
+    }
+}
+
+/// `C-T`: reruns the scratch terminal's last command, as typed between its OSC 133 `B` and
+/// `C` markers, without moving the focus. A hidden scratch terminal shows as the strip, small
+/// at its edge; a shown one keeps its size. The result goes to the statusline when it ends.
+pub fn rerun(editor: &mut Editor) {
+    let Some(screen) = editor.terminals.scratch else {
+        return editor.set_error("no scratch terminal is running");
+    };
+    let Some(terminal) = editor.terminals.get(screen) else {
+        return editor.set_error("no scratch terminal is running");
+    };
+    let shell = &terminal.shell;
+    if !shell.has_markers() {
+        return editor.set_error("the shell sends no OSC 133 markers: its last command is unknown");
+    }
+    if !shell.at_prompt() {
+        return editor.set_error("a program is still running in the scratch terminal");
+    }
+    let Some(command) = shell.last_command() else {
+        return editor.set_error("no command has run in the scratch terminal yet");
+    };
+    if command.contains('\n') {
+        return editor.set_error("the last command spans several lines: it isn't rerun");
+    }
+    terminal.rerun.start(command.clone());
+    shell.run_command(&command);
+    if editor.view_of(screen).is_none() {
+        let place = editor.terminals.scratch_place.take();
+        let placement = editor.strip_placement();
+        editor.open_screen_aside(screen, placement);
+        editor.terminals.strip = Some(Strip { place });
+    }
+}
+
+/// A rerun command ended: the command and how, in the statusline (`cargo check ✓ 3.2s`, or the
+/// exit code as an error).
+fn rerun_ended(editor: &mut Editor, end: RerunEnd) {
+    let RerunEnd {
+        command,
+        code,
+        took,
+    } = end;
+    match code {
+        Some(0) => editor.set_status(format!("{command} ✓ {}", seconds(took))),
+        Some(code) => editor.set_error(format!("{command} ✗ exit {code}")),
+        // the shell gave no exit code
+        None => editor.set_status(format!("{command} {}", seconds(took))),
+    }
+}
+
+/// `3.2s`, `1m 05s`.
+fn seconds(took: std::time::Duration) -> String {
+    let secs = took.as_secs_f64();
+    if secs < 60.0 {
+        format!("{secs:.1}s")
+    } else {
+        let secs = took.as_secs();
+        format!("{}m {:02}s", secs / 60, secs % 60)
     }
 }
 
@@ -261,5 +337,17 @@ fn focus_documents(editor: &mut Editor) {
     }
     if editor.mode() != Mode::Normal {
         editor.mode = Mode::Normal;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    #[test]
+    fn rerun_times() {
+        assert_eq!(super::seconds(Duration::from_millis(3240)), "3.2s");
+        assert_eq!(super::seconds(Duration::from_millis(40)), "0.0s");
+        assert_eq!(super::seconds(Duration::from_secs(65)), "1m 05s");
     }
 }

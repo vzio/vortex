@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
@@ -28,6 +28,12 @@ use crate::{
 /// The id of the hyperlink the prompt and the command typed at it are written with (OSC 133 `A`
 /// to `C`): the cells keep it through scrolling, so a snapshot knows which lines are prompts.
 const PROMPT_LINK: &str = "vortex-prompt";
+/// The id of the hyperlink the command typed at a prompt is written with (OSC 133 `B` to `C`),
+/// followed by a number new at each `B`: a prompt the shell draws again (its `B` with it) is
+/// written with the last one, the command after it with a new one.
+const COMMAND_LINK: &str = "vortex-command-";
+/// How many rows up from the cursor the command that just ran is looked for.
+const MAX_COMMAND_ROWS: i32 = 200;
 
 /// What Vortex's integration binds in bash and zsh: reports the command line being edited
 /// (OSC 6973), and clears it.
@@ -71,6 +77,10 @@ struct Common {
     at_prompt: AtomicBool,
     /// The working directory the shell last reported (OSC 7).
     cwd: Mutex<Option<PathBuf>>,
+    /// The `B` markers seen: the number of the next command's hyperlink.
+    command_starts: AtomicUsize,
+    /// The last command run at a prompt, as typed between its `B` and `C` markers.
+    last_command: Mutex<Option<String>>,
 }
 
 impl Common {
@@ -447,6 +457,8 @@ impl Shell {
             ready_at_marker: integration.dir.is_some(),
             vortex_integration: integration.dir.is_some(),
             at_prompt: AtomicBool::new(false),
+            command_starts: AtomicUsize::new(0),
+            last_command: Mutex::new(None),
             cwd: Mutex::new(None),
         });
         let config = Config {
@@ -705,6 +717,24 @@ impl Shell {
         self.write(&bytes);
     }
 
+    /// The last command run at a prompt, as it was typed: the text between its OSC 133 `B` and
+    /// `C` markers. `None` before the first one, or when the shell sends no `B`.
+    pub fn last_command(&self) -> Option<String> {
+        self.common.last_command.lock().clone()
+    }
+
+    /// Runs `command` at the prompt: the line being typed is cleared first (with Vortex's
+    /// integration), then `command` is typed and Enter pressed.
+    pub fn run_command(&self, command: &str) {
+        let mut bytes = Vec::new();
+        if self.has_vortex_integration() {
+            bytes.extend_from_slice(CLEAR_COMMAND_LINE);
+        }
+        bytes.extend_from_slice(command.as_bytes());
+        bytes.push(b'\r');
+        self.common.write_input(&bytes);
+    }
+
     /// Every line of the terminal as it is now, the scrollback first (the alternate screen has
     /// none), for view mode.
     pub fn snapshot(&self) -> Snapshot {
@@ -724,7 +754,7 @@ impl Shell {
                 if !prompt {
                     prompt = source
                         .hyperlink()
-                        .is_some_and(|link| link.id() == PROMPT_LINK);
+                        .is_some_and(|link| is_prompt_link(link.id()));
                 }
                 convert_cell(source, &mut cell);
                 if cell.text.is_empty() {
@@ -814,7 +844,7 @@ fn read_loop(mut reader: Box<dyn Read + Send>, common: &Common, term: &SharedTer
             {
                 let mut term = term.lock();
                 processor.advance(&mut *term, &chunk[from..end]);
-                mark_prompt(&mut term, &marker);
+                mark_prompt(&mut term, &marker, common);
             }
             from = end;
             common.handle_marker(&marker);
@@ -832,27 +862,94 @@ fn read_loop(mut reader: Box<dyn Read + Send>, common: &Common, term: &SharedTer
     }
 }
 
-/// Writes the prompt and the command typed at it with [`PROMPT_LINK`]: from a prompt's start to
-/// its command running, on the primary screen.
-fn mark_prompt(term: &mut Term<Listener>, marker: &Marker) {
+/// Writes the prompt with [`PROMPT_LINK`] and the command typed at it with a [`COMMAND_LINK`],
+/// from a prompt's start to its command running, on the primary screen. When the command runs,
+/// it is read back from the cells written with its link: the last command.
+fn mark_prompt(term: &mut Term<Listener>, marker: &Marker, common: &Common) {
     let alt_screen = term.mode().contains(TermMode::ALT_SCREEN);
-    let template = &mut term.grid_mut().cursor.template;
+    let link = term
+        .grid()
+        .cursor
+        .template
+        .hyperlink()
+        .map(|link| link.id().to_owned())
+        .filter(|id| is_prompt_link(id));
     match marker {
-        Marker::PromptStart if !alt_screen => {
-            template.set_hyperlink(Some(Hyperlink::new(
-                Some(PROMPT_LINK),
-                String::from("vortex:prompt"),
-            )));
+        Marker::PromptStart if !alt_screen => set_link(term, Some(PROMPT_LINK.to_owned())),
+        Marker::CommandStart if link.is_some() => {
+            let n = common.command_starts.fetch_add(1, Ordering::SeqCst);
+            set_link(term, Some(format!("{COMMAND_LINK}{n}")));
         }
-        Marker::CommandExecuted | Marker::CommandFinished(_)
-            if template
-                .hyperlink()
-                .is_some_and(|link| link.id() == PROMPT_LINK) =>
-        {
-            template.set_hyperlink(None);
+        Marker::CommandExecuted | Marker::CommandFinished(_) if link.is_some() => {
+            if let (Marker::CommandExecuted, Some(id)) = (marker, &link) {
+                if let Some(command) = read_command(term, id) {
+                    *common.last_command.lock() = Some(command);
+                }
+            }
+            set_link(term, None);
         }
         _ => {}
     }
+}
+
+/// Whether the hyperlink `id` is one of a prompt or of the command typed at it.
+fn is_prompt_link(id: &str) -> bool {
+    id == PROMPT_LINK || id.starts_with(COMMAND_LINK)
+}
+
+fn set_link(term: &mut Term<Listener>, id: Option<String>) {
+    term.grid_mut()
+        .cursor
+        .template
+        .set_hyperlink(id.map(|id| Hyperlink::new(Some(id), String::from("vortex:prompt"))));
+}
+
+/// The text of the cells written with the command hyperlink `id`, in the rows above the cursor:
+/// a row the terminal wrapped goes on in the next, another row starts a new line. `None` when
+/// there is none or only blanks (an empty line was run).
+fn read_command(term: &Term<Listener>, id: &str) -> Option<String> {
+    let grid = term.grid();
+    let top = -(grid.history_size() as i32);
+    let columns = grid.columns();
+    // bottom to top
+    let mut rows: Vec<(String, bool)> = Vec::new();
+    let mut line = grid.cursor.point.line.0;
+    while line >= top && line > grid.cursor.point.line.0 - MAX_COMMAND_ROWS {
+        let row = &grid[Line(line)];
+        let mut text = String::new();
+        let mut found = false;
+        for col in 0..columns {
+            let cell = &row[Column(col)];
+            if !cell.hyperlink().is_some_and(|link| link.id() == id) {
+                continue;
+            }
+            found = true;
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            text.push(cell.c);
+            text.extend(cell.zerowidth().into_iter().flatten());
+        }
+        if found {
+            let wrapped = row[Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+            rows.push((text, wrapped));
+        } else if !rows.is_empty() {
+            break;
+        }
+        line -= 1;
+    }
+    let mut command = String::new();
+    for (text, wrapped) in rows.into_iter().rev() {
+        command.push_str(&text);
+        if !wrapped {
+            command.push('\n');
+        }
+    }
+    let command = command.trim_end();
+    (!command.trim().is_empty()).then(|| command.to_owned())
 }
 
 /// For shells without integration: looks at whether the shell or a command it started is in the

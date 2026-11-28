@@ -660,6 +660,7 @@ const NONE: &[&str] = &[
     "search_next",
     "search_prev",
     "toggle_terminal",
+    "rerun_last_command",
     // the terminals (this fork): a window of their own, and their own lines
     "hsplit_terminal",
     "vsplit_terminal",
