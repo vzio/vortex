@@ -332,6 +332,7 @@ fn effect(name: &str) -> Effect {
                 | "command_palette"
                 | "select_register"
                 | "toggle_terminal"
+                | "rerun_last_command"
                 | "toggle_bookmark"
         )
     {

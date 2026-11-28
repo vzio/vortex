@@ -2771,7 +2771,7 @@ impl Editor {
                 if self.debug.panel == Some(screen) {
                     self.debug.panel_place = Some(place);
                 } else {
-                    self.terminals.scratch_place = Some(place);
+                    self.terminals.scratch_hidden(place);
                 }
                 return;
             }

@@ -582,6 +582,7 @@ impl MappableCommand {
         swap_view_down, "Swap with split below",
         transpose_view, "Transpose splits",
         toggle_terminal, "Show and focus the scratch terminal, or hide it (its shell keeps running)",
+        rerun_last_command, "Rerun the scratch terminal's last command, the focus staying where it is",
         hsplit_terminal, "New terminal in a horizontal split",
         vsplit_terminal, "New terminal in a vertical split",
         terminal_view, "Terminal: view mode, walking its lines and scrollback",
@@ -6317,6 +6318,10 @@ fn swap_view_down(cx: &mut Context) {
 
 fn toggle_terminal(cx: &mut Context) {
     crate::terminal::window::toggle_scratch(cx.editor);
+}
+
+fn rerun_last_command(cx: &mut Context) {
+    crate::terminal::window::rerun(cx.editor);
 }
 
 fn hsplit_terminal(cx: &mut Context) {

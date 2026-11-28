@@ -548,6 +548,7 @@ fn acts_on_windows(name: &str) -> bool {
         "wclose",
         "wonly",
         "toggle_terminal",
+        "rerun_last_command",
         "hsplit_terminal",
         "vsplit_terminal",
         "file_picker",
