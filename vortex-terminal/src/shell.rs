@@ -920,7 +920,7 @@ fn read_command(term: &Term<Listener>, id: &str) -> Option<String> {
         let mut found = false;
         for col in 0..columns {
             let cell = &row[Column(col)];
-            if !cell.hyperlink().is_some_and(|link| link.id() == id) {
+            if cell.hyperlink().is_none_or(|link| link.id() != id) {
                 continue;
             }
             found = true;

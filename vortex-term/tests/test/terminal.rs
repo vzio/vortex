@@ -1809,12 +1809,12 @@ fn rerun_harness(rerun_size: Option<u16>) -> anyhow::Result<Harness> {
     Harness::new(AppBuilder::new().with_config(config))
 }
 
-/// Runs `command` in the scratch terminal (shown, insert mode) and waits for it to end: the
-/// shell is at its prompt again and knows the command as its last one.
+/// Runs `command` (macro notation: `<gt>` for `>`) in the scratch terminal (shown, insert mode)
+/// and waits for it to end: the shell is at its prompt again and knows it as its last command.
 async fn run_last(h: &mut Harness, command: &str) -> anyhow::Result<()> {
     h.keys(command).await?;
     h.keys("<ret>").await?;
-    let command = command.to_string();
+    let command = command.replace("<gt>", ">");
     h.until("the command to end", move |app| {
         scratch(app).is_some_and(|t| {
             t.shell.at_prompt() && t.shell.last_command().as_deref() == Some(command.as_str())
@@ -1841,7 +1841,7 @@ fn shell_rows(app: &Application) -> u16 {
     scratch(app).expect("a scratch terminal").shell.size().rows
 }
 
-/// The lines of the file, once it has `count` of them.
+/// The lines of the file, none while it doesn't exist.
 fn lines_of(file: &Path) -> Vec<String> {
     std::fs::read_to_string(file)
         .unwrap_or_default()
@@ -1870,7 +1870,7 @@ async fn rerun_runs_the_last_command_again() -> anyhow::Result<()> {
     let mut h = rerun_harness(None)?;
     open_bash(&mut h).await?;
     run_last(&mut h, "echo older-command").await?;
-    let command = format!("echo rerun-$((40+2)) >> {}", file.display());
+    let command = format!("echo rerun-$((40+2)) <gt><gt> {}", file.display());
     run_last(&mut h, &command).await?;
     assert_eq!(lines_of(&file), ["rerun-42"]);
     h.keys("<esc><C-t>").await?;
@@ -1899,10 +1899,8 @@ async fn rerun_strip_has_the_rerun_size_and_keeps_the_focus() -> anyhow::Result<
     h.keys("<C-T>").await?;
     let view = scratch_view(&h.app).expect("the strip shows");
     assert!(h.app.editor.terminals.strip.is_some());
-    h.until("the shell's size", |app| {
-        (4..=5).contains(&shell_rows(app))
-    })
-    .await;
+    h.until("the shell's size", |app| (4..=5).contains(&shell_rows(app)))
+        .await;
     let area = area_of(&h.app, view);
     assert_eq!(area.width, tree.width, "full width: {area:?} in {tree:?}");
     assert_eq!(
@@ -1925,10 +1923,8 @@ async fn rerun_strip_follows_a_custom_rerun_size() -> anyhow::Result<()> {
     bash_ran_and_hidden(&mut h, "echo strip-out").await?;
     h.keys("<C-T>").await?;
     assert!(h.app.editor.terminals.strip.is_some());
-    h.until("the shell's size", |app| {
-        (6..=7).contains(&shell_rows(app))
-    })
-    .await;
+    h.until("the shell's size", |app| (6..=7).contains(&shell_rows(app)))
+        .await;
     h.finish().await
 }
 
@@ -1963,7 +1959,8 @@ async fn rerun_in_a_shown_terminal_keeps_its_size_and_the_focus() -> anyhow::Res
     let file = dir.path().join("count");
     let mut h = rerun_harness(None)?;
     open_bash(&mut h).await?;
-    run_last(&mut h, &format!("echo shown >> {}", file.display())).await?;
+    let command = format!("echo shown <gt><gt> {}", file.display());
+    run_last(&mut h, &command).await?;
     let view = scratch_view(&h.app).unwrap();
     let area = area_of(&h.app, view);
     let rows = shell_rows(&h.app);
@@ -2083,7 +2080,8 @@ async fn ctrl_t_grows_the_strip_and_focuses_it() -> anyhow::Result<()> {
         "about 33%: {area:?} in {tree:?}"
     );
 
-    h.keys("<C-t>").await?;
+    // in the terminal's insert mode `C-t` goes to the shell: Esc first, as for any terminal
+    h.keys("<esc><C-t>").await?;
     assert!(scratch_view(&h.app).is_none(), "hidden by the second");
     assert!(shell_running(&h.app));
     h.finish().await
@@ -2195,5 +2193,30 @@ async fn rerun_refuses_before_any_command() -> anyhow::Result<()> {
     );
     assert!(scratch_view(&h.app).is_none(), "no strip");
     assert!(h.app.editor.terminals.strip.is_none());
+    h.finish().await
+}
+
+/// A command typed over several lines (a continuation prompt) isn't rerun.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_refuses_a_command_over_several_lines() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    open_bash(&mut h).await?;
+    h.keys("echo 'two<ret>lines'<ret>").await?;
+    h.until("the command to end", |app| {
+        scratch(app).is_some_and(|t| {
+            t.shell.at_prompt() && t.shell.last_command().is_some_and(|c| c.contains('\n'))
+        })
+    })
+    .await;
+    h.keys("<esc><C-t>").await?;
+    h.keys("<C-T>").await?;
+    assert_eq!(
+        error_text(&h.app).as_deref(),
+        Some("the last command spans several lines: it isn't rerun")
+    );
+    assert!(scratch_view(&h.app).is_none(), "no strip");
     h.finish().await
 }
