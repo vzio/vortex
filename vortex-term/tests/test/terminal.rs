@@ -1795,3 +1795,405 @@ async fn terminals_are_listed_by_name_and_switching_shows_the_hidden_one() -> an
     assert_eq!(focused_terminal(&h.app), Some(doc));
     h.finish().await
 }
+
+// ---------------------------------------------------------------------------------------------
+// rerun the last command (`C-S-t`)
+// ---------------------------------------------------------------------------------------------
+
+/// A bash with Vortex's integration, configured with a `rerun-size`.
+fn rerun_harness(rerun_size: Option<u16>) -> anyhow::Result<Harness> {
+    let mut config = config_with_shell(&["bash"]);
+    if let Some(size) = rerun_size {
+        config.editor.terminal.rerun_size = size;
+    }
+    Harness::new(AppBuilder::new().with_config(config))
+}
+
+/// Runs `command` in the scratch terminal (shown, insert mode) and waits for it to end: the
+/// shell is at its prompt again and knows the command as its last one.
+async fn run_last(h: &mut Harness, command: &str) -> anyhow::Result<()> {
+    h.keys(command).await?;
+    h.keys("<ret>").await?;
+    let command = command.to_string();
+    h.until("the command to end", move |app| {
+        scratch(app).is_some_and(|t| {
+            t.shell.at_prompt() && t.shell.last_command().as_deref() == Some(command.as_str())
+        })
+    })
+    .await;
+    h.pump_for(Duration::from_millis(200)).await;
+    Ok(())
+}
+
+/// A bash that has run `command`, then the scratch terminal hidden: the focus is on the
+/// document window, in normal mode.
+async fn bash_ran_and_hidden(h: &mut Harness, command: &str) -> anyhow::Result<()> {
+    open_bash(h).await?;
+    run_last(h, command).await?;
+    h.keys("<esc><C-t>").await?;
+    assert!(scratch_view(&h.app).is_none());
+    assert!(in_editor(&h.app));
+    assert_eq!(h.app.editor.mode(), Mode::Normal);
+    Ok(())
+}
+
+fn shell_rows(app: &Application) -> u16 {
+    scratch(app).expect("a scratch terminal").shell.size().rows
+}
+
+/// The lines of the file, once it has `count` of them.
+fn lines_of(file: &Path) -> Vec<String> {
+    std::fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+/// `C-S-t` is `<C-T>` in the macro notation.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_key_parses_as_c_capital_t() -> anyhow::Result<()> {
+    let keys = parse_macro("<C-T>")?;
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].to_string(), "C-T");
+    Ok(())
+}
+
+/// Rerunning runs exactly the last command again, from a hidden terminal.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_runs_the_last_command_again() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("count");
+    let mut h = rerun_harness(None)?;
+    open_bash(&mut h).await?;
+    run_last(&mut h, "echo older-command").await?;
+    let command = format!("echo rerun-$((40+2)) >> {}", file.display());
+    run_last(&mut h, &command).await?;
+    assert_eq!(lines_of(&file), ["rerun-42"]);
+    h.keys("<esc><C-t>").await?;
+    assert!(scratch_view(&h.app).is_none());
+
+    h.keys("<C-T>").await?;
+    h.until("the second line", |_| lines_of(&file).len() >= 2)
+        .await;
+    h.pump_for(Duration::from_millis(500)).await;
+    assert_eq!(lines_of(&file), ["rerun-42", "rerun-42"], "only the last");
+    assert!(scratch_view(&h.app).is_some(), "the strip shows");
+    h.finish().await
+}
+
+/// The strip is `rerun-size` lines tall (default 4), and the document keeps the focus and mode.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_strip_has_the_rerun_size_and_keeps_the_focus() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    bash_ran_and_hidden(&mut h, "echo strip-out").await?;
+    let editor_view = h.app.editor.tree.focus;
+    let tree = h.app.editor.tree.area();
+
+    h.keys("<C-T>").await?;
+    let view = scratch_view(&h.app).expect("the strip shows");
+    assert!(h.app.editor.terminals.strip.is_some());
+    h.until("the shell's size", |app| {
+        (4..=5).contains(&shell_rows(app))
+    })
+    .await;
+    let area = area_of(&h.app, view);
+    assert_eq!(area.width, tree.width, "full width: {area:?} in {tree:?}");
+    assert_eq!(
+        area.y + area.height,
+        tree.y + tree.height,
+        "at the bottom: {area:?} in {tree:?}"
+    );
+    assert_eq!(h.app.editor.tree.focus, editor_view, "the focus stays");
+    assert_eq!(h.app.editor.mode(), Mode::Normal);
+    h.finish().await
+}
+
+/// A custom `rerun-size`.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_strip_follows_a_custom_rerun_size() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(Some(6))?;
+    bash_ran_and_hidden(&mut h, "echo strip-out").await?;
+    h.keys("<C-T>").await?;
+    assert!(h.app.editor.terminals.strip.is_some());
+    h.until("the shell's size", |app| {
+        (6..=7).contains(&shell_rows(app))
+    })
+    .await;
+    h.finish().await
+}
+
+/// From insert mode in a document, the rerun keeps insert mode and the focus.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_from_insert_mode_in_a_document_keeps_it() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    bash_ran_and_hidden(&mut h, "echo strip-out").await?;
+    let editor_view = h.app.editor.tree.focus;
+    h.keys("i").await?;
+    assert_eq!(h.app.editor.mode(), Mode::Insert);
+
+    h.keys("<C-T>").await?;
+    assert!(scratch_view(&h.app).is_some(), "the strip shows");
+    assert!(h.app.editor.terminals.strip.is_some());
+    assert_eq!(h.app.editor.tree.focus, editor_view);
+    assert_eq!(h.app.editor.mode(), Mode::Insert);
+    assert!(in_editor(&h.app));
+    h.finish().await
+}
+
+/// A terminal that is shown reruns where it is: same size, same focus, no strip.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_in_a_shown_terminal_keeps_its_size_and_the_focus() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("count");
+    let mut h = rerun_harness(None)?;
+    open_bash(&mut h).await?;
+    run_last(&mut h, &format!("echo shown >> {}", file.display())).await?;
+    let view = scratch_view(&h.app).unwrap();
+    let area = area_of(&h.app, view);
+    let rows = shell_rows(&h.app);
+    // to the document window, the terminal stays shown
+    h.keys("<esc><C-w>k").await?;
+    let editor_view = h.app.editor.tree.focus;
+    assert_ne!(editor_view, view);
+
+    h.keys("<C-T>").await?;
+    h.until("the second line", |_| lines_of(&file).len() >= 2)
+        .await;
+    h.pump_for(Duration::from_millis(300)).await;
+    assert_eq!(scratch_view(&h.app), Some(view));
+    assert_eq!(area_of(&h.app, view), area, "the window keeps its size");
+    assert_eq!(shell_rows(&h.app), rows);
+    assert_eq!(h.app.editor.tree.focus, editor_view, "the focus stays");
+    assert_eq!(h.app.editor.mode(), Mode::Normal);
+    assert!(h.app.editor.terminals.strip.is_none());
+    h.finish().await
+}
+
+/// A command that succeeds ends in the statusline, with its time.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_success_shows_the_command_and_its_time() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    bash_ran_and_hidden(&mut h, "echo fine").await?;
+    h.app.editor.clear_status();
+    h.keys("<C-T>").await?;
+    h.until("the result", |app| status_text(app).contains('✓'))
+        .await;
+    let status = status_text(&h.app);
+    let secs = status.strip_prefix("echo fine ✓ ").expect(&status);
+    let secs = secs.strip_suffix('s').expect(&status);
+    assert!(secs.parse::<f64>().is_ok(), "{status}");
+    assert_ne!(
+        h.app.editor.get_status().map(|(_, severity)| *severity),
+        Some(Severity::Error)
+    );
+    h.finish().await
+}
+
+/// A command that fails ends as an error with its exit code.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_failure_shows_the_exit_code_as_an_error() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    bash_ran_and_hidden(&mut h, "(exit 3)").await?;
+    h.app.editor.clear_status();
+    h.keys("<C-T>").await?;
+    h.until("the result", |app| error_text(app).is_some()).await;
+    assert_eq!(error_text(&h.app).as_deref(), Some("(exit 3) ✗ exit 3"));
+    h.finish().await
+}
+
+/// The strip stays up after the command succeeded.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_strip_stays_after_a_success() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    bash_ran_and_hidden(&mut h, "true").await?;
+    h.keys("<C-T>").await?;
+    h.until("the result", |app| status_text(app).contains('✓'))
+        .await;
+    h.pump_for(Duration::from_millis(300)).await;
+    assert!(scratch_view(&h.app).is_some());
+    assert!(h.app.editor.terminals.strip.is_some());
+    h.finish().await
+}
+
+/// The strip stays up after the command failed.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_strip_stays_after_a_failure() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    bash_ran_and_hidden(&mut h, "false").await?;
+    h.keys("<C-T>").await?;
+    h.until("the result", |app| error_text(app).is_some()).await;
+    h.pump_for(Duration::from_millis(300)).await;
+    assert!(scratch_view(&h.app).is_some());
+    assert!(h.app.editor.terminals.strip.is_some());
+    h.finish().await
+}
+
+/// `C-t` on the strip grows it to the normal size and focuses it; the next one hides it.
+#[tokio::test(flavor = "multi_thread")]
+async fn ctrl_t_grows_the_strip_and_focuses_it() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    bash_ran_and_hidden(&mut h, "true").await?;
+    let tree = h.app.editor.tree.area();
+    h.keys("<C-T>").await?;
+    h.until("the result", |app| status_text(app).contains('✓'))
+        .await;
+    let view = scratch_view(&h.app).expect("the strip");
+    let strip_height = area_of(&h.app, view).height;
+
+    h.keys("<C-t>").await?;
+    let view = scratch_view(&h.app).expect("still shown");
+    assert!(h.app.editor.terminals.strip.is_none());
+    assert_eq!(h.app.editor.tree.focus, view, "focused");
+    assert_eq!(h.app.editor.mode(), Mode::Insert);
+    let area = area_of(&h.app, view);
+    assert!(area.height > strip_height, "{area:?}");
+    assert!(
+        near(area.height, tree.height as f64 * 0.33, 3.0),
+        "about 33%: {area:?} in {tree:?}"
+    );
+
+    h.keys("<C-t>").await?;
+    assert!(scratch_view(&h.app).is_none(), "hidden by the second");
+    assert!(shell_running(&h.app));
+    h.finish().await
+}
+
+/// Without a scratch terminal there is nothing to rerun, and none is started.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_refuses_without_a_scratch_terminal() -> anyhow::Result<()> {
+    let mut h = rerun_harness(None)?;
+    h.keys("<C-T>").await?;
+    assert_eq!(
+        error_text(&h.app).as_deref(),
+        Some("no scratch terminal is running")
+    );
+    h.pump_for(Duration::from_millis(300)).await;
+    assert!(scratch(&h.app).is_none());
+    assert!(h.app.editor.terminals.scratch.is_none());
+    assert!(h.app.editor.terminals.strip.is_none());
+    assert_eq!(windows(&h.app), 1);
+    h.finish().await
+}
+
+const NO_MARKERS_RERUN: &str = "the shell sends no OSC 133 markers: its last command is unknown";
+
+/// A shell without markers (`sh`) refuses.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_refuses_a_shell_without_markers() -> anyhow::Result<()> {
+    let mut h = Harness::sh()?;
+    open_panel(&mut h).await?;
+    run_last_plain(&mut h).await?;
+    h.keys("<esc><C-t>").await?;
+    assert!(scratch_view(&h.app).is_none());
+    h.keys("<C-T>").await?;
+    assert_eq!(error_text(&h.app).as_deref(), Some(NO_MARKERS_RERUN));
+    assert!(scratch_view(&h.app).is_none(), "no strip");
+    assert!(h.app.editor.terminals.strip.is_none());
+    h.finish().await
+}
+
+/// `echo plain-out` in a shell without markers.
+async fn run_last_plain(h: &mut Harness) -> anyhow::Result<()> {
+    run_and_wait(h, "echo plain-out", "plain-out").await
+}
+
+/// Bash with `shell-integration = false` refuses too.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_refuses_bash_without_integration() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut config = config_with_shell(&["bash", "--norc", "--noprofile"]);
+    config.editor.terminal.shell_integration = false;
+    let mut h = Harness::new(AppBuilder::new().with_config(config))?;
+    h.keys("<C-t>").await?;
+    h.until("a prompt", has_prompt).await;
+    run_and_wait(&mut h, "echo bash-out", "bash-out").await?;
+    h.keys("<esc><C-t>").await?;
+    h.keys("<C-T>").await?;
+    assert_eq!(error_text(&h.app).as_deref(), Some(NO_MARKERS_RERUN));
+    assert!(scratch_view(&h.app).is_none());
+    h.finish().await
+}
+
+/// While a program runs in the terminal, nothing is rerun.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_refuses_while_a_program_runs() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    open_bash(&mut h).await?;
+    h.keys("sleep 5<ret>").await?;
+    h.until("the program to run", |app| {
+        scratch(app).is_some_and(|t| !t.shell.at_prompt())
+    })
+    .await;
+    h.keys("<esc><C-t>").await?;
+    assert!(scratch_view(&h.app).is_none());
+    h.keys("<C-T>").await?;
+    assert_eq!(
+        error_text(&h.app).as_deref(),
+        Some("a program is still running in the scratch terminal")
+    );
+    assert!(scratch_view(&h.app).is_none(), "no strip");
+    assert!(h.app.editor.terminals.strip.is_none());
+    // let go of the program
+    h.keys("<C-t>i<C-c>").await?;
+    h.finish().await
+}
+
+/// A fresh shell has no command to rerun.
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_refuses_before_any_command() -> anyhow::Result<()> {
+    if !bash() {
+        return Ok(());
+    }
+    let mut h = rerun_harness(None)?;
+    open_bash(&mut h).await?;
+    h.until("at the prompt", |app| {
+        scratch(app).is_some_and(|t| t.shell.at_prompt())
+    })
+    .await;
+    h.keys("<esc><C-t>").await?;
+    assert!(scratch_view(&h.app).is_none());
+    h.keys("<C-T>").await?;
+    assert_eq!(
+        error_text(&h.app).as_deref(),
+        Some("no command has run in the scratch terminal yet")
+    );
+    assert!(scratch_view(&h.app).is_none(), "no strip");
+    assert!(h.app.editor.terminals.strip.is_none());
+    h.finish().await
+}
